@@ -1,0 +1,34 @@
+{
+  "vaultPath": "./vault",
+  "transcribe": {
+    "engine": "mlx-whisper",
+    "model": "mlx-community/whisper-large-v3-mlx",
+    "language": "zh",
+    "fallbackEngine": "openai-whisper",
+    "fallbackModel": "medium"
+  },
+  "ocr": {
+    "engine": "ocrmac",
+    "languages": ["zh-Hant", "en-US"],
+    "visionModel": "claude"
+  },
+  "publish": {
+    "docx": "pandoc",
+    "docxFallback": "officecli"
+  },
+  "sourceLayout": {
+    "audioGlob": "錄音/*.m4a",
+    "liveTranscript": "錄音/轉文字.txt",
+    "photosDir": "照片",
+    "transcriptOut": "錄音/transcript.md",
+    "slidesOut": "照片/slides.md",
+    "summaryOut": "summary.md",
+    "docxDir": "exports",
+    "stateFile": ".pipeline-state.json"
+  },
+  "guardrails": {
+    "localFirst": true,
+    "cloudVisionOnlyForFlaggedSlides": true,
+    "requireVerifierPassBeforePublish": true
+  }
+}

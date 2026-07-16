@@ -1,0 +1,16 @@
+# === 會議內容（長期記憶 + wiki）——不上傳，屬個人/機密資料 ===
+/vault/
+
+# 每場會議在來源目錄旁的產物（本 repo 只放工具）
+exports/
+*.QUALITY_WARNING
+.pipeline-state.json
+transcript.raw.md
+
+# 系統/暫存
+.DS_Store
+__pycache__/
+*.pyc
+.summary.clean.md
+scratchpad/
+*.log
