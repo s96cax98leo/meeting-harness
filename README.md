@@ -14,8 +14,8 @@ meeting-harness/
 │  ├─ publish.py        # 發佈 wiki + docx + 索引（自動移除來源標註）
 │  └─ _strip_cit.py, _state.py  # 內部小工具
 ├─ .claude/
-│  ├─ agents/           # 7 個專職 subagent
-│  ├─ skills/           # meeting-summary(orchestrator) + 4 子任務 skill（SKILL.md，npx skills find 可索引）
+│  ├─ agents/           # 8 個專職 subagent
+│  ├─ skills/           # meeting-summary(orchestrator) + 5 子任務 skill（SKILL.md，npx skills find 可索引）
 │  └─ workflows/meeting-pipeline.js   # 確定性編排引擎（可觀測/可恢復）
 ├─ seeds/               # 乾淨 vault 種子（術語表 / 會議索引 範本）
 ├─ vault/               # Obsidian wiki + 長期記憶（不進版控）
@@ -149,6 +149,23 @@ tags: [可觀測性, tracing, metrics]
 export MH_TRANSCRIBE_HINT="以下為一場關於 <你的領域/產品/技術術語…> 的繁體中文技術演講。"
 ```
 術語表（`vault/術語表.md`）會跨會議累積，summarizer 也會用它統一專名。
+
+## 兩種模式：研討會 vs 開會
+| | 研討會/演講（預設） | 開會/討論 |
+|---|---|---|
+| 指令 | `meeting "<資料夾>"` | **`meeting notes "<資料夾>"`** |
+| 總結重點 | 議程/重點/技術細節/投影片 | **結論與決議・行動項表格(負責人/期限/狀態)・未決・風險** |
+| 講者分離 | 選用 | **自動開啟**（分辨誰主張/誰拍板） |
+
+**開會用法（兩步）：**
+```bash
+# 1) 本機前處理（轉錄 + 講者分離 + 標記會議模式）
+meeting notes "<會議資料夾>"
+
+# 2) 在 Claude Code 產出會議紀錄（含待辦表格）
+#    /meeting-summary "<會議資料夾>"
+```
+會議模式的 `summary.md` 會是：結論/決議 → 逐議題討論 → **行動項 `| 事項 | 負責人 | 期限 | 狀態 |`** → 未決/待追蹤 → 風險/爭議。負責人與期限只從逐字稿抽取，抽不到標「（未指定）」不編造。
 
 ## 講者分離（選用，多講者場才需要）
 單一演講不需要；**Q&A、對談、panel、多位講者**時可標出「誰說了什麼」。用 [Senko](https://github.com/narcotic-sh/senko)（本機 CoreML、免 HuggingFace token、英文＋國語最佳化、~秒級），**保留 mlx-whisper 逐字稿**只加講者標籤。

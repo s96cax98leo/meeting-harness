@@ -34,6 +34,8 @@ preflight
       └─ slide-vision-agent    # needsVision → slides.md
                     ↓ (A、B 匯流)
         summarizer-agent        # transcript(+speakers) + slides + 術語表 → summary.md
+        │  ★ 若場次有 錄音/.meeting 標記（開會/討論）→ 改用 meeting-notes-agent
+        │    產「會議紀錄」：結論/決議・行動項表格(負責人/期限/狀態)・未決・風險
                     ↓
         verifier-agent          # pass/fail（fail → 回退 recoverStage 重跑）
                     ↓ pass

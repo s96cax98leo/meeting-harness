@@ -2,8 +2,9 @@
 # meeting.sh —— 會議總結快速啟動器（meeting-harness 前門）
 #
 # 用法：
-#   meeting.sh <會議根目錄>        對每個場次跑「本機轉錄 + 投影片OCR」(可重跑/冪等)，再印出 AI 步驟指令
-#   meeting.sh prep <會議根目錄>    同上（顯式）
+#   meeting.sh <會議根目錄>        研討會/演講：轉錄 + 投影片OCR (可重跑/冪等)
+#   meeting.sh notes <會議根目錄>   開會/討論：轉錄 + 講者分離 + 標記會議模式（AI 出「會議紀錄+待辦表格」）
+#   meeting.sh prep <會議根目錄>    同第一個（顯式）
 #   meeting.sh status <會議根目錄>  顯示每場流水線狀態
 #   meeting.sh doctor              檢查工具鏈是否齊備
 #   meeting.sh diarize <場次目錄>   對單一場次做講者分離 → 錄音/transcript.speakers.md
@@ -35,8 +36,8 @@ doctor() {
   fi
 }
 
-# 是否對此場次做講者分離：有 錄音/.diarize 標記檔 或 MH_DIARIZE=1
-diarize_on() { [[ "${MH_DIARIZE:-0}" == "1" || -f "$1/錄音/.diarize" ]]; }
+# 是否對此場次做講者分離：有 .diarize 或 .meeting 標記 或 MH_DIARIZE=1（會議模式一律分離）
+diarize_on() { [[ "${MH_DIARIZE:-0}" == "1" || -f "$1/錄音/.diarize" || -f "$1/錄音/.meeting" ]]; }
 
 # 對單一場次做講者分離（需要時自動先補段落時間戳）
 run_diarize() {
@@ -115,6 +116,20 @@ prep() {
   echo "════════════════════════════════════════════════════"
 }
 
+# 會議模式：標記每場為 .meeting（→ 用會議紀錄模板 + 自動講者分離），再跑 prep
+notes() {
+  local root="${1:?用法: meeting.sh notes <會議根目錄>}"
+  root="$(cd "$root" && pwd)"
+  echo "== 會議模式（開會/討論導向）：$root =="
+  while IFS= read -r sess; do
+    [[ -z "$sess" ]] && continue
+    touch "$sess/錄音/.meeting"
+  done < <(list_sessions "$root")
+  prep "$root"
+  echo
+  echo "※ 已標記為【會議模式】：AI 步驟會用『會議紀錄』模板（結論/決議・行動項表格・未決・風險），並附講者分離。"
+}
+
 status() {
   local root="${1:?用法: meeting.sh status <會議根目錄>}"
   root="$(cd "$root" && pwd)"
@@ -140,6 +155,7 @@ case "$cmd" in
   status) status "${2:-}" ;;
   prep)   prep "${2:-}" ;;
   diarize) sess="$(cd "${2:?用法: meeting.sh diarize <場次目錄>}" && pwd)"; run_diarize "$sess" ;;
-  "" )    echo "用法: meeting.sh <會議根目錄> | prep <根> | status <根> | doctor | diarize <場次>"; exit 1 ;;
+  notes)  notes "${2:-}" ;;
+  "" )    echo "用法: meeting.sh <會議根目錄>（研討會/演講） | notes <根>（開會/討論） | status <根> | doctor | diarize <場次>"; exit 1 ;;
   * )     prep "$cmd" ;;   # 預設：把第一個參數當會議根目錄
 esac
