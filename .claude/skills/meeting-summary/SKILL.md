@@ -29,10 +29,11 @@ metadata:
 ```
 preflight
 ├─(A) transcribe-agent         # 錄音 → transcript.md
+│      └─(選用) diarize         # 多講者場（錄音/.diarize 或 MH_DIARIZE=1）→ transcript.speakers.md（senko）
 └─(B) slide-ocr-agent          # 照片 → .ocr/*.txt, slides.ocr.md, needsVision[]
       └─ slide-vision-agent    # needsVision → slides.md
                     ↓ (A、B 匯流)
-        summarizer-agent        # transcript + slides + 術語表 → summary.md
+        summarizer-agent        # transcript(+speakers) + slides + 術語表 → summary.md
                     ↓
         verifier-agent          # pass/fail（fail → 回退 recoverStage 重跑）
                     ↓ pass

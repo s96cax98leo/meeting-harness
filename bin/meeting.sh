@@ -6,6 +6,10 @@
 #   meeting.sh prep <會議根目錄>    同上（顯式）
 #   meeting.sh status <會議根目錄>  顯示每場流水線狀態
 #   meeting.sh doctor              檢查工具鏈是否齊備
+#   meeting.sh diarize <場次目錄>   對單一場次做講者分離 → 錄音/transcript.speakers.md
+#
+# 講者分離（選用，預設關閉）：在某場 `錄音/` 放一個空的 `.diarize` 檔，或設環境變數
+#   MH_DIARIZE=1，prep 時該場就會多跑分離。需先： brew install uv && bash bin/setup-senko.sh
 #
 # 場次 = 會議根目錄下、含 `錄音/*.m4a` 的子資料夾。
 # AI 步驟（總結/驗證/發佈 wiki+docx）請在 Claude Code 執行： /meeting-summary <會議根目錄>
@@ -23,6 +27,34 @@ doctor() {
   command -v sips >/dev/null && echo "✓ sips" || echo "✗ sips"
   command -v ffmpeg >/dev/null && echo "✓ ffmpeg" || echo "✗ ffmpeg"
   command -v npx >/dev/null && echo "✓ npx (find-skill: npx skills find)" || echo "✗ npx"
+  local sv="${MH_SENKO_VENV:-$HOME/.meeting-harness/senko-venv}"
+  if [[ -x "$sv/bin/python" ]] && "$sv/bin/python" -c "import senko" 2>/dev/null; then
+    echo "✓ senko (講者分離，選用)"
+  else
+    echo "◦ senko 未裝（選用；需要講者分離再： brew install uv && bash bin/setup-senko.sh）"
+  fi
+}
+
+# 是否對此場次做講者分離：有 錄音/.diarize 標記檔 或 MH_DIARIZE=1
+diarize_on() { [[ "${MH_DIARIZE:-0}" == "1" || -f "$1/錄音/.diarize" ]]; }
+
+# 對單一場次做講者分離（需要時自動先補段落時間戳）
+run_diarize() {
+  local sess="$1"
+  echo "  ▶ 講者分離（senko）"
+  if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
+    local audio; audio="$(ls "$sess"/錄音/*.m4a "$sess"/錄音/*.mp3 2>/dev/null | head -1)"
+    echo "    · 補段落時間戳（重轉一次）"
+    rm -f "$sess/錄音/transcript.raw.md"
+    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh >/dev/null 2>&1
+    [[ -s "$sess/錄音/transcript.md" ]] || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
+  fi
+  bash "$BIN/diarize.sh" "$sess" || { echo "    ✗ 分離失敗（senko 未就緒？）"; return 1; }
+  python3 "$BIN/_merge_speakers.py" \
+    "$sess/錄音/transcript.segments.json" "$sess/錄音/diarization.json" \
+    "$sess/錄音/transcript.speakers.md" "$sess/錄音/speakers.map.json" \
+    && { state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"; } \
+    || { state_set "$sess" diarize failed; return 1; }
 }
 
 # 找出所有場次目錄（含 錄音/*.m4a）
@@ -69,6 +101,7 @@ prep() {
         state_set "$sess" slide-ocr done
       else state_set "$sess" slide-ocr failed; echo "  ✗ OCR 失敗"; fi
     fi
+    if diarize_on "$sess"; then run_diarize "$sess"; fi
   done < <(list_sessions "$root")
   echo
   echo "════════════════════════════════════════════════════"
@@ -96,6 +129,7 @@ status() {
     [[ -s "$sess/錄音/transcript.md" ]] && echo "    ✓ transcript.md"
     [[ -s "$sess/照片/slides.md" ]] && echo "    ✓ slides.md"
     [[ -s "$sess/summary.md" ]] && echo "    ✓ summary.md"
+    [[ -s "$sess/錄音/transcript.speakers.md" ]] && echo "    ✓ transcript.speakers.md（講者分離）"
     ls "$sess"/exports/*.docx >/dev/null 2>&1 && echo "    ✓ docx: $(ls "$sess"/exports/*.docx)"
   done < <(list_sessions "$root")
 }
@@ -105,6 +139,7 @@ case "$cmd" in
   doctor) doctor ;;
   status) status "${2:-}" ;;
   prep)   prep "${2:-}" ;;
-  "" )    echo "用法: meeting.sh <會議根目錄> | prep <根> | status <根> | doctor"; exit 1 ;;
+  diarize) sess="$(cd "${2:?用法: meeting.sh diarize <場次目錄>}" && pwd)"; run_diarize "$sess" ;;
+  "" )    echo "用法: meeting.sh <會議根目錄> | prep <根> | status <根> | doctor | diarize <場次>"; exit 1 ;;
   * )     prep "$cmd" ;;   # 預設：把第一個參數當會議根目錄
 esac

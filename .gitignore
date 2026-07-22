@@ -6,6 +6,10 @@ exports/
 *.QUALITY_WARNING
 .pipeline-state.json
 transcript.raw.md
+transcript.segments.json
+diarization.json
+transcript.speakers.md
+.audio16k.wav
 
 # 系統/暫存
 .DS_Store

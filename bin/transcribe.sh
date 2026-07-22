@@ -25,7 +25,10 @@ trap 'rm -rf "$WORKDIR"' EXIT
 # 預設為通用提示；可用環境變數 MH_TRANSCRIBE_HINT 覆寫成你當場的領域術語以提升準確度。
 HINT="${MH_TRANSCRIBE_HINT:-以下為一場繁體中文的技術演講/會議，內容含中英文混雜的專有名詞、產品名與技術術語。}"
 
-echo "[transcribe] engine=mlx-whisper model=large-v3 audio=$AUDIO"
+# 講者分離需要段落時間戳 → MH_EMIT_SEGMENTS=1 時輸出 all（含 .json）
+OUTFMT="txt"; [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]] && OUTFMT="all"
+
+echo "[transcribe] engine=mlx-whisper model=large-v3 audio=$AUDIO (output=$OUTFMT)"
 if command -v mlx_whisper >/dev/null 2>&1; then
   # mlx-whisper console script 輸出 .txt/.srt/.json 到 output-dir
   # --condition-on-previous-text False：關鍵防迴圈（講座有停頓/掌聲易觸發 whisper 重複迴圈）
@@ -36,18 +39,18 @@ if command -v mlx_whisper >/dev/null 2>&1; then
     --condition-on-previous-text False \
     --compression-ratio-threshold 2.4 \
     --output-dir "$WORKDIR" \
-    --output-format txt \
+    --output-format "$OUTFMT" \
     --verbose False 2>&1 | tail -8 || {
       echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
       whisper "$AUDIO" --model medium --language "$LANG_CODE" \
         --initial_prompt "$HINT" --condition_on_previous_text False \
-        --output_dir "$WORKDIR" --output_format txt 2>&1 | tail -5
+        --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
     }
 else
   echo "[transcribe] mlx-whisper 未安裝，使用 openai-whisper medium"
   whisper "$AUDIO" --model medium --language "$LANG_CODE" \
     --initial_prompt "$HINT" --condition_on_previous_text False \
-    --output_dir "$WORKDIR" --output_format txt 2>&1 | tail -5
+    --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
 fi
 
 # 取第一個 .txt，包成 markdown（僅原始逐字稿，標點/校對交由 agent 精修）
@@ -65,6 +68,17 @@ mkdir -p "$(dirname "$OUT")"
   echo
   cat "$RAW"
 } > "$OUT"
+
+# 講者分離用：保留段落時間戳 JSON
+if [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]]; then
+  SEGJSON="$(find "$WORKDIR" -name '*.json' | head -1)"
+  if [[ -n "$SEGJSON" && -s "$SEGJSON" ]]; then
+    cp "$SEGJSON" "$(dirname "$OUT")/transcript.segments.json"
+    echo "[transcribe] segments -> $(dirname "$OUT")/transcript.segments.json"
+  else
+    echo "[transcribe] WARN: 未取得 segments JSON（講者分離將無法對齊）" >&2
+  fi
+fi
 
 # 自我驗證：偵測 whisper 重複迴圈（同一行連續重複過多 = 轉錄失敗）
 # 用 awk 一次算完，避免 head 早關管線在 pipefail 下觸發 SIGPIPE

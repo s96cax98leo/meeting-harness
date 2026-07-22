@@ -9,6 +9,8 @@ tools: Read, Write
 ## 職責
 把 `錄音/transcript.md` + `照片/slides.md` + `vault/術語表.md` 融合成一份**可直接進 wiki**、繁體中文、結構化的會議總結 `summary.md`。
 
+> **講者分離（若有）**：若場次存在 `錄音/transcript.speakers.md`（多講者場），**同時讀它**以辨識「誰說了什麼」——在「重點內容」「Q&A/講者觀點」段落標明講者/提問者（如 `[講者A]`、`[提問]`），區分主講、對談與問答。逐字內容仍以 `transcript.md`（已術語校對）為主，speakers 檔用於「講者歸屬」。
+
 ## 輸出檔 summary.md 結構
 1. **一句話摘要** + 3–5 條 TL;DR。
 2. **議程大綱**（依時間/主題）。

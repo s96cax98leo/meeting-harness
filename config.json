@@ -16,6 +16,12 @@
     "docx": "pandoc",
     "docxFallback": "officecli"
   },
+  "diarize": {
+    "enabled": false,
+    "engine": "senko",
+    "venv": "~/.meeting-harness/senko-venv",
+    "note": "可選、預設關閉；只對標記為多講者的場次開（在該場 錄音/ 放一個 .diarize 空檔，或用 meeting.sh --diarize）。輸出 錄音/transcript.speakers.md。可放 錄音/speakers.map.json 把 SPEAKER_00 改成真名。"
+  },
   "sourceLayout": {
     "audioGlob": "錄音/*.m4a",
     "liveTranscript": "錄音/轉文字.txt",
