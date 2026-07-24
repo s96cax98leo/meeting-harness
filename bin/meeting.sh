@@ -98,7 +98,7 @@ prep() {
   root="$(cd "$root" && pwd)"
   echo "== 會議根目錄：$root =="
   local n=0
-  while IFS= read -r sess; do
+  while IFS= read -r sess <&3; do
     [[ -z "$sess" ]] && continue
     n=$((n+1))
     local name; name="$(basename "$sess")"
@@ -118,7 +118,7 @@ prep() {
       else state_set "$sess" slide-ocr failed; echo "  ✗ OCR 失敗"; fi
     fi
     if diarize_on "$sess"; then run_diarize "$sess"; fi
-  done < <(list_sessions "$root")
+  done 3< <(list_sessions "$root")
   echo
   echo "════════════════════════════════════════════════════"
   echo "✅ 本機前處理完成（$n 場）：transcript.raw.md + 照片/.ocr/*.txt 已就緒。"
@@ -136,10 +136,10 @@ notes() {
   local root="${1:?用法: meeting.sh notes <會議根目錄>}"
   root="$(cd "$root" && pwd)"
   echo "== 會議模式（開會/討論導向）：$root =="
-  while IFS= read -r sess; do
+  while IFS= read -r sess <&3; do
     [[ -z "$sess" ]] && continue
     touch "$sess/錄音/.meeting"
-  done < <(list_sessions "$root")
+  done 3< <(list_sessions "$root")
   prep "$root"
   echo
   echo "※ 已標記為【會議模式】：AI 步驟會用『會議紀錄』模板（結論/決議・行動項表格・未決・風險），並附講者分離。"
@@ -152,7 +152,7 @@ local_pipeline() {
   local mode="${2:-}"
   root="$(cd "$root" && pwd)"
   if [[ "$mode" == "notes" || "$mode" == "meeting" ]]; then
-    while IFS= read -r sess; do [[ -z "$sess" ]] && continue; touch "$sess/錄音/.meeting"; done < <(list_sessions "$root")
+    while IFS= read -r sess <&3; do [[ -z "$sess" ]] && continue; touch "$sess/錄音/.meeting"; done 3< <(list_sessions "$root")
     echo "※ 會議模式：全離線產出【會議紀錄＋行動項表格】並自動講者分離"
   fi
   echo "== 全離線模式（總結走本機 LLM，內容不出電腦）：$root =="
@@ -160,20 +160,20 @@ local_pipeline() {
   # 若根目錄有 agenda.md，總結時餵入以校正講者/標題
   local agenda_arg=(); [[ -f "$root/agenda.md" ]] && agenda_arg=(--agenda "$root/agenda.md")
   echo; echo "── 本機總結（ollama）──"
-  while IFS= read -r sess; do
+  while IFS= read -r sess <&3; do
     [[ -z "$sess" ]] && continue
     if [[ -s "$sess/summary.md" ]]; then echo "  ⏭  已有 summary：$(basename "$sess")"; continue; fi
     bash "$BIN/summarize-local.sh" "$sess" ${agenda_arg[@]+"${agenda_arg[@]}"} \
       && { state_set "$sess" summarize "done(local)"; python3 "$BIN/publish.py" "$sess" "$HARNESS" "${MH_EVENT:-會議}" >/dev/null 2>&1 && state_set "$sess" publish done; echo "  ✓ $(basename "$sess")"; } \
       || echo "  ✗ 本機總結失敗：$(basename "$sess")"
-  done < <(list_sessions "$root")
+  done 3< <(list_sessions "$root")
   echo; echo "✅ 全離線完成。（如要補查證：設定線上後對個別場次跑 resolver）"
 }
 
 status() {
   local root="${1:?用法: meeting.sh status <會議根目錄>}"
   root="$(cd "$root" && pwd)"
-  while IFS= read -r sess; do
+  while IFS= read -r sess <&3; do
     [[ -z "$sess" ]] && continue
     local name; name="$(basename "$sess")"
     local st="—"
@@ -186,7 +186,7 @@ status() {
     [[ -s "$sess/summary.md" ]] && echo "    ✓ summary.md"
     [[ -s "$sess/錄音/transcript.speakers.md" ]] && echo "    ✓ transcript.speakers.md（講者分離）"
     ls "$sess"/exports/*.docx >/dev/null 2>&1 && echo "    ✓ docx: $(ls "$sess"/exports/*.docx)"
-  done < <(list_sessions "$root")
+  done 3< <(list_sessions "$root")
 }
 
 cmd="${1:-}"
