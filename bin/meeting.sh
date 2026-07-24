@@ -8,7 +8,8 @@
 #   meeting.sh status <會議根目錄>  顯示每場流水線狀態
 #   meeting.sh doctor              檢查工具鏈是否齊備
 #   meeting.sh diarize <場次目錄>   對單一場次做講者分離 → 錄音/transcript.speakers.md
-#   meeting.sh local <會議根目錄>    全離線：轉錄+OCR+分離+「本機 LLM 總結」+發佈（內容不出電腦）
+#   meeting.sh local <會議根目錄> [notes]  全離線：轉錄+OCR+分離+「本機 LLM 總結」+發佈（內容不出電腦）
+#                                          加 notes → 會議紀錄模板（決議/行動項表格）+ 自動講者分離
 #   meeting.sh summarize-local <場次> 單場用本機 LLM 產總結
 #
 # 總結後端：預設 Claude（在 Claude Code /meeting-summary）。地端混合＝MH_LLM=local（總結本機、resolver 可上網）。
@@ -142,9 +143,15 @@ notes() {
 }
 
 # 全離線流水線：prep（轉錄+OCR+分離）→ 本機總結 → 發佈，全程無雲端（不跑 resolver）
+# 第 2 參數 notes/meeting → 用「會議紀錄」模板（決議/行動項表格）並自動講者分離
 local_pipeline() {
-  local root="${1:?用法: meeting.sh local <會議根目錄>}"
+  local root="${1:?用法: meeting.sh local <會議根目錄> [notes]}"
+  local mode="${2:-}"
   root="$(cd "$root" && pwd)"
+  if [[ "$mode" == "notes" || "$mode" == "meeting" ]]; then
+    while IFS= read -r sess; do [[ -z "$sess" ]] && continue; touch "$sess/錄音/.meeting"; done < <(list_sessions "$root")
+    echo "※ 會議模式：全離線產出【會議紀錄＋行動項表格】並自動講者分離"
+  fi
   echo "== 全離線模式（總結走本機 LLM，內容不出電腦）：$root =="
   prep "$root"
   echo; echo "── 本機總結（ollama）──"
@@ -185,7 +192,7 @@ case "$cmd" in
   diarize) sess="$(cd "${2:?用法: meeting.sh diarize <場次目錄>}" && pwd)"; run_diarize "$sess" ;;
   notes)  notes "${2:-}" ;;
   summarize-local) sess="$(cd "${2:?用法: meeting.sh summarize-local <場次目錄>}" && pwd)"; shift 2 || true; bash "$BIN/summarize-local.sh" "$sess" "$@" ;;
-  local)  local_pipeline "${2:-}" ;;
+  local)  local_pipeline "${2:-}" "${3:-}" ;;
   "" )    echo "用法: meeting.sh <根>（研討會） | notes <根>（開會） | local <根>（全離線總結） | status <根> | doctor | diarize <場次> | summarize-local <場次>"; exit 1 ;;
   * )     prep "$cmd" ;;   # 預設：把第一個參數當會議根目錄
 esac

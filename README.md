@@ -181,9 +181,12 @@ ollama pull qwen3.5:35b-mlx     # ~21GB，一次性
 bash bin/meeting.sh doctor       # 會顯示地端模型狀態
 # 單場本機總結：
 bash bin/meeting.sh summarize-local "<會議根目錄>/<場次>"
-# 全離線一鍵：
+# 全離線一鍵（研討會/演講）：
 bash bin/meeting.sh local "<會議根目錄>"
+# 全離線 + 開會模式（會議紀錄＋行動項表格＋講者分離）：
+bash bin/meeting.sh local "<會議根目錄>" notes
 ```
+> 開會/機密討論要「會議紀錄＋待辦」又要完全不出電腦 → `meeting local <根> notes`（本機 Qwen 產出決議/行動項表格，並自動講者分離）。
 > 品質：Qwen3.5-35B 日常近 hosted Sonnet，但長稿忠實度/講者歸屬/存疑判斷仍略遜 Claude Opus——機密/離線走地端，公開會議可續用 Claude。長逐字稿會自動 map-reduce。
 
 ## 講者分離（選用，多講者場才需要）
