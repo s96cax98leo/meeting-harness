@@ -56,7 +56,7 @@ run_diarize() {
   local sess="$1"
   echo "  ▶ 講者分離（senko）"
   if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
-    local audio; audio="$(first_audio "$sess/錄音")"
+    local audio; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
     echo "    · 補段落時間戳（重轉一次）"
     rm -f "$sess/錄音/transcript.raw.md"
     MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh >/dev/null 2>&1
@@ -102,10 +102,12 @@ prep() {
     [[ -z "$sess" ]] && continue
     n=$((n+1))
     local name; name="$(basename "$sess")"
-    local audio; audio="$(first_audio "$sess/錄音")"
+    local audio; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
     echo; echo "── [$n] $name ──"
     echo "  ▶ 轉錄：$audio"
-    if bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh; then
+    # 若本場要做講者分離，轉錄時就一併輸出段落時間戳（避免之後重轉一次）
+    local seg=0; diarize_on "$sess" && seg=1
+    if MH_EMIT_SEGMENTS=$seg bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh; then
       state_set "$sess" transcribe done
     else
       state_set "$sess" transcribe failed; echo "  ✗ 轉錄失敗"; fi

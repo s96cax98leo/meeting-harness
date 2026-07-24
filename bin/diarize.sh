@@ -20,7 +20,8 @@ if [[ ! -x "$PY" ]] || ! "$PY" -c "import senko" 2>/dev/null; then
   echo "[diarize] senko 未就緒，請先： bash $BIN/setup-senko.sh" >&2; exit 2
 fi
 
-AUDIO="$(ls "$REC"/*.m4a "$REC"/*.mp3 "$REC"/*.wav 2>/dev/null | head -1)"
+# 與轉錄用同一音源（多檔會串接成 .combined.wav，確保時間戳對齊）
+AUDIO="$(python3 "$BIN/_combine_audio.py" "$REC" 2>/dev/null)"
 if [[ -z "$AUDIO" ]]; then echo "[diarize] 找不到音檔於 $REC" >&2; exit 3; fi
 
 echo "[diarize] 轉 16k mono wav：$(basename "$AUDIO")"
