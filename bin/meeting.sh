@@ -56,7 +56,7 @@ run_diarize() {
   local sess="$1"
   echo "  ▶ 講者分離（senko）"
   if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
-    local audio; audio="$(ls "$sess"/錄音/*.m4a "$sess"/錄音/*.mp3 2>/dev/null | head -1)"
+    local audio; audio="$(first_audio "$sess/錄音")"
     echo "    · 補段落時間戳（重轉一次）"
     rm -f "$sess/錄音/transcript.raw.md"
     MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh >/dev/null 2>&1
@@ -70,13 +70,14 @@ run_diarize() {
     || { state_set "$sess" diarize failed; return 1; }
 }
 
-# 找出所有場次目錄（含 錄音/*.m4a）
+# 找出所有場次目錄（含 錄音/ 的音/視訊檔：m4a/mp3/wav/mov/mp4/m4v）
+AUDIO_EXTS=(m4a mp3 wav mov mp4 m4v)
+has_audio() { local d="$1" e; for e in "${AUDIO_EXTS[@]}"; do ls "$d"/*."$e" >/dev/null 2>&1 && return 0; done; return 1; }
+first_audio() { local d="$1" e f; for e in "${AUDIO_EXTS[@]}"; do f="$(ls "$d"/*."$e" 2>/dev/null | head -1)"; [[ -n "$f" ]] && { echo "$f"; return; }; done; }
 list_sessions() {
   local root="$1"
   find "$root" -type d -name '錄音' -maxdepth 2 2>/dev/null | while read -r rec; do
-    if ls "$rec"/*.m4a >/dev/null 2>&1 || ls "$rec"/*.mp3 >/dev/null 2>&1; then
-      dirname "$rec"
-    fi
+    if has_audio "$rec"; then dirname "$rec"; fi
   done | sort
 }
 
@@ -101,7 +102,7 @@ prep() {
     [[ -z "$sess" ]] && continue
     n=$((n+1))
     local name; name="$(basename "$sess")"
-    local audio; audio="$(ls "$sess"/錄音/*.m4a "$sess"/錄音/*.mp3 2>/dev/null | head -1)"
+    local audio; audio="$(first_audio "$sess/錄音")"
     echo; echo "── [$n] $name ──"
     echo "  ▶ 轉錄：$audio"
     if bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" zh; then
