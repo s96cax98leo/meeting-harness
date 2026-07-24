@@ -22,6 +22,14 @@
     "venv": "~/.meeting-harness/senko-venv",
     "note": "可選、預設關閉；只對標記為多講者的場次開（在該場 錄音/ 放一個 .diarize 空檔，或用 meeting.sh --diarize）。輸出 錄音/transcript.speakers.md。可放 錄音/speakers.map.json 把 SPEAKER_00 改成真名。"
   },
+  "llm": {
+    "engine": "claude",
+    "localBackend": "ollama",
+    "localModel": "qwen3.5:35b-mlx",
+    "fallbackModel": "gemma4:31b",
+    "num_ctx": 32768,
+    "note": "總結後端。預設 claude（品質最好）。設環境變數 MH_LLM=local 走地端混合：總結用本機 localModel（內容不出電腦），resolver 仍可上網。全離線用 meeting.sh local <根>。"
+  },
   "sourceLayout": {
     "audioGlob": "錄音/*.m4a",
     "liveTranscript": "錄音/轉文字.txt",

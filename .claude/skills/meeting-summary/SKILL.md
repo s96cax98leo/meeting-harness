@@ -49,6 +49,12 @@ preflight
 - `run.log` 累積每步 stdout 摘要。
 - 用 Workflow 工具時，`/workflows` 有即時樹、`journal.jsonl` 記每個 agent 回傳。
 
+## 總結後端（雲端 / 地端）
+- **預設 claude**：orchestrator 派 summarizer-agent（Claude）產 summary.md，品質最佳。
+- **地端混合（`MH_LLM=local`）**：改呼叫 `bin/summarize-local.sh <場次>`（本機 ollama Qwen 產總結，**逐字稿/投影片不出電腦**）；**resolver 仍走線上**（只把「存疑關鍵詞」送上網查證）。
+- **全離線**：`bin/meeting.sh local <根>`＝prep＋本機總結＋發佈，全程無雲端（不跑 resolver）。
+- 機密/內部會議建議走地端；公開研討會可續用 claude。
+
 ## 驗證與恢復
 - **冪等**：每 stage 先檢查產物存在且有效 → 跳過（重跑安全）。
 - **驗證閘門**：verifier `fail` → 依 `recoverStage` 只重跑該 stage 及其下游；`pass` 才 publish。

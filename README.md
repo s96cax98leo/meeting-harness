@@ -167,6 +167,25 @@ meeting notes "<會議資料夾>"
 ```
 會議模式的 `summary.md` 會是：結論/決議 → 逐議題討論 → **行動項 `| 事項 | 負責人 | 期限 | 狀態 |`** → 未決/待追蹤 → 風險/爭議。負責人與期限只從逐字稿抽取，抽不到標「（未指定）」不編造。
 
+## 總結後端：雲端 Claude / 地端混合 / 全離線
+轉錄、OCR、講者分離**本來就全在本機**；只有「總結」預設走 Claude（雲端）。機密會議可改地端：
+| 模式 | 總結 | resolver 查證 | 內容外流 | 指令 |
+|---|---|---|---|---|
+| **Claude（預設）** | Claude（品質最好） | 線上 | 總結時送 Claude | `/meeting-summary` |
+| **地端混合** | **本機 Qwen** | 線上（只送存疑關鍵詞） | 逐字稿不出電腦 | `MH_LLM=local`；或 `meeting summarize-local <場次>` |
+| **全離線** | 本機 Qwen | 不跑 | 完全不出電腦 | `meeting local "<會議根目錄>"` |
+
+地端用你本機的 **ollama**（0.19+ 已是 MLX 後端），建議模型 **Qwen 3.5 35B-mlx**（繁中最佳、Apple Silicon 最佳化；`gemma4:31b` 作 fallback）：
+```bash
+ollama pull qwen3.5:35b-mlx     # ~21GB，一次性
+bash bin/meeting.sh doctor       # 會顯示地端模型狀態
+# 單場本機總結：
+bash bin/meeting.sh summarize-local "<會議根目錄>/<場次>"
+# 全離線一鍵：
+bash bin/meeting.sh local "<會議根目錄>"
+```
+> 品質：Qwen3.5-35B 日常近 hosted Sonnet，但長稿忠實度/講者歸屬/存疑判斷仍略遜 Claude Opus——機密/離線走地端，公開會議可續用 Claude。長逐字稿會自動 map-reduce。
+
 ## 講者分離（選用，多講者場才需要）
 單一演講不需要；**Q&A、對談、panel、多位講者**時可標出「誰說了什麼」。用 [Senko](https://github.com/narcotic-sh/senko)（本機 CoreML、免 HuggingFace token、英文＋國語最佳化、~秒級），**保留 mlx-whisper 逐字稿**只加講者標籤。
 ```bash

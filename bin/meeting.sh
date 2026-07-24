@@ -8,6 +8,10 @@
 #   meeting.sh status <會議根目錄>  顯示每場流水線狀態
 #   meeting.sh doctor              檢查工具鏈是否齊備
 #   meeting.sh diarize <場次目錄>   對單一場次做講者分離 → 錄音/transcript.speakers.md
+#   meeting.sh local <會議根目錄>    全離線：轉錄+OCR+分離+「本機 LLM 總結」+發佈（內容不出電腦）
+#   meeting.sh summarize-local <場次> 單場用本機 LLM 產總結
+#
+# 總結後端：預設 Claude（在 Claude Code /meeting-summary）。地端混合＝MH_LLM=local（總結本機、resolver 可上網）。
 #
 # 講者分離（選用，預設關閉）：在某場 `錄音/` 放一個空的 `.diarize` 檔，或設環境變數
 #   MH_DIARIZE=1，prep 時該場就會多跑分離。需先： brew install uv && bash bin/setup-senko.sh
@@ -33,6 +37,13 @@ doctor() {
     echo "✓ senko (講者分離，選用)"
   else
     echo "◦ senko 未裝（選用；需要講者分離再： brew install uv && bash bin/setup-senko.sh）"
+  fi
+  # 地端總結（選用）
+  local lm; lm="$(python3 -c "import json;print(json.load(open('$HARNESS/config.json'))['llm']['localModel'])" 2>/dev/null || echo qwen3.5:35b-mlx)"
+  if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "$(echo "$lm"|cut -d: -f1)"; then
+    echo "✓ 地端總結模型 ${lm} (ollama)"
+  else
+    echo "◦ 地端總結模型未備 (選用; 機密/離線總結再: ollama pull ${lm})"
   fi
 }
 
@@ -130,6 +141,23 @@ notes() {
   echo "※ 已標記為【會議模式】：AI 步驟會用『會議紀錄』模板（結論/決議・行動項表格・未決・風險），並附講者分離。"
 }
 
+# 全離線流水線：prep（轉錄+OCR+分離）→ 本機總結 → 發佈，全程無雲端（不跑 resolver）
+local_pipeline() {
+  local root="${1:?用法: meeting.sh local <會議根目錄>}"
+  root="$(cd "$root" && pwd)"
+  echo "== 全離線模式（總結走本機 LLM，內容不出電腦）：$root =="
+  prep "$root"
+  echo; echo "── 本機總結（ollama）──"
+  while IFS= read -r sess; do
+    [[ -z "$sess" ]] && continue
+    if [[ -s "$sess/summary.md" ]]; then echo "  ⏭  已有 summary：$(basename "$sess")"; continue; fi
+    bash "$BIN/summarize-local.sh" "$sess" \
+      && { state_set "$sess" summarize "done(local)"; python3 "$BIN/publish.py" "$sess" "$HARNESS" "${MH_EVENT:-會議}" >/dev/null 2>&1 && state_set "$sess" publish done; echo "  ✓ $(basename "$sess")"; } \
+      || echo "  ✗ 本機總結失敗：$(basename "$sess")"
+  done < <(list_sessions "$root")
+  echo; echo "✅ 全離線完成。（如要補查證：設定線上後對個別場次跑 resolver）"
+}
+
 status() {
   local root="${1:?用法: meeting.sh status <會議根目錄>}"
   root="$(cd "$root" && pwd)"
@@ -156,6 +184,8 @@ case "$cmd" in
   prep)   prep "${2:-}" ;;
   diarize) sess="$(cd "${2:?用法: meeting.sh diarize <場次目錄>}" && pwd)"; run_diarize "$sess" ;;
   notes)  notes "${2:-}" ;;
-  "" )    echo "用法: meeting.sh <會議根目錄>（研討會/演講） | notes <根>（開會/討論） | status <根> | doctor | diarize <場次>"; exit 1 ;;
+  summarize-local) sess="$(cd "${2:?用法: meeting.sh summarize-local <場次目錄>}" && pwd)"; shift 2 || true; bash "$BIN/summarize-local.sh" "$sess" "$@" ;;
+  local)  local_pipeline "${2:-}" ;;
+  "" )    echo "用法: meeting.sh <根>（研討會） | notes <根>（開會） | local <根>（全離線總結） | status <根> | doctor | diarize <場次> | summarize-local <場次>"; exit 1 ;;
   * )     prep "$cmd" ;;   # 預設：把第一個參數當會議根目錄
 esac

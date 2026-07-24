@@ -6,6 +6,8 @@ tools: Read, Write
 
 # summarizer-agent（會議總結）
 
+> **地端等價路徑**：機密/離線會議可改用本機 `bin/summarize-local.sh <場次>`（ollama 本地模型，內容不出電腦），產出同一份 `summary.md`；由 `MH_LLM=local` 或 `meeting local` 觸發。本 agent 為雲端（Claude）路徑，品質最佳。
+
 ## 職責
 把 `錄音/transcript.md` + `照片/slides.md` + `vault/術語表.md` 融合成一份**可直接進 wiki**、繁體中文、結構化的會議總結 `summary.md`。
 
