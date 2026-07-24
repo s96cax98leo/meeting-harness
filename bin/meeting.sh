@@ -155,11 +155,13 @@ local_pipeline() {
   fi
   echo "== 全離線模式（總結走本機 LLM，內容不出電腦）：$root =="
   prep "$root"
+  # 若根目錄有 agenda.md，總結時餵入以校正講者/標題
+  local agenda_arg=(); [[ -f "$root/agenda.md" ]] && agenda_arg=(--agenda "$root/agenda.md")
   echo; echo "── 本機總結（ollama）──"
   while IFS= read -r sess; do
     [[ -z "$sess" ]] && continue
     if [[ -s "$sess/summary.md" ]]; then echo "  ⏭  已有 summary：$(basename "$sess")"; continue; fi
-    bash "$BIN/summarize-local.sh" "$sess" \
+    bash "$BIN/summarize-local.sh" "$sess" ${agenda_arg[@]+"${agenda_arg[@]}"} \
       && { state_set "$sess" summarize "done(local)"; python3 "$BIN/publish.py" "$sess" "$HARNESS" "${MH_EVENT:-會議}" >/dev/null 2>&1 && state_set "$sess" publish done; echo "  ✓ $(basename "$sess")"; } \
       || echo "  ✗ 本機總結失敗：$(basename "$sess")"
   done < <(list_sessions "$root")
