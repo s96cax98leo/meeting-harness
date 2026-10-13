@@ -170,3 +170,59 @@
 - [ ] §4.25.5 第一輪剩下的實機項目（§4.9.1 重錄、§4.3.5、§4.2.3、§4.11.1）
 - [ ] 設計審查（`has_ui=true`，§6 第 92 條）
 - [ ] 閘門 3（R2；與第一輪閘門 3 分開記錄）
+
+## R3 第三輪（2026-10-13；plan §10）
+
+### R3 Plan／Design
+- [x] intent〈R3 第三輪〉與閘門 1（`56aacca`；`run.json` 的 `r3-plan` 已核准；R3-Q1＝A、R3-Q8＝B，其餘預設）
+- [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md §2.4 就地更新（`record sync`）＋檔尾〈R3 第三輪〉（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
+- [ ] Claude Design 出稿（D1–D12、F2 確認框、F3 通知）→ 使用者挑稿 → 存 `design-r3/`（存前掃名稱）
+- [ ] 補 spec 的 UI 外觀 `<待定>` 與 §6 第 129、130 條的新舊字面
+- [ ] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45）
+- [ ] skeptic 一致性檢查
+- [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–133 條的既有測試修改）
+
+### R3 Build（plan §10.1、§10.3）
+
+| 層 | 子任務 | 狀態 | 合併 commit |
+|---|---|---|---|
+| Red | `r3-red-py` | 未開始 | |
+| Red | `r3-red-swift` | 未開始 | |
+| 1 | `r3-core` | 未開始 | |
+| 1 | `r3-vtt-raw` | 未開始 | |
+| 1 | `r3-record-lib` | 未開始 | |
+| 1 | `r3-finalize-guard` | 未開始 | |
+| 1 | `r3-sync-measure` | 未開始 | |
+| 1 | `r3-docs` | 未開始 | |
+| 2 | `r3-lock` | 未開始 | |
+| 2 | `r3-menubar-states` | 未開始（外觀等稿） | |
+| 2 | `r3-search` | 未開始 | |
+| 2 | `r3-transcript-vad` | 未開始 | |
+| 2 | `r3-annotations` | 未開始 | |
+| 3 | `r3-finalize-runner` | 未開始 | |
+| 3 | `r3-notify` | 未開始 | |
+| 3 | `r3-reminders` | 未開始 | |
+| 4 | `r3-latency-log` | 未開始 | |
+| 4 | `r3-hud` | 未開始（外觀等稿） | |
+| 5 | `r3-discard` | 未開始（確認框等稿） | |
+| 6 | `r3-menu-stages` | 未開始（外觀等稿） | |
+| 6 | `r3-segment-scheduler` | 未開始 | |
+| 7 | `r3-onboarding-settings` | 未開始（外觀等稿） | |
+| 7 | `r3-sync-compensate` | 未開始 | |
+| 8 | `r3-meeting-detect` | 未開始（通知文字等稿） | |
+
+- [ ] 每層整合＋plan §10.3 的測試指令
+- [ ] 第 8 層：全量 Python、Swift、建置（暫存目錄）、entitlements 兩項、`check_rules.py --git`、verify、名稱掃描
+
+### R3 Test（`r3-field-check`，使用者在場；spec §4.47）
+- [ ] 使用者同意後覆蓋安裝、重開 menu bar
+- [ ] §4.47.1 E4、§4.47.2 E2（決定 S-C 預設）
+- [ ] §4.47.3 HUD `sharingType`、§4.47.4 Time Sensitive
+- [ ] §4.47.5 提醒事項、§4.47.6 F3、§4.47.7 F2、§4.47.8 首次引導
+- [ ] §4.47.9 `keep-segments` 真實多人會議（調 VAD 門檻）
+- [ ] §4.47.10 全套 e2e 迴歸、§4.47.11 設計審查
+- [ ] 閘門 3（R3，stage 鍵 `r3-test`）
+
+### R3 Deliver
+- [ ] 依 plan §10.5 拆包（先問使用者）；推送前掃名稱（只回報有／沒有）
+- [ ] 閘門 4（stage 鍵 `r3-deliver`）
