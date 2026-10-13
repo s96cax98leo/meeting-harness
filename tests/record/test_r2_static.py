@@ -23,8 +23,8 @@ QUICKSTART = TRIGGER / "QuickStart.swift"
 PREFERENCES = TRIGGER / "Preferences.swift"
 
 # spec §4.20.6 的選單項標題（依序；收音指示列與狀態列沒有固定標題）
-MENU_TITLES = ["複製完整訊息與補救指令", "開始錄製（用上次的設定）", "錄這個視窗", "存到", "暫停錄製", "麥克風靜音",
-               "加標記", "停止錄製", "打開場次資料夾", "顯示上一場成品", "偏好設定…", "結束 MeetingRecorder 選單"]
+MENU_TITLES = ["複製完整訊息與補救指令", "開始錄製（用上次的設定）", "錄其他視窗", "存到", "暫停錄製", "麥克風靜音",
+               "加標記", "停止錄製並收尾", "打開場次資料夾", "顯示上一場成品", "設定…", "結束 MeetingRecorder 選單"]
 CTRL_OPT_CMD = {".control", ".option", ".command"}
 
 
@@ -126,8 +126,8 @@ class TestR2Static(unittest.TestCase):
 
     # spec §4.18.2
     def test_capture_pause_gate_before_maxend(self):
-        src = code(self, RECORDING_SESSION)
-        ingest = body(self, src, "ingest", where="RecordingSession.swift")
+        src = code(self, SOURCES / "Core" / "SegmentScheduler.swift")
+        ingest = body(self, src, "ingest", where="SegmentScheduler.swift")
         self.assert_has("maxEnd =", ingest, "ingest 本體應含 maxEnd =")
         assert_in_order(self, ingest, ["pauseRoute(", "maxEnd ="], "ingest 本體（暫停閘門在 maxEnd 更新之前）")
 
@@ -137,9 +137,11 @@ class TestR2Static(unittest.TestCase):
             for i, line in enumerate(p.read_text(encoding="utf-8").split("\n"), start=1):
                 self.assert_no_re(line, r"\benum\s+SwitchReason\b",
                                     f"{rel(p)}:{i} 不得宣告 enum SwitchReason（改用 Core/Segments.swift 的）")
+        sched = code(self, SOURCES / "Core" / "SegmentScheduler.swift")
+        for name in ("pausing(", "resuming(", "pauseRoute(", "segmentOpened(", "openReason("):
+            self.assert_has(name, sched, f"SegmentScheduler.swift 應呼叫 Core 的 {name}")
         src = code(self, RECORDING_SESSION)
-        for name in ("pausing(", "resuming(", "pauseRoute(", "segmentOpened(", "openReason(", "detectorFeed(",
-                     ".interrupt(at:", "sysSilence.reset()", "micSilence.reset()", "appendingPauseEvent",
+        for name in ("detectorFeed(", ".interrupt(at:", "sysSilence.reset()", "micSilence.reset()", "appendingPauseEvent",
                      "pauseStatusFields", "applyingPauseFields", "appendingMuteEvent("):
             self.assert_has(name, src, f"RecordingSession.swift 應呼叫 Core 的 {name}")
 
@@ -188,7 +190,7 @@ class TestR2Static(unittest.TestCase):
         src = code(self, MENUBAR)
         self.assert_re(src, r"\bvariableLength\b", "status item 應以 NSStatusItem.variableLength 建立")
         self.assert_hasnt("squareLength", src, "不得再用 squareLength")
-        for k in ("monospacedDigitSystemFont", '"mic.slash"', "systemRed", "paletteColors", "symbolName",
+        for k in ("monospacedDigitSystemFont", '"mic.slash"', "menuBarCapsuleStyle(", "paletteColors", "symbolName",
                   "timerText"):
             self.assert_has(k, src, f"MenuBar.swift 應含 {k}")
         # t7（spec §6 第 107 條）：macOS 26 選單列上 template image＋contentTintColor 會畫成透明，紅色改用 paletteColors
@@ -207,14 +209,16 @@ class TestR2Static(unittest.TestCase):
     # spec §4.20.6
     def test_trigger_menu_items_r2(self):
         src = code(self, MENUBAR)
-        assert_in_order(self, src, MENU_TITLES, "Trigger/MenuBar.swift")
+        for title in MENU_TITLES:
+            self.assert_has(title, src, f"Trigger/MenuBar.swift 應含選單項「{title}」")
+        self.assert_has("menuItems(stage:", src, "選單依階段顯示（menuItems(stage:)）")
         for title, key in (("暫停錄製", "p"), ("麥克風靜音", "m"), ("加標記", "b")):
             with self.subTest(item=title):
                 assert_key(self, src, title, key, CTRL_OPT_CMD)
-        assert_key(self, src, "偏好設定…", ",", {".command"})
+        assert_key(self, src, "設定…", ",", {".command"})
         self.assert_has("繼續錄製", src, "暫停中標題改「繼續錄製」")
         self.assert_has("canControl", src, "暫停、麥克風靜音、加標記的可用性＝canControl")
-        self.assert_has("levelLine", src, "收音指示列")
+        self.assert_has("LevelMeterView", src, "收音列改即時音量條（LevelMeterView）")
 
     # spec §4.20.8
     def test_trigger_control_uses_availability(self):
@@ -258,21 +262,29 @@ class TestR2Static(unittest.TestCase):
             self.assert_re(src, r"\." + k + r"\s*=\s*" + v + r"\b", f"NSOpenPanel 的 {k} 應為 {v}")
         self.assert_re(src, r"updatedRecentRoots\([^)]*limit:\s*5\s*\)", "recentRoots 最多 5 個")
 
-    # spec §4.21.5（R2-Q3 使用者決定：record.defaults.json 維持 record.sh 單一寫者）——紅燈階段就要綠
+    # spec §4.21.5；R3 §6 第 123 條：寫 record.defaults.json 的 Swift 只有 Core/Settings.swift 的 writeOnboardingDefaults，
+    # 呼叫端只有 Trigger/Onboarding.swift
     def test_defaults_single_writer(self):
         files = sorted(SOURCES.rglob("*.swift"))
         self.assertTrue(files)
+        settings = SOURCES / "Core" / "Settings.swift"
         hits = []
         for p in files:
             for i, line in enumerate(p.read_text(encoding="utf-8").split("\n"), start=1):
                 if ("writeJSONAtomically(" in line or ".write(to:" in line) and "defaults" in line.lower():
                     hits.append(f"{rel(p)}:{i}")
-        self.assertEqual(hits, [], "Sources/ 不得寫 record.defaults.json")
+        self.assertEqual([h for h in hits if not h.startswith(rel(settings) + ":")], [],
+                         "寫 record.defaults.json 的只能是 Core/Settings.swift")
+        self.assert_re(code(self, settings), r"\bfunc\s+writeOnboardingDefaults\s*\(",
+                       "Core/Settings.swift 應定義 writeOnboardingDefaults")
+        callers = sorted(rel(p) for p in files if p != settings
+                         and "writeOnboardingDefaults(" in sr.strip_swift_comments(p.read_text(encoding="utf-8")))
+        self.assertEqual(callers, [rel(TRIGGER / "Onboarding.swift")], "writeOnboardingDefaults 的呼叫端只有 Trigger/Onboarding.swift")
 
     # spec §4.22.4
     def test_trigger_preferences_window(self):
         src = code(self, PREFERENCES)
-        for k in ("MeetingRecorder 設定", "預設存檔位置", "更改…", "登入時自動開啟", "停止後自動跑前處理",
+        for k in ("settingsTab(", "預設存檔位置", "更改…", "登入時自動開啟", "停止後自動跑前處理",
                   "打開系統設定的登入項目", "openSystemSettingsLoginItems", "loginItemDisplay(", "r2HotKeys",
                   "註冊失敗", "autoPrep"):
             self.assert_has(k, src, f"Trigger/Preferences.swift 應含 {k}")

@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""mlx_whisper CLI 的替身（R3 測試用；放在 PATH 最前面攔截 bin/transcribe.sh 的呼叫，不載入任何模型）。
+
+- 每次呼叫把完整 argv 以一行 JSON 附加到 FAKE_ASR_LOG（未設就不記）。
+- 段落取自 FAKE_ASR_SEGMENTS（JSON 陣列，每筆 {start, end, text}）；未設時一段「範例內容」。
+- 依 --output-format 寫 <音檔主檔名>.txt（每段一行）與 .json（{"text", "segments", "language"}；格式為 all 或 json 時）。
+- FAKE_ASR_EXIT 非 0 時不寫任何檔、以該值結束。
+"""
+import json
+import os
+import sys
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_ASR_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"argv": argv, "cwd": os.getcwd()}, ensure_ascii=False) + "\n")
+code = int(os.environ.get("FAKE_ASR_EXIT", "0") or 0)
+if code:
+    sys.exit(code)
+
+
+def opt(name, default=None):
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return default
+
+
+audio = next((a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or not argv[i - 1].startswith("-"))),
+             "audio.wav")
+outdir = opt("--output-dir", ".")
+fmt = opt("--output-format", "txt")
+segp = os.environ.get("FAKE_ASR_SEGMENTS")
+segs = json.load(open(segp, encoding="utf-8")) if segp else [{"start": 0.0, "end": 2.0, "text": "範例內容"}]
+stem = os.path.splitext(os.path.basename(audio))[0]
+os.makedirs(outdir, exist_ok=True)
+with open(os.path.join(outdir, stem + ".txt"), "w", encoding="utf-8") as f:
+    f.write("\n".join(s["text"] for s in segs) + "\n")
+if fmt in ("all", "json"):
+    out = {"text": "".join(s["text"] for s in segs), "language": opt("--language", "zh"),
+           "segments": [{"id": i, "start": s["start"], "end": s["end"], "text": s["text"]} for i, s in enumerate(segs)]}
+    with open(os.path.join(outdir, stem + ".json"), "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+print("fake mlx_whisper done")
