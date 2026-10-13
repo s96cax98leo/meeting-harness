@@ -97,7 +97,8 @@ func runContext(from args: Args, log: Logger) -> (RunContext?, String) {
     let defaults = RecordDefaults.load(home.appendingPathComponent("record.defaults.json"))
     let minFree = args.int64("min-free-bytes") ?? defaults?.minFreeBytes ?? fallbackMinFreeBytes()
     let ctx = RunContext(home: home, runId: runId, session: URL(fileURLWithPath: s, isDirectory: true),
-                         minFreeBytes: minFree, windowRef: ref, harness: args.str("harness") ?? defaults?.harness, log: log)
+                         minFreeBytes: minFree, windowRef: ref, harness: args.str("harness") ?? defaults?.harness, log: log,
+                         skipFinalize: args.has("skip-finalize"))
     return (ctx, "")
 }
 

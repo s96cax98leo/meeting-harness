@@ -6,8 +6,8 @@
 //   - 權限按鈕只觸發 TCC 授權框或打開系統設定，不做其他系統設定變更；狀態一律有狀態字（不只靠顏色）。
 //   - 只有「存檔位置」一步呼叫 writeOnboardingDefaults（record.defaults.json 只寫 harness、root 兩鍵，合併寫入）。
 //   - 試錄（§6 第 139 條）：場次放在 temporaryDirectory 底下的 meeting-harness-trial-<runId>/（--home 也指向這裡，
-//     狀態檔、鎖檔、record.log 都不碰使用者的 ~/.meeting-harness），錄 5 秒自動停止；不帶 --harness、暫存 home 沒有
-//     record.defaults.json，錄製實例找不到收尾程式就直接結束（跳過收尾）。讀狀態檔的 recentLevels 判斷兩路是否有聲，
+//     狀態檔、鎖檔、record.log 都不碰使用者的 ~/.meeting-harness），錄 5 秒自動停止；帶內部旗標 --skip-finalize
+//     （§6 第 144 條，取代原本的「不帶 --harness」），錄製實例停止後不跑收尾、不發完成通知、phase=done。讀狀態檔的 recentLevels 判斷兩路是否有聲，
 //     之後以 removeItem 直接刪除這個暫存目錄（只限這個路徑），不移垃圾桶、不寫 record.discard.json、不跳確認框。
 // 自訂繪製：步驟條、權限列、主按鈕；其餘用標準 AppKit 控制項。字型一律系統字（不打包字型，§4.43.9）。
 import AppKit
@@ -557,7 +557,7 @@ final class TrialRecording {
             launched = true
             openSelf(["start", "--home", trialDir.path, "--session", trialDir.appendingPathComponent("session").path,
                       "--run-id", runId, "--window", String(row.windowID), "--window-bundle", row.bundleID,
-                      "--window-title", row.title])
+                      "--window-title", row.title, "--skip-finalize"])
             schedule(0.5) { [weak self] in self?.pollStatus() }
         } else if Date().timeIntervalSince(startedAt ?? Date()) >= 15 {
             finish(.failed("取不到視窗清單：先在權限那一步允許螢幕錄製"))
@@ -582,7 +582,7 @@ final class TrialRecording {
                     sendStop()
                 }
             case .preflightFailed, .failed:
-                // 開錄前就失敗才算試錄失敗；錄過之後的 failed 是找不到收尾程式（刻意跳過收尾），照常判斷聲音
+                // 開錄前就失敗才算試錄失敗；錄過之後的 failed（例如停止時出錯）照常判斷聲音
                 guard recordingSince == nil else { break }
                 outcome = outcome ?? .failed(st.message.split(separator: "\n").first.map(String.init) ?? "開錄前檢查沒通過")
             default:
@@ -636,7 +636,7 @@ final class TrialRecording {
             let micSilent = (maxMic ?? -.infinity) <= -60
             result = systemSilent || micSilent ? .missing(system: systemSilent, mic: micSilent) : .bothSound
         }
-        // 試錄的錄製實例找不到收尾程式會發一則「結束（有錯誤）」通知：收回它（暫存場次不是使用者的會議）
+        // 保險（§6 第 144 條）：試錄帶 --skip-finalize 時錄製實例不發完成通知；萬一仍有同 runId 的通知就收回它
         if Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current()
                 .removeDeliveredNotifications(withIdentifiers: [completionNotificationID(runId: runId)])

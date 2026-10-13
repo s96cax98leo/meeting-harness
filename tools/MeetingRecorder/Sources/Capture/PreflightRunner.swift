@@ -17,6 +17,8 @@ struct RunContext {
     let windowRef: WindowRef
     let harness: String?
     let log: Logger
+    /// 內部旗標 --skip-finalize（只給 app 的首次引導試錄用；spec R3-§6 第 144 條）：停止後不跑收尾、不發完成通知
+    var skipFinalize = false
 
     var statusURL: URL { home.appendingPathComponent("record.status.json") }
     var pidURL: URL { home.appendingPathComponent("record.pid") }
