@@ -1408,6 +1408,9 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
   - Red 層補字面（2026-10-13）：§4.45.1 `usage()` 只要求列出 `search` 與 `sync`，`reminders` 不要求。
   - Red 層補字面（2026-10-13）：§4.39.3「通知不得含場次名或視窗標題」改由實機驗收場確認（§4.47.4 同步）。
   - §7 疑慮 45（Info.plist 鍵名）維持原狀，由 `r3-reminders` 開工前查證。
+- **第 1 層合併後對齊（2026-10-13）**：只對齊字面，不改行為。逐條：
+  - 第 1 層合併後對齊（2026-10-13）：§4.28.8 耗時行的 `<對象>` 對原始段落只寫主檔名，範例改為 `耗時 normalize（seg-0001）：1.2 秒`（既有 `test_finalize.py:330` 規定 stdout 不得出現完整段落檔名，`r3-finalize-guard` 已照此實作）；`.claude/skills/meeting-record/SKILL.md` 的同一範例一起改。
+  - 第 1 層合併後對齊（2026-10-13）：`design.md` R3-D8 的 `--sync-player` 對 `syncCompensation` 延遲改為「只列出，不再加減」，與 §4.35.2 一致（收尾時延遲已套用到成品上，再扣一次會重複）。
 
 ### R3-§2.2 結束碼語意（接續 §2.2、R2-§2.2）
 
@@ -1648,7 +1651,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.28.5 | `finalizeDeadline` 應：0 → 600；100 → 900；3600 → 11400；-5 → 600。 | D14a-A | `swift:R3LockTests.swift::testFinalizeDeadline` |
 | 4.28.6 | 錄製實例應以 `Capture/FinalizeRunner.swift` 執行收尾：超過 `finalizeDeadline` 或收尾中再收到 SIGTERM 時，對子程序送 SIGTERM、5 秒後仍在就 SIGKILL；狀態寫 `phase=failed`、`code=5`，message 含「收尾逾時」或「收尾已取消」，並含 `meeting record finish`。實作形狀：`FinalizeRunner.swift` 含 `finalizeDeadline(`、`SIGKILL`；`RecordingSession.swift` 的 `requestStop` 在收尾中不再直接 return（含「取消」分支）。 | Q3；`RecordingSession.swift:818`、`:927` | `test_r3_app_static.py::FinalizeRunnerStatic.test_deadline_and_cancel`；實機（收尾中按「取消收尾」） |
 | 4.28.7 | 讀不到的段落應搬到 `錄音/tracks/unreadable/`（撞名加 `-1`、`-2`），`finalize.json.skipped[].movedTo` 記相對路徑；收尾成功後被刪的只有已併入成品的段落。以一個 0 位元組的 `seg-0002.mov` 驗：收尾後 `tracks/unreadable/seg-0002.mov` 存在，`tracks/seg-0002.mov` 不存在，其他段落依 §6 第 111 條照常刪除；`錄音/tracks/finalize.json` 的 `skipped` 恰一筆，是物件、`movedTo` 為 `tracks/unreadable/seg-0002.mov`（§3.17；Red 層補字面）。 | D12-A；§6 第 126 條 | `test_r3_finalize_guard.py::test_unreadable_moved_not_deleted` |
-| 4.28.8 | 每一步 ffmpeg／ffprobe 的耗時應由 `_record_finalize.py` 印到 **stdout**，一行一步：`耗時 <步驟>（<對象>）：<秒數> 秒`，`<步驟>` ∈ `normalize`、`concat`、`mix`、`probe`（同 `timedOut.step`），`<對象>` 為段落檔名或成品檔名，秒數小數 1 位（例 `耗時 normalize（seg-0001.mov）：1.2 秒`）。app 啟動的收尾照現行把 stdout 逐行寫進 `<home>/record.log`（`RecordingSession.swift:926`），`meeting record finish` 直接跑時印在終端；`_record_finalize.py` 不自行開 `record.log`。（Red 層補字面；測試合併讀 stdout、stderr 與 `<home>/record.log`，`test_r3_finalize_guard.py:181-184`） | intent R3-9 衍生工作 | `test_r3_finalize_guard.py::test_step_durations_logged` |
+| 4.28.8 | 每一步 ffmpeg／ffprobe 的耗時應由 `_record_finalize.py` 印到 **stdout**，一行一步：`耗時 <步驟>（<對象>）：<秒數> 秒`，`<步驟>` ∈ `normalize`、`concat`、`mix`、`probe`（同 `timedOut.step`），`<對象>` 為原始段落的主檔名（不含副檔名，例 `seg-0001`）或成品檔名，秒數小數 1 位（例 `耗時 normalize（seg-0001）：1.2 秒`）。app 啟動的收尾照現行把 stdout 逐行寫進 `<home>/record.log`（`RecordingSession.swift:926`），`meeting record finish` 直接跑時印在終端；`_record_finalize.py` 不自行開 `record.log`。（Red 層補字面；測試合併讀 stdout、stderr 與 `<home>/record.log`，`test_r3_finalize_guard.py:181-184`） | intent R3-9 衍生工作 | `test_r3_finalize_guard.py::test_step_durations_logged` |
 
 #### 4.29 VTT 講者、raw 不重轉、無效參數（T1、T2、T3）
 

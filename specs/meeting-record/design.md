@@ -791,7 +791,7 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 
 ### R3-D8 影音一致：量測與延遲紀錄（S-A、D3、S-B）
 
-- **S-A**：`e2e_check.py` 的 `--sync`／`c_sync`（ffplay 路徑、每個閃白與嗶聲 < 100 ms）**保留不改**，改名義為「錄製器沒有引入額外偏移」的迴歸檢查。新增 `--sync-acoustic`：用喇叭外放的同步測試源，量每個嗶聲在麥克風路與系統聲音路的時間差（mic − sys），輸出各 60 秒時段的中位數，供 S-C 校正用（只報數字，不判 PASS／FAIL）。新增 `--sync-player`：以補償型播放端的判準（D3-A）判定——每個 60 秒時段的閃白／嗶聲差取中位數，|中位數| 全部 < 45 ms 為 PASS；成品若有 `finalize.json.syncCompensation` 就把套用的延遲算進去。另加 `--print-sync-file <輸出路徑>` 產生給 QuickTime／Chrome 播放的同步測試檔（只寫到指定路徑）。§4.9.3 的 sync 判準由 D3 改寫（§6 第 124 條）。
+- **S-A**：`e2e_check.py` 的 `--sync`／`c_sync`（ffplay 路徑、每個閃白與嗶聲 < 100 ms）**保留不改**，改名義為「錄製器沒有引入額外偏移」的迴歸檢查。新增 `--sync-acoustic`：用喇叭外放的同步測試源，量每個嗶聲在麥克風路與系統聲音路的時間差（mic − sys），輸出各 60 秒時段的中位數，供 S-C 校正用（只報數字，不判 PASS／FAIL）。新增 `--sync-player`：以補償型播放端的判準（D3-A）判定——每個 60 秒時段的閃白／嗶聲差取中位數，|中位數| 全部 < 45 ms 為 PASS；成品若有 `finalize.json.syncCompensation`，報告只列出各段套用的延遲，不再加減（收尾時延遲已套用到成品上，再扣一次會重複；與 `spec.md` §4.35.2 一致）。另加 `--print-sync-file <輸出路徑>` 產生給 QuickTime／Chrome 播放的同步測試檔（只寫到指定路徑）。§4.9.3 的 sync 判準由 D3 改寫（§6 第 124 條）。
 - **S-B**：開錄時與每次 `deviceEvents` 寫入時，另外讀一次輸出裝置的 `kAudioDevicePropertyLatency`、`kAudioDevicePropertySafetyOffset`、第一個 output stream 的 `kAudioStreamPropertyLatency`、`kAudioDevicePropertyBufferFrameSize`、`kAudioDevicePropertyNominalSampleRate`（都只讀；本機 SDK 標頭已確認存在），寫到 `record.meta.json.outputLatencies[]`（新的選用欄位，nil 省略鍵）。**不放進 `AudioDeviceInfo`**：那個結構是 Equatable，裝置監看用 `now != before` 判斷要不要記 deviceEvent（`AudioDeviceMonitor.swift:84`），延遲值在 A2DP↔HFP 會變，放進去會多出假的 deviceEvent。讀取失敗的欄位寫 null，不影響錄製。
 
 ### R3-D9 S-C：finalize 依時段補償系統聲音（ADR `adr-r3-sync-compensation.md`、`adr-r3-concat-then-mix.md`）

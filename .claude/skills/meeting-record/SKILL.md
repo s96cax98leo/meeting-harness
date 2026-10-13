@@ -200,7 +200,7 @@ meeting record finish "<場次目錄>"
 - **收尾鎖**：同一個場次同時只能有一個收尾在跑（`錄音/tracks/.finalize.lock`）。錄製器正在收尾時再跑 `meeting record finish` 會回 5、stderr 說「這個場次正在收尾」，場次裡的檔一個都不動；等它收完再看結果即可。
 - **逐步逾時**：每一個 ffmpeg／ffprobe 步驟都有上限——ffprobe 30 秒；逐段正規化 max(120 秒, 該段長度 × 10)；串接與混音 max(300 秒, 全片長度 × 3)。
   任一步逾時就中止該步、回 5，`tracks/finalize.json` 記 `timedOut`（哪一步、上限幾秒），段落全部保留，之後可以再跑 `meeting record finish`。
-  每一步的耗時印一行 `耗時 normalize（seg-0001.mov）：1.2 秒`；錄製器啟動的收尾寫進 `~/.meeting-harness/record.log`，直接跑 finish 時印在終端機。
+  每一步的耗時印一行 `耗時 normalize（seg-0001）：1.2 秒`；錄製器啟動的收尾寫進 `~/.meeting-harness/record.log`，直接跑 finish 時印在終端機。
 - **收尾總期限與取消收尾**：錄製器自己跑的收尾，超過 3 × 已錄秒數 ＋ 600 秒就判定「收尾逾時」；收尾中按 menu bar 的「取消收尾」則是「收尾已取消」。
   兩者都會先對收尾子程序送 SIGTERM、5 秒後還在就 SIGKILL，狀態寫失敗、結束碼 5，訊息附上補救指令 `meeting record finish <場次>`；段落都還在。
 - 收尾**成功**後會自動刪掉 `tracks/seg-*.mov`（內容與 `影片/` 的成品重疊）；`manifest.json`、`record.meta.json`、`finalize.json` 留著，之後再跑 `meeting record finish` 會回「已完成」。收尾失敗時段落一律保留。要保留段落做驗收時，建立空檔 `~/.meeting-harness/keep-segments`（或設 `MH_KEEP_SEGMENTS=1`）。

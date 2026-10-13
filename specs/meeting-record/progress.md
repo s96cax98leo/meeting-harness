@@ -190,12 +190,12 @@
 |---|---|---|---|
 | Red | `r3-red-py` | 未開始 | |
 | Red | `r3-red-swift` | 未開始 | |
-| 1 | `r3-core` | 未開始 | |
-| 1 | `r3-vtt-raw` | 未開始 | |
-| 1 | `r3-record-lib` | 未開始 | |
-| 1 | `r3-finalize-guard` | 未開始 | |
-| 1 | `r3-sync-measure` | 未開始 | |
-| 1 | `r3-docs` | 未開始 | |
+| 1 | `r3-core` | 已合併 | `1d89f0b` |
+| 1 | `r3-vtt-raw` | 已合併 | `0154b59` |
+| 1 | `r3-record-lib` | 已合併 | `a2cb1e8` |
+| 1 | `r3-finalize-guard` | 已合併 | `2751571` |
+| 1 | `r3-sync-measure` | 已合併 | `cb6f933` |
+| 1 | `r3-docs` | 已合併 | `6fd631a` |
 | 2 | `r3-lock` | 未開始（併入原 r3-latency-log） | |
 | 2 | `r3-menubar-states` | 未開始（併入原 r3-notify） | |
 | 2 | `r3-search` | 未開始 | |
