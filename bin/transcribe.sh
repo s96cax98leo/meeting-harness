@@ -52,8 +52,59 @@ fi
 # 預設為通用提示；可用環境變數 MH_TRANSCRIBE_HINT 覆寫成你當場的領域術語以提升準確度。
 HINT="${MH_TRANSCRIBE_HINT:-以下為一場繁體中文的技術演講/會議，內容含中英文混雜的專有名詞、產品名與技術術語。}"
 
-# 講者分離需要段落時間戳 → MH_EMIT_SEGMENTS=1 時輸出 all（含 .json）
-OUTFMT="txt"; [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]] && OUTFMT="all"
+# 段落時間戳（.json）一律輸出（spec §4.30.4）：講者分離、品質檔、VTT 都要用。
+# MH_EMIT_SEGMENTS 已不需要設定；保留這個變數不會出錯，只是不再影響輸出。
+OUTFMT="all"
+
+# ── VAD：用錄製器的 levels 只把有聲區間交給 ASR（spec §3.18、§3.19、§4.30.1–§4.30.3）──
+# 有聲區間由 _record_lib.py clip 算（成品時間軸、小數 3 位）；沒有 levels（ingest 的音檔）、
+# 全場無聲、或 MH_VAD=0 時退回整檔，送 ASR 的參數與 R2 相同。
+# 門檻、補、合併間隔可用 MH_VAD_THRESHOLD_DB／MH_VAD_PAD／MH_VAD_MERGE_GAP 覆寫。
+REC_DIR="$(cd "$(dirname "$AUDIO")" && pwd)"
+CLIP_TS=""
+if [[ "${MH_VAD:-1}" == "0" ]]; then
+  VAD_LINE="> VAD：未套用（MH_VAD=0）"
+else
+  CLIP_JSON=""; VAD_REASON=""
+  if CLIP_JSON="$(python3 "$HARNESS_ROOT/bin/lib/_record_lib.py" clip "$REC_DIR" 2>"$WORKDIR/clip.err")"; then
+    VAD_REASON="$(grep -m1 -E '^(沒有 levels|沒有有聲區間)$' "$WORKDIR/clip.err" || true)"
+  else
+    echo "[transcribe] WARN: VAD 計算失敗，退回整檔轉錄：$(tail -1 "$WORKDIR/clip.err")" >&2
+    CLIP_JSON="null"
+  fi
+  # 其他警告（例如 MH_VAD_* 不是數字、改用預設）照樣轉給使用者看
+  grep -vE '^(沒有 levels|沒有有聲區間)$' "$WORKDIR/clip.err" >&2 || true
+  if [[ -n "$CLIP_JSON" && "$CLIP_JSON" != "null" ]]; then
+    VAD_INFO="$(python3 - "$HARNESS_ROOT/bin/lib" "$CLIP_JSON" <<'PYVAD' 2>/dev/null
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import _record_lib as rl
+clips = json.loads(sys.argv[2])
+thr = rl._env_float("MH_VAD_THRESHOLD_DB", rl.VAD_THRESHOLD_DB)
+pad = rl._env_float("MH_VAD_PAD", rl.VAD_PAD)
+gap = rl._env_float("MH_VAD_MERGE_GAP", rl.VAD_MERGE_GAP)
+print(",".join(f"{x:.3f}" for c in clips for x in c))
+print(f"> VAD：clip {len(clips)} 段，門檻 {thr:g} dBFS，補 {pad:g} 秒，合併間隔 {float(gap)!r} 秒")
+PYVAD
+)" || VAD_INFO=""
+    CLIP_TS="$(printf '%s\n' "$VAD_INFO" | sed -n 1p)"
+    VAD_LINE="$(printf '%s\n' "$VAD_INFO" | sed -n 2p)"
+    if [[ -z "$CLIP_TS" || -z "$VAD_LINE" ]]; then
+      echo "[transcribe] WARN: clip 結果解析失敗，退回整檔轉錄" >&2
+      CLIP_TS=""; VAD_REASON="沒有 levels"
+    fi
+  fi
+  if [[ -z "$CLIP_TS" ]]; then
+    VAD_LINE="> VAD：未套用（${VAD_REASON:-沒有 levels}）"
+  fi
+fi
+# 依引擎組 clip 參數（退回整檔時兩者都是空陣列，不帶參數）
+MLX_CLIP=(); OAI_CLIP=()
+if [[ -n "$CLIP_TS" ]]; then
+  MLX_CLIP=(--clip-timestamps "$CLIP_TS")
+  OAI_CLIP=(--clip_timestamps "$CLIP_TS")
+fi
+echo "[transcribe] ${VAD_LINE#> }"
 
 USED_MODEL="$MODEL"
 echo "[transcribe] engine=mlx-whisper model=$MODEL audio=$AUDIO (output=$OUTFMT)"
@@ -68,6 +119,7 @@ run_mlx() { # <model>
     --condition-on-previous-text False \
     --output-dir "$WORKDIR" \
     --output-format "$OUTFMT" \
+    ${MLX_CLIP[@]+"${MLX_CLIP[@]}"} \
     --verbose False 2>&1 | tail -8
 }
 if command -v mlx_whisper >/dev/null 2>&1; then
@@ -80,14 +132,16 @@ if command -v mlx_whisper >/dev/null 2>&1; then
         USED_MODEL="openai-whisper medium"
         whisper "$AUDIO" --model medium --language "$LANG_CODE" \
           --initial_prompt "$HINT" --condition_on_previous_text False \
-          --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
+          --output_dir "$WORKDIR" --output_format "$OUTFMT" \
+          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
       }
     else
       echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
       USED_MODEL="openai-whisper medium"
       whisper "$AUDIO" --model medium --language "$LANG_CODE" \
         --initial_prompt "$HINT" --condition_on_previous_text False \
-        --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
+        --output_dir "$WORKDIR" --output_format "$OUTFMT" \
+          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
     fi
   fi
 else
@@ -95,7 +149,8 @@ else
   USED_MODEL="openai-whisper medium"
   whisper "$AUDIO" --model medium --language "$LANG_CODE" \
     --initial_prompt "$HINT" --condition_on_previous_text False \
-    --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
+    --output_dir "$WORKDIR" --output_format "$OUTFMT" \
+          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
 fi
 
 # 取第一個 .txt，包成 markdown（僅原始逐字稿，標點/校對交由 agent 精修）
@@ -110,19 +165,19 @@ mkdir -p "$(dirname "$OUT")"
   echo "# 逐字稿（原始，未經任何後處理）"
   echo
   echo "> 來源：$(basename "$AUDIO")　語言：${LANG_CODE}　模型：${USED_MODEL}"
+  echo "$VAD_LINE"
   echo
   cat "$RAW"
 } > "$OUT"
 
-# 講者分離用：保留段落時間戳 JSON
-if [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]]; then
-  SEGJSON="$(find "$WORKDIR" -name '*.json' | head -1)"
-  if [[ -n "$SEGJSON" && -s "$SEGJSON" ]]; then
-    cp "$SEGJSON" "$(dirname "$OUT")/transcript.segments.json"
-    echo "[transcribe] segments -> $(dirname "$OUT")/transcript.segments.json"
-  else
-    echo "[transcribe] WARN: 未取得 segments JSON（講者分離將無法對齊）" >&2
-  fi
+# 段落時間戳 JSON：一律保留（spec §4.30.4；講者分離、品質檔、VTT 用）
+SEGOUT="$(dirname "$OUT")/transcript.segments.json"
+SEGJSON="$(find "$WORKDIR" -name '*.json' | head -1)"
+if [[ -n "$SEGJSON" && -s "$SEGJSON" ]]; then
+  cp "$SEGJSON" "$SEGOUT"
+  echo "[transcribe] segments -> $SEGOUT"
+else
+  echo "[transcribe] WARN: 未取得 segments JSON（講者分離將無法對齊、品質檔無從判斷）" >&2
 fi
 
 # 正體保險栓：Breeze-ASR-25 原生輸出繁體 → 不動；其他引擎（large-v3 / openai-whisper）才轉。
@@ -135,6 +190,56 @@ case "$USED_MODEL" in
       python3 "$(dirname "$0")/_to_tw.py" "$(dirname "$OUT")/transcript.segments.json" 2>/dev/null || true
     ;;
 esac
+
+# 品質檔（spec §3.18、§4.30.5）：逐段標出可疑段落，只標記、不動 raw（鐵則 1）。
+# 衍生檔（speakers.md、VTT）會在這些段落前加「（聽不清）」（鐵則 4）。
+#   compression_ratio：該段文字 zlib 壓縮比 > 2.4
+#   no_speech_loop   ：同一句（≥ 2 字）在該段內連續重複 ≥ 3 次
+#   repeat_run       ：相鄰 ≥ 4 段文字完全相同，每段各一筆
+# 讀不到段落檔時寫 []（無從判斷），並已在上方警告。
+python3 - "$SEGOUT" "$(dirname "$OUT")/transcript.quality.json" <<'PYQ' || echo "[transcribe] WARN: transcript.quality.json 產生失敗" >&2
+import json, os, re, sys, zlib
+segp, outp = sys.argv[1], sys.argv[2]
+segs = []
+if os.path.isfile(segp):
+    try:
+        d = json.load(open(segp, encoding="utf-8"))
+        segs = [s for s in (d.get("segments") or []) if isinstance(s, dict)] if isinstance(d, dict) else []
+    except (OSError, ValueError):
+        segs = []
+LOOP = re.compile(r"(.{2,}?)\1{2,}", re.S)
+def ratio(t):
+    b = t.encode("utf-8")
+    return len(b) / len(zlib.compress(b)) if b else 0.0
+texts = [str(s.get("text") or "").strip() for s in segs]
+flags = [[] for _ in segs]
+for i, t in enumerate(texts):
+    if not t:
+        continue
+    if ratio(t) > 2.4:
+        flags[i].append("compression_ratio")
+    if LOOP.search(re.sub(r"\s+", "", t)):
+        flags[i].append("no_speech_loop")
+i = 0
+while i < len(texts):
+    j = i
+    while j + 1 < len(texts) and texts[j + 1] == texts[i]:
+        j += 1
+    if texts[i] and j - i + 1 >= 4:
+        for k in range(i, j + 1):
+            flags[k].append("repeat_run")
+    i = j + 1
+out = []
+for s, fl in zip(segs, flags):
+    for r in fl:
+        out.append({"start": s.get("start"), "end": s.get("end"), "reason": r})
+out.sort(key=lambda e: (e["start"] if isinstance(e["start"], (int, float)) else 0.0))
+with open(outp, "w", encoding="utf-8") as f:
+    json.dump(out, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+n = len(out)
+print(f"[transcribe] quality -> {outp}（{n} 筆）" if n else f"[transcribe] quality -> {outp}（沒有可疑段落）")
+PYQ
 
 # 自我驗證：偵測 whisper 重複迴圈（同一行連續重複過多 = 轉錄失敗）
 # 注意要算「連續」重複，不是整份檔案的出現次數——會議裡「好」「對」「是」本來就會出現幾十次，
