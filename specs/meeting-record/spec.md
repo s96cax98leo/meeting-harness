@@ -1497,7 +1497,7 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 
 ```swift
 // Core/Lock.swift
-func acquireRecordLock(home: URL, retrySeconds: Double = 1.0) -> MenuBarLockResult  // <home>/record.lock；既有的 .acquired(fd)／.heldByOther／.unavailable(errno)；每 100 ms 重試
+func acquireRecordLock(home: URL, retrySeconds: Double = 1.0) -> MenuBarLockResult  // <home>/record.lock；既有的 .acquired(fd)／.heldByOther／.unavailable(errno)；每 100 ms 重試；app 內的試鎖（選單、會議偵測、試錄）一律傳 retrySeconds: 0 只試一次（§6 第 142 條）
 enum StopRefusal: String, Equatable { case noLock = "no_lock", noPid = "no_pid", pidDead = "pid_dead",
                                       pidMismatch = "pid_mismatch", notRecorder = "not_recorder" }
 enum StopTarget: Equatable { case signal(pid: Int32); case refuse(StopRefusal) }
@@ -1725,7 +1725,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.34.1 | `meeting reminders <場次> --list 範例清單 --dry-run` 應印 §3.19 的項目陣列、回 0、不呼叫替身 app；`uid` 與同一場 `actions.ics` 的 `UID:` 完全相同；缺負責人時 `notes` 含「負責人：（未定）」，缺期限時 `due` 為 `null`。 | F5；鐵則 2 | `test_r3_reminders.py::test_dry_run_items`、`::test_uid_matches_ics` |
 | 4.34.2 | 非 dry-run 時應以 `open -W -n -a … --args reminders --input … --list …` 呼叫 app（以 `MH_RECORD_OPEN` 替身記錄參數），並以結果檔的 `code` 為結束碼；替身不寫結果檔時回 5；場次沒有 `meeting.record.json` 回 2。 | F5；R3-§2.2 | `test_r3_reminders.py::test_invokes_app_and_maps_code` |
-| 4.34.3 | app 的 `reminders` 子指令應：用 `requestFullAccessToRemindersWithCompletion`；以 `URL`（`meetingharness://action/`）去重；清單不存在回 3 不代建；權限被拒回 4。實作形狀：`Capture/Reminders.swift` 含 `requestFullAccessToReminders`、`fetchRemindersMatchingPredicate`、`meetingharness://action/`、`saveReminder`，且不含 `saveCalendar`；`main.swift` 分派 `reminders`；`Info.plist` 含提醒事項權限說明鍵（鍵名照 Apple 文件，§7 疑慮 45），說明文字含「iCloud」。 | F5；R3-Q3 | `test_r3_app_static.py::RemindersStatic.test_eventkit_shape`；實機（寫入兩次，第二次 created=0） |
+| 4.34.3 | app 的 `reminders` 子指令應：用 `requestFullAccessToRemindersWithCompletion`；以 `URL`（`meetingharness://action/`）去重；清單不存在回 3 不代建；權限被拒回 4。實作形狀：`Capture/Reminders.swift` 含 `meetingharness://action/`，去掉註解與字串常值後含 `requestFullAccessToReminders`、`fetchReminders(matching:`、`.save(`、`commit: false`、`.commit()`，且不含 `saveCalendar`（§6 第 143 條）；`main.swift` 分派 `reminders`；`Info.plist` 含提醒事項權限說明鍵（鍵名照 Apple 文件，§7 疑慮 45），說明文字含「iCloud」。 | F5；R3-Q3 | `test_r3_app_static.py::RemindersStatic.test_eventkit_shape`；實機（寫入兩次，第二次 created=0） |
 | 4.34.4 | SKILL.md 與 README 應說明「清單開了 iCloud 同步時，內容會離開本機」與 `--dry-run`。 | intent R3-4 第 5 點 | `test_r3_docs.py::test_reminders_documented` |
 
 #### 4.35 影音一致的量測與延遲紀錄（S-A、D3、S-B）
@@ -1948,6 +1948,8 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 139 | §4.43.5、`design.md` R3-D14：首次引導的試錄「錄 5 秒後走 F2 的捨棄路徑（移到垃圾桶）」 | **閘門 2 使用者已核准（2026-10-13）**。試錄不寫進使用者的會議根目錄：場次放在 `FileManager.default.temporaryDirectory` 底下的 `meeting-harness-trial-<runId>/`，錄 5 秒自動停止、**跳過收尾**，讀狀態檔的 `recentLevels` 顯示兩路是否有聲，之後以 `removeItem` 直接刪除這個暫存目錄（只限這個路徑），不移垃圾桶、不寫 `record.discard.json`、不跳確認框。實作形狀：`Trigger/Onboarding.swift` 含 `temporaryDirectory` 與 `meeting-harness-trial-`，其中每個 `removeItem(` 的參數都是這個試錄路徑變數；§4.42.3「不得對場次路徑呼叫 `removeItem(`」與 `r3-discard` 的檢查不受影響（試錄目錄不是使用者的場次） | 修正輪 I。理由：試錄是引導為了驗權限而產生的暫存，不是使用者要留的會議資料，也不在使用者的根目錄；每次引導都往垃圾桶丟一個資料夾只增加雜訊；加確認框對使用者沒有保護作用、只多一步。`CLAUDE.md`〈不可逆節點〉的「刪資料」指使用者資料，本條把刪除範圍限在本程序剛建立的暫存目錄 |
 | 140 | `tests/record/test_concurrency.py::test_finalizing_session_not_listed`：`record finish` 的程序還活著（`p.poll() is None`）時，`錄音/` 第一層出現音檔或 `meeting status` 列出場次，一律算違規 | 只有在「尚未發佈」時才算違規：`錄音/tracks/finalize.json` 沒有 `finishedAt`，或其 `outputs.audio` 的檔名不是看到的那一個音檔。產品的發佈順序（§4.6.5：先寫 `finalize.json`、最後才把 wav 原子 rename 進 `錄音/`，之後清暫存、記狀態、刪段落）不變；原判斷把「發佈完成後、程序結束前」的空窗誤判為違規 | 使用者 2026-10-13 核准（R3 build 第 3 層整合時，10 輪重現 2 次；探針確認誤報當下 `finalize.json` 已有 `finishedAt`、`outputs.audio` 相符、`.finalize/` 已清除）。只改這支測試的判斷條件，`polls ≥ 3` 與其他斷言不變 |
 | 141 | §6 第 73 條：選單在狀態列之後多一項「複製完整訊息與補救指令」，**只在 `detailText != statusLine` 時顯示** | 失敗階段（`menuStage == .failed`）一律顯示「複製完整訊息與補救指令」（`copyDiagnostics`，§4.41.2、§4.41.3），不再看 `detailText != statusLine`；其他階段隱藏。複製內容仍是 `detailText`（§6 第 73 條的其餘規定與 §4.11.8 的 toolTip 不變）；錯誤詳情視窗的按鈕同此（§4.41.5）。既有測試不改 | r3-menu-stages 實作、主 session 認可，閘門 3 追認（build 收尾補記，2026-10-13；`MenuBar.swift:274-282`、`:338`）。理由：§4.41.2 定案的 `.failed` 項目清單已含 `copyDiagnostics`，選單依階段顯示後再疊一層內容比對只會讓同一階段的選單時有時無 |
+| 142 | §3.20 `acquireRecordLock(home:retrySeconds:)` 的「每 100 ms 重試」、預設 `retrySeconds: 1.0`，讀起來像所有呼叫端都會重試約 1 秒 | 函式簽名與 §4.26.1 不變。app 內的試鎖（`Trigger/MenuBar.swift` 的停止確認、`Trigger/MeetingDetect.swift` 的會議偵測、`Trigger/Onboarding.swift` 的試錄）一律傳 `retrySeconds: 0`，只試一次：拿得到表示沒有錄製在跑，拿不到就是有人持有，不必等。錄製器開錄（`Commands.swift`）照預設重試。程式不改 | 驗證報告 §8 指出字面不一致；使用者 2026-10-13 選「spec 補字面就好」。理由：錄製中鎖一定被持有，選單與偵測多等 1 秒只讓 UI 卡住 |
+| 143 | `tests/record/test_r3_app_static.py::RemindersStatic.test_eventkit_shape` 要求 `Reminders.swift` 含 Objective-C 名稱 `fetchRemindersMatchingPredicate`、`saveReminder` | **既有測試修改**：改成在去掉註解與字串常值的程式裡找 Swift 呼叫形狀 `requestFullAccessToReminders`、`fetchReminders(matching:`、`.save(`、`commit: false`、`.commit()`；`meetingharness://action/` 仍在去掉註解的程式裡找（它本來就是字串）；`saveCalendar` 不得出現、`main.swift` 分派與 Info.plist 的檢查不變。§4.34.3 的實作形狀同步改寫。產品程式不改 | 驗證報告 §8：原字面只出現在錯誤訊息字串（`Reminders.swift:116`、`:152`），測試沒有驗到真正的呼叫（`:114`、`:150`）。使用者 2026-10-13 選「改測試字面成 Swift 名稱」 |
 
 ### R3-§7 疑慮（續，第 43 條起）
 

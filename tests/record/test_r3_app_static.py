@@ -165,8 +165,11 @@ class RemindersStatic(unittest.TestCase):
     # spec §4.34.3：EventKit 的形狀、main.swift 分派 reminders、Info.plist 的提醒事項權限說明含 iCloud
     def test_eventkit_shape(self):
         src = code(self, REMINDERS)
-        assert_has(self, src, ["requestFullAccessToReminders", "fetchRemindersMatchingPredicate",
-                               "meetingharness://action/", "saveReminder"], rel(REMINDERS))
+        assert_has(self, src, ["meetingharness://action/"], rel(REMINDERS))
+        # spec §6 第 143 條：呼叫要在去掉字串常值後仍然存在（錯誤訊息裡的名稱不算）
+        calls = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', src)
+        assert_has(self, calls, ["requestFullAccessToReminders", "fetchReminders(matching:",
+                                 ".save(", "commit: false", ".commit()"], rel(REMINDERS))
         assert_lacks(self, src, ["saveCalendar"], rel(REMINDERS))
         self.assertRegex(code(self, MAIN_SWIFT), r'case\s+"reminders"', "main.swift 應分派 reminders")
         plist = info_plist(self)
