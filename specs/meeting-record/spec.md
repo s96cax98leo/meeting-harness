@@ -1390,6 +1390,24 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 - **`bin/_merge_speakers.py` 不改**（原 §6 第 122 條撤回）：`_render.py` 以 `importlib` 匯入它既有的 `assign_speaker`、`load_speaker_segments`、`UNKNOWN`，`main()` 內的套名判準照抄並以一致性測試保證相同（§4.29.5）；`transcript.speakers.md` 的註記與「（聽不清）」改由 `_render.py --annotate-speakers` 後處理（§4.31.10）。
 - 範例名稱一律用「[Stand-up] 範例專案」；測試、fixture、log 範例不得含真實名稱（§4.14 照舊適用）。
 - 測試欄的寫法：`test_r3_<slug>.py::<函式>` 在 `tests/record/`；`swift:<檔>::<函式>` 在 `tools/MeetingRecorder/Tests/`；`test_r3_app_static.py::<類別>.<函式>` 是只能靜態檢查的 app 端（類別名對應子任務）；「實機」＝R3 實機驗收場（§4.47，使用者在場）。
+- **Red 層補字面（2026-10-13）**：Red 層兩個測試子任務回報 spec 沒定字面、或字面與現行程式不同之處，依主 session 的決定補齊；都是補漏與對齊，不改閘門 2 核准過的行為，每處都落在既有紅燈測試的接受範圍內。逐條：
+  - Red 層補字面（2026-10-13）：§3.17 `finalize.json` 的位置改為 `錄音/tracks/finalize.json`（與現行程式一致）；§4.35.2 同步改寫。
+  - Red 層補字面（2026-10-13）：§3.18、§4.29.1、§4.29.3、§4.30.4、R3-§5 的 `segments.json` 一律改為 `transcript.segments.json`（`錄音/` 底下）。
+  - Red 層補字面（2026-10-13）：§3.17、§4.28.7 `skipped[]` 改為物件 `{file, movedTo}`；讀取端對舊場次同時接受字串與物件。
+  - Red 層補字面（2026-10-13）：§3.18 暫停註記〔暫停 a–b〕：a 是成品時間點，b＝a＋暫停長度，b 不在成品時間軸上。
+  - Red 層補字面（2026-10-13）：§4.31.3 標記的「掛下一段」與「獨立成行」註明自動測試只驗順序。
+  - Red 層補字面（2026-10-13）：§3.18、§3.19、§4.30.1、§4.30.2 的 `--clip-timestamps` 傳法。
+  - Red 層補字面（2026-10-13）：§4.35.2 `--sync-player` 的檢查名 `sync_player`。
+  - Red 層補字面（2026-10-13）：§4.35.3 `--sync-acoustic` 的輸入（`錄音/tracks/` 雙音軌段落）與輸出格式。
+  - Red 層補字面（2026-10-13）：§3.19、§4.33.1 `meeting search` 的 `<檔名>` 帶 `錄音/`。
+  - Red 層補字面（2026-10-13）：§4.28.8 步驟耗時印到 stdout（app 啟動的收尾經現行管道進 `<home>/record.log`）。
+  - Red 層補字面（2026-10-13）：§4.32.2 `levels_intervals` 的 `levels` 是一維陣列；Swift 不新增 `levelsIntervals`，Swift 測試只驗向量合乎規則。
+  - Red 層補字面（2026-10-13）：§4.36.4 末句、§4.36.5 的「目前段已開但沒有 sample → cancel」註明為防禦性分支，自動測試只驗反面。
+  - Red 層補字面（2026-10-13）：§4.36.2 收 prev 的條件改為三路各有 `routeSample != .old` 的 sample（跨邊界也算數）。
+  - Red 層補字面（2026-10-13）：§3.16、§3.20 `MenuBarSettings` 不加 `schemaVersion`，存檔時由自訂 encode 補上；`onboardingCompletedAt` 為 nil 時省略鍵，§3.16 範例同步。
+  - Red 層補字面（2026-10-13）：§4.45.1 `usage()` 只要求列出 `search` 與 `sync`，`reminders` 不要求。
+  - Red 層補字面（2026-10-13）：§4.39.3「通知不得含場次名或視窗標題」改由實機驗收場確認（§4.47.4 同步）。
+  - §7 疑慮 45（Info.plist 鍵名）維持原狀，由 `r3-reminders` 開工前查證。
 
 ### R3-§2.2 結束碼語意（接續 §2.2、R2-§2.2）
 
@@ -1423,8 +1441,9 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 
   ```json
   { "schemaVersion": 1, "showTimer": true, "hudMode": "auto", "hudPosition": "right",
-    "timeSensitiveAlerts": true, "lastSettingsTab": "general", "onboardingCompletedAt": null, "meetingDetect": true }
+    "timeSensitiveAlerts": true, "lastSettingsTab": "general", "meetingDetect": true }
   ```
+  上例是全部預設值時存檔的內容。`onboardingCompletedAt`（ISO 8601 含時區的字串，例 `"2026-10-13T10:00:00+08:00"`）在 nil 時**省略鍵**（與 §3.20 增補的 Optional 同慣例；`encodeIfPresent`）；讀取時缺鍵與 `null` 都當 nil。`schemaVersion` 不是 `MenuBarSettings` 的欄位（§3.20）：`saveMenuBarSettings` 以自訂 `encode(to:)` 一律補寫 `"schemaVersion": 1`，`loadMenuBarSettings` 不看它（缺鍵或其他值都照常讀其餘鍵）。（Red 層補字面）
   缺檔、壞檔、缺鍵 → 該鍵用上面的預設值；不認得的值（例 `hudMode: "x"`、`hudPosition: "topRight"`）→ 預設值。`hudPosition` ∈ `right`、`left`（U2＝C：HUD 收在螢幕右緣或左緣）；`lastSettingsTab` ∈ `SettingsTab` 的 7 個 rawValue（§3.20）。
 - `<home>/sync-calibration.json`（新，使用者或實機驗收場手寫，不進 repo）：`{"schemaVersion": 1, "devices": {"<輸出裝置 uid>": <秒數>}}`。
 
@@ -1439,26 +1458,27 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
   ```
   `t` 為錄製時鐘秒數（開錄時一筆 `t=0`，之後每筆輸出裝置 `deviceEvents` 一筆，`t` 相同）；讀不到的數值欄寫 `null`，`reportedSeconds`＝四項幀數和 ÷ `sampleRate`（任一為 null 時 null），小數 4 位。
 - `record.status.json` 新增選用 `discarded`（Bool；只在捨棄成功時寫 `true`，其餘省略鍵）。暫停中每 5 秒重寫一次（只更新 `updatedAt`），不加新鍵。
-- `錄音/finalize.json`：`skipped[]` 每筆加 `movedTo`（相對 `錄音/` 的路徑，例 `tracks/unreadable/seg-0003.mov`）；新增選用 `timedOut: {"step": "normalize|concat|mix|probe", "seconds": <上限>}`；新增選用 `syncCompensation: {"mode": "off|reported|calibrated", "segments": [{"file", "outputUid", "delaySeconds", "source": "reported|calibrated|missing|none", "clamped"}]}`（`mode` 為 `off` 時 `segments` 為 `[]`）。
+- `錄音/tracks/finalize.json`（位置與現行程式相同，`bin/_record_finalize.py:757`；Red 層補字面）：`skipped[]` 的元素由字串（R2：段落檔名）改成物件 `{"file": "<段落檔名>", "movedTo": "<相對 錄音/ 的路徑>"}`（例 `{"file": "seg-0003.mov", "movedTo": "tracks/unreadable/seg-0003.mov"}`；搬移失敗、段落留在原處時 `movedTo` 為 `null`）。**讀取端**（`_record_finalize.py` 的冪等判斷與之後任何讀 `skipped[]` 的程式）對舊場次要同時接受字串與物件：字串 `"x"` 視同 `{"file": "x", "movedTo": null}`；新增選用 `timedOut: {"step": "normalize|concat|mix|probe", "seconds": <上限>}`；新增選用 `syncCompensation: {"mode": "off|reported|calibrated", "segments": [{"file", "outputUid", "delaySeconds", "source": "reported|calibrated|missing|none", "clamped"}]}`（`mode` 為 `off` 時 `segments` 為 `[]`）。
 
 #### 3.18 逐字稿衍生檔與 schema
 
-- `segments.json`：`transcribe.sh` **一律輸出**（R2 前只在 `MH_EMIT_SEGMENTS=1` 時），格式不變。
+- `錄音/transcript.segments.json`（段落檔；檔名與現行程式相同，`bin/transcribe.sh:120`、`bin/meeting.sh:244`、`bin/_render.py:235`；Red 層補字面）：`transcribe.sh` **一律輸出**（R2 前只在 `MH_EMIT_SEGMENTS=1` 時），格式不變。
+- **送 ASR 的 clip**（Red 層補字面）：`mlx_whisper` 以 CLI 參數 `--clip-timestamps <start>,<end>,<start>,<end>,…` 傳入（一個參數值、逗號分隔、不含空白與方括號、成品秒數、小數 3 位，例 `--clip-timestamps 4.250,10.750,24.250,30.750`；值取自 §3.19 `_record_lib.py clip` 的輸出攤平）；`openai-whisper` 退路以同值的 `--clip_timestamps` 傳入。退回整檔時不帶這個參數。
 - `transcript.quality.json`（新）：`[{"start": 12.5, "end": 18.0, "reason": "compression_ratio"}]`；`reason` ∈ `compression_ratio`（該段文字 zlib 壓縮比 > 2.4）、`no_speech_loop`（同一句在該段內連續重複 ≥ 3 次）、`repeat_run`（相鄰 ≥ 4 段文字完全相同，每段各一筆）；依 `start` 遞增；沒有就 `[]`。
 - `transcript.raw.md` 標頭：`> 來源：… 模型：…` 的下一行是 VAD 行，二選一：`> VAD：clip <N> 段，門檻 <x> dBFS，補 <p> 秒，合併間隔 <g> 秒`，或 `> VAD：未套用（<原因>）`，原因 ∈ `沒有 levels`、`沒有有聲區間`、`MH_VAD=0`。raw 的正文照舊不清洗。
 - `schema/meeting-record.v1.json`：頂層加選用 `markers`（陣列；每筆必有 `label`（字串）、`t`（≥ 0 的數字，成品秒數），選用 `speaker`、`note`（字串））；`required` 不變。
 - `summary.md`：五個必備段（`一句話：` 與決議、依賴、風險、交辦）之後，有標記才加 `## 標記`（每行 `- <mm:ss> <label>（<speaker>）`，沒有 speaker 不加括號），有暫停／麥克風靜音／輸出裝置切換／長靜音才加 `## 錄製註記`（每行 `- <mm:ss>–<mm:ss> <種類>`，種類 ∈ `暫停（未錄）`、`麥克風靜音`、`長靜音`，裝置切換寫 `- <mm:ss> 輸出裝置切換：<舊 transport> → <新 transport>`）。不寫裝置名稱與 uid。兩段由 `_render.py` 的同一個函式產生；`bin/summarize-local.py`（地端總結）寫出的 `summary.md` 也在模型輸出之後接上這兩段（§4.31.9），雲端與地端的 `summary.md` 段落一致。
-- 註記行（`transcript.speakers.md` 與 VTT）：`〔暫停 <mm:ss>–<mm:ss>，這段沒有錄〕`、`〔麥克風靜音 <mm:ss>–<mm:ss>〕`、`〔長靜音 <mm:ss>–<mm:ss>〕`、`〔輸出裝置切換：<舊> → <新>〕`、`〔<label>〕`（標記）。VTT 一律放在 `NOTE` 區塊，不佔 cue。長靜音＝兩路 `levels` 都 ≤ -60 dBFS（含 null）連續 ≥ 30 秒，且不在暫停區間內。
+- 註記行（`transcript.speakers.md` 與 VTT）：`〔暫停 <mm:ss>–<mm:ss>，這段沒有錄〕`、`〔麥克風靜音 <mm:ss>–<mm:ss>〕`、`〔長靜音 <mm:ss>–<mm:ss>〕`、`〔輸出裝置切換：<舊> → <新>〕`、`〔<label>〕`（標記）。VTT 一律放在 `NOTE` 區塊，不佔 cue。**暫停註記的兩個時間**（Red 層補字面）：`〔暫停 a–b，這段沒有錄〕` 與 summary 的 `- a–b 暫停（未錄）` 中，a＝暫停開始在成品時間軸上的時間點（`outputTime(pause.t)`）；b＝a＋暫停長度（`resume.t − pause.t`，錄製時鐘秒數；沒配對的暫停以錄製結束為 resume）。b **不在成品時間軸上**（成品裡暫停長度為 0，b 之後的成品內容從 a 接續），只用來表示暫停了多久。例：成品 02:00 暫停 90 秒 → `〔暫停 02:00–03:30，這段沒有錄〕`。自動測試只比對 a 與「b 是 `mm:ss`」（`test_r3_annotations.py:34`、`:289`）。長靜音＝兩路 `levels` 都 ≤ -60 dBFS（含 null）連續 ≥ 30 秒，且不在暫停區間內。
 
 #### 3.19 CLI 與程式介面（新）
 
 - `meeting sync [off|reported|calibrated]`（`bin/meeting.sh` 頂層分派到 `python3 "$BIN/lib/_record_lib.py" sync …`）：不帶參數印一行 `syncCompensation=<mode>`；帶參數經 §3.15 的鎖以 `merge_defaults` 合併寫入，印 `syncCompensation=<mode>（下一次收尾起生效）`。
 - `bin/lib/_record_lib.py` 的 `merge_defaults(home, updates, timeout=5.0)`：取 `<home>/record.defaults.lock`（阻塞，最多 5 秒）→ 讀 `record.defaults.json`（缺檔＝`{}`）→ 不是 JSON 物件就丟例外、不寫 → 合併 `updates`（不認得的鍵保留）→ 同目錄 `mkstemp`＋`os.replace`。`record.sh` 的 `write_defaults` 與 `meeting sync` 都呼叫它。
 - **stop 檢查的測試旁路**（§6 第 136 條）：`record.sh stop` 第 (4) 項比對 `ps -o comm=` 的結尾字串預設是 `MeetingRecorder`；`MH_RECORDER_COMM` 有值**且** `MH_RECORD_OPEN` 也有值（測試環境的既有旁路）時改用 `MH_RECORDER_COMM`，否則一律用 `MeetingRecorder`。
-- `meeting search <根> <關鍵字>`：搜 `<根>` 底下各場次的 `summary.md`、`transcript.speakers.md`、`transcript.raw.md`、`meeting.record.json`；大小寫不分、純子字串；每筆一行 `<場次相對 <根> 的路徑>/<檔名>:<行號>: <該行，超過 120 字截斷加「…」>`；場次依資料夾名稱（日期在前）新到舊；同場次依檔名、行號遞增。
+- `meeting search <根> <關鍵字>`：搜 `<根>` 底下各場次的 `summary.md`、`transcript.speakers.md`、`transcript.raw.md`、`meeting.record.json`；大小寫不分、純子字串；每筆一行 `<場次相對 <根> 的路徑>/<檔名>:<行號>: <該行，超過 120 字截斷加「…」>`；`<檔名>` 是相對場次目錄的路徑，**帶 `錄音/`**：`summary.md`、`meeting.record.json`、`錄音/transcript.speakers.md`、`錄音/transcript.raw.md`（Red 層補字面）；場次依資料夾名稱（日期在前）新到舊；同場次依 `<檔名>` 字串（Python 字串比較）、行號遞增。
 - `meeting reminders <場次> --list <名稱> [--dry-run]`：`bin/lib/_reminders.py` 讀 `<場次>/meeting.record.json` 的 `actions[]`，組出項目 `{uid, title, notes, due, url}`：`uid`＝`f"{record.get('id', record['title'])}-{aid}@meeting-harness"`（與 `actions.ics` 相同）；`title`＝交辦內容；`notes`＝「負責人：<owner 或（未定）>」＋場次名；`due`＝期限（缺值 `null`，不補猜）；`url`＝`meetingharness://action/<uid>`。`--dry-run` 印 JSON 陣列後回 0、不啟動 app；否則以 `open -W -n -a <app> --args reminders --input <暫存 json> --list <名稱>` 交給 app，並以 app 寫的 `<暫存>.result.json` 的 `code` 為結束碼（沒有結果檔回 5）。
 - MeetingRecorder 子指令 `reminders --input <json> --list <名稱>`：`requestFullAccessToRemindersWithCompletion:` → 找名稱完全相同的清單（不代建）→ `fetchRemindersMatchingPredicate:` 讀出現有項目的 `URL` → 相同 URL 更新 `title`、`notes`、`dueDateComponents`，否則新增 → `saveReminder:commit:NO`，最後 `commit`；結果寫 `<input>.result.json` `{"code", "created", "updated", "message"}`，code 0／3／4／5 同 R3-§2.2。
-- `python3 bin/lib/_record_lib.py clip <錄音目錄>`：印 `clip_timestamps` 的 JSON（`[[start, end], …]`，成品秒數，小數 3 位；退回整檔時印 `null`），結束碼 0；目錄不存在 2。
+- `python3 bin/lib/_record_lib.py clip <錄音目錄>`：印 `clip_timestamps` 的 JSON（`[[start, end], …]`，成品秒數，小數 3 位；退回整檔時印 `null`），結束碼 0；目錄不存在 2。`transcribe.sh` 依 §3.18 把它攤平成 `--clip-timestamps` 的值。
 
 #### 3.20 Swift `Core/` 對外名稱（R3；test 子任務依此寫紅燈測試，build 段不得改名）
 
@@ -1506,6 +1526,8 @@ func newAlertWarnings(previous: [RecordWarning], current: [RecordWarning]) -> [R
 // Core/Settings.swift
 struct MenuBarSettings: Codable, Equatable { var showTimer = true; var hudMode = HUDMode.auto; var hudPosition = "right"
     var timeSensitiveAlerts = true; var lastSettingsTab = "general"; var onboardingCompletedAt: String? = nil; var meetingDetect = true }
+    // 不含 schemaVersion 欄位；自訂 encode(to:) 存檔時補寫 "schemaVersion": 1，onboardingCompletedAt 為 nil 時省略鍵（encodeIfPresent）；
+    // loadMenuBarSettings 遇缺鍵、null、不認得的值 → 該鍵用預設值（§3.16）
 enum SettingsTab: String, CaseIterable { case general, recording, feedback, hotkeys, afterRecording, permissions, advanced
     var title: String { get }; var symbolName: String { get } }   // 值見 §4.43.6
 func settingsTab(_ raw: String) -> SettingsTab                    // 不認得 → .general
@@ -1625,16 +1647,16 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.28.4 | 沒有設 `MH_FINALIZE_STEP_TIMEOUT` 時，逾時應為：ffprobe 30 秒；逐段正規化 max(120, 該段長度 × 10)；串接與混音 max(300, 全片長度 × 3)。（以模組函式 `step_timeout(step, seconds)` 驗：("probe", 60) → 30；("normalize", 5) → 120；("normalize", 60) → 600；("concat", 50) → 300；("mix", 3600) → 10800。） | Q3 | `test_r3_finalize_guard.py::test_step_timeout_values` |
 | 4.28.5 | `finalizeDeadline` 應：0 → 600；100 → 900；3600 → 11400；-5 → 600。 | D14a-A | `swift:R3LockTests.swift::testFinalizeDeadline` |
 | 4.28.6 | 錄製實例應以 `Capture/FinalizeRunner.swift` 執行收尾：超過 `finalizeDeadline` 或收尾中再收到 SIGTERM 時，對子程序送 SIGTERM、5 秒後仍在就 SIGKILL；狀態寫 `phase=failed`、`code=5`，message 含「收尾逾時」或「收尾已取消」，並含 `meeting record finish`。實作形狀：`FinalizeRunner.swift` 含 `finalizeDeadline(`、`SIGKILL`；`RecordingSession.swift` 的 `requestStop` 在收尾中不再直接 return（含「取消」分支）。 | Q3；`RecordingSession.swift:818`、`:927` | `test_r3_app_static.py::FinalizeRunnerStatic.test_deadline_and_cancel`；實機（收尾中按「取消收尾」） |
-| 4.28.7 | 讀不到的段落應搬到 `錄音/tracks/unreadable/`（撞名加 `-1`、`-2`），`finalize.json.skipped[].movedTo` 記相對路徑；收尾成功後被刪的只有已併入成品的段落。以一個 0 位元組的 `seg-0002.mov` 驗：收尾後 `tracks/unreadable/seg-0002.mov` 存在，`tracks/seg-0002.mov` 不存在，其他段落依 §6 第 111 條照常刪除。 | D12-A；§6 第 126 條 | `test_r3_finalize_guard.py::test_unreadable_moved_not_deleted` |
-| 4.28.8 | 每一步 ffmpeg／ffprobe 的耗時應寫進 `record.log`（一行一步，含步驟名與秒數，小數 1 位）。 | intent R3-9 衍生工作 | `test_r3_finalize_guard.py::test_step_durations_logged` |
+| 4.28.7 | 讀不到的段落應搬到 `錄音/tracks/unreadable/`（撞名加 `-1`、`-2`），`finalize.json.skipped[].movedTo` 記相對路徑；收尾成功後被刪的只有已併入成品的段落。以一個 0 位元組的 `seg-0002.mov` 驗：收尾後 `tracks/unreadable/seg-0002.mov` 存在，`tracks/seg-0002.mov` 不存在，其他段落依 §6 第 111 條照常刪除；`錄音/tracks/finalize.json` 的 `skipped` 恰一筆，是物件、`movedTo` 為 `tracks/unreadable/seg-0002.mov`（§3.17；Red 層補字面）。 | D12-A；§6 第 126 條 | `test_r3_finalize_guard.py::test_unreadable_moved_not_deleted` |
+| 4.28.8 | 每一步 ffmpeg／ffprobe 的耗時應由 `_record_finalize.py` 印到 **stdout**，一行一步：`耗時 <步驟>（<對象>）：<秒數> 秒`，`<步驟>` ∈ `normalize`、`concat`、`mix`、`probe`（同 `timedOut.step`），`<對象>` 為段落檔名或成品檔名，秒數小數 1 位（例 `耗時 normalize（seg-0001.mov）：1.2 秒`）。app 啟動的收尾照現行把 stdout 逐行寫進 `<home>/record.log`（`RecordingSession.swift:926`），`meeting record finish` 直接跑時印在終端；`_record_finalize.py` 不自行開 `record.log`。（Red 層補字面；測試合併讀 stdout、stderr 與 `<home>/record.log`，`test_r3_finalize_guard.py:181-184`） | intent R3-9 衍生工作 | `test_r3_finalize_guard.py::test_step_durations_logged` |
 
 #### 4.29 VTT 講者、raw 不重轉、無效參數（T1、T2、T3）
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
-| 4.29.1 | 同一份 `segments.json`＋講者分段＋聲紋結果（`apply` false、cos 0.72 的講者 A；`apply` true、cos 0.81 的講者 B），`transcript.vtt` 與 `transcript.speakers.md` 對每一段的講者名稱應完全一致：A 不掛真名（`speakers.md` 用 `_merge_speakers.py`（不改）現行的代號，VTT 不加 `<v>`），B 掛真名。 | T1；鐵則 3 | `test_r3_vtt_raw.py::test_vtt_uses_merge_assignment` |
+| 4.29.1 | 同一份 `transcript.segments.json`＋講者分段＋聲紋結果（`apply` false、cos 0.72 的講者 A；`apply` true、cos 0.81 的講者 B），`transcript.vtt` 與 `transcript.speakers.md` 對每一段的講者名稱應完全一致：A 不掛真名（`speakers.md` 用 `_merge_speakers.py`（不改）現行的代號，VTT 不加 `<v>`），B 掛真名。 | T1；鐵則 3 | `test_r3_vtt_raw.py::test_vtt_uses_merge_assignment` |
 | 4.29.2 | `_render.py` 不得再有自己的講者比例規則（不得出現 `0.3` 的比例比較）；段落→講者的歸屬以 `importlib` 從 `bin/_merge_speakers.py` 載入既有的 `assign_speaker`（不改該檔）；`speakers.map.json` 的套名判準（有 `apply` 聽 `apply`，沒有就 `confidence` ≥ 0.7；字串值直接套）、`MH_MIN_SPEAKER_SEC` 的併入、證據不足時退到含重疊那份再試一次，照抄 `_merge_speakers.main` 的邏輯，並在函式註解寫明出處行號。 | T1；修正輪 E | `test_r3_vtt_raw.py::test_render_has_no_private_ratio` |
-| 4.29.3 | `meeting diarize <場次>` 在缺 `segments.json` 時，`transcript.raw.md` 的內容與 mtime 應不變；之後 `segments.json` 存在。替身轉錄指令應收到一個不是場次目錄的輸出目錄。 | T2；`bin/meeting.sh:247` | `test_r3_vtt_raw.py::test_diarize_keeps_raw` |
+| 4.29.3 | `meeting diarize <場次>` 在缺 `transcript.segments.json` 時，`transcript.raw.md` 的內容與 mtime 應不變；之後 `transcript.segments.json` 存在。替身轉錄指令應收到一個不是場次目錄的輸出目錄。 | T2；`bin/meeting.sh:247` | `test_r3_vtt_raw.py::test_diarize_keeps_raw` |
 | 4.29.5 | 照抄的一致性：以至少 6 組 fixture（`apply` true／false、沒有 `apply` 的 `confidence` 0.69 與 0.7、字串值、`MH_MIN_SPEAKER_SEC=5`、需要退到含重疊那份的段落）各跑一次 `_merge_speakers.py`（子程序）與 `_render.py` 的 VTT，對每一段比較「掛的真名」：`speakers.md` 中該段所屬 block 的講者顯示名若是真名，VTT 該 cue 的 `<v>` 應是同一個名字；若是代號或 `SPEAKER_?`，VTT 不加 `<v>`。全部一致。 | T1；修正輪 E；鐵則 3 | `test_r3_vtt_raw.py::test_render_copy_matches_merge` |
 | 4.29.4 | `bin/transcribe.sh` 不得出現 `--compression-ratio-threshold`；`meeting-transcribe` 的 SKILL.md 不得再說這個參數有作用。 | T3 | `test_r3_vtt_raw.py::test_no_compression_flag` |
 
@@ -1642,10 +1664,10 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
-| 4.30.1 | 有 `manifest.json.levels` 時，`transcribe.sh` 應把 `_record_lib.py clip` 的結果以 `clip_timestamps` 交給 ASR（替身 ASR 記下收到的參數）；raw 標頭第二行為 `> VAD：clip <N> 段，門檻 -60 dBFS，補 0.75 秒，合併間隔 2.0 秒`。 | T4 | `test_r3_transcript_vad.py::test_clip_passed_to_asr` |
-| 4.30.2 | 沒有 levels（ingest 的音檔）、全部無聲、或 `MH_VAD=0` 時，送 ASR 的參數應與 R2 相同（沒有 `clip_timestamps`），raw 標頭第二行分別為 `> VAD：未套用（沒有 levels）`、`（沒有有聲區間）`、`（MH_VAD=0）`。 | T4 | `test_r3_transcript_vad.py::test_fallback_without_levels` |
+| 4.30.1 | 有 `manifest.json.levels` 時，`transcribe.sh` 應把 `_record_lib.py clip` 的結果依 §3.18 以 `--clip-timestamps <start>,<end>,…` 交給 ASR（替身 ASR 記下收到的參數）；raw 標頭第二行為 `> VAD：clip <N> 段，門檻 -60 dBFS，補 0.75 秒，合併間隔 2.0 秒`。 | T4 | `test_r3_transcript_vad.py::test_clip_passed_to_asr` |
+| 4.30.2 | 沒有 levels（ingest 的音檔）、全部無聲、或 `MH_VAD=0` 時，送 ASR 的參數應與 R2 相同（沒有 `--clip-timestamps`），raw 標頭第二行分別為 `> VAD：未套用（沒有 levels）`、`（沒有有聲區間）`、`（MH_VAD=0）`。 | T4 | `test_r3_transcript_vad.py::test_fallback_without_levels` |
 | 4.30.3 | `MH_VAD_THRESHOLD_DB`、`MH_VAD_PAD`、`MH_VAD_MERGE_GAP` 應覆寫預設值並反映在 raw 標頭。 | T4 | `test_r3_transcript_vad.py::test_vad_env_overrides` |
-| 4.30.4 | `segments.json` 應一律輸出（沒設 `MH_EMIT_SEGMENTS` 也有）。 | T5 | `test_r3_transcript_vad.py::test_segments_always_written` |
+| 4.30.4 | `transcript.segments.json` 應一律輸出（沒設 `MH_EMIT_SEGMENTS` 也有）。 | T5 | `test_r3_transcript_vad.py::test_segments_always_written` |
 | 4.30.5 | `transcript.quality.json` 應符合 §3.18：fixture 有一段「好的好的好的好的」重複（`no_speech_loop`）、一段壓縮比 > 2.4（`compression_ratio`）、連續 4 段相同文字（`repeat_run`，4 筆），其餘段落不得列入；沒有問題的 fixture → `[]`。`QUALITY_WARNING` 的既有輸出格式不變。 | T5 | `test_r3_transcript_vad.py::test_quality_file` |
 | 4.30.6 | 衍生檔（`transcript.speakers.md`、VTT）中，列在 `transcript.quality.json` 的段落文字前應加「（聽不清）」（`speakers.md` 由 §4.31.10 的後處理加）；`transcript.raw.md` 不得出現「（聽不清）」以外的任何改動（與沒有品質檔時的 raw 逐位元相同）。 | T5；鐵則 1、4 | `test_r3_annotations.py::test_unclear_marked_in_derived_only` |
 
@@ -1655,7 +1677,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.31.1 | 有 `pauseEvents`（一組 120→210 秒的暫停）、`micMuteEvents`（300→330）、一筆輸出裝置 `deviceEvents`、兩路連續 40 秒 ≤ -60 dBFS 的場次，`transcript.speakers.md`（經 §4.31.10 後處理）與 VTT 應依 §3.18 各出現一行對應註記（時間為成品時間），VTT 的註記在 `NOTE` 區塊。 | T6 | `test_r3_annotations.py::test_annotations_in_speakers_and_vtt` |
 | 4.31.2 | 長靜音判斷：連續 29.5 秒不標、30 秒標；落在暫停區間內的不標。 | T6 | `test_r3_annotations.py::test_long_silence_threshold` |
-| 4.31.3 | 標記對齊：t 在某段 `start ≤ t < end` 掛該段；在兩段之間掛下一段；離最近一段 > 2 秒獨立成行。例：段落 [0,5)、[8,12)，t=4.9 → 第 1 段；t=6 → 第 2 段；段落 [0,5)、[20,25)，t=10 → 獨立。 | T7 | `test_r3_annotations.py::test_marker_alignment` |
+| 4.31.3 | 標記對齊：t 在某段 `start ≤ t < end` 掛該段；在兩段之間掛下一段；離最近一段 > 2 秒獨立成行。例：段落 [0,5)、[8,12)，t=4.9 → 第 1 段；t=6 → 第 2 段；段落 [0,5)、[20,25)，t=10 → 獨立。「掛下一段」與「獨立成行」的差別只在 `transcript.speakers.md` 的插入位置（§4.31.10）；VTT 兩者都是依時間排在前後 cue 之間的 `NOTE`。**自動測試只驗順序**（VTT 中標記 `NOTE` 與前後 cue 的先後，`test_r3_annotations.py:263-265`），不區分「掛下一段」與「獨立成行」（Red 層補字面）。 | T7 | `test_r3_annotations.py::test_marker_alignment` |
 | 4.31.4 | `meeting.record.json` 有 `markers[]` 時應通過 `schema/meeting-record.v1.json` 驗證；`markers` 的 `t` 為負數、缺 `label` 時驗證失敗；沒有 `markers` 的既有 fixture 仍通過。 | D11-A | `test_r3_annotations.py::test_schema_markers_optional` |
 | 4.31.5 | `summary.md` 應依 §3.18 加「## 標記」「## 錄製註記」；沒有標記、沒有事件時兩段都不出現（與 R2 輸出逐位元相同）。 | T7、T6 | `test_r3_annotations.py::test_summary_sections`、`::test_summary_unchanged_without_events` |
 | 4.31.6 | `meeting.record.json` 沒有 `markers` 時，`## 標記` 應取 `錄音/markers.json`；兩者都有時以 `meeting.record.json` 為準。 | R3-D5 | `test_r3_annotations.py::test_markers_source_precedence` |
@@ -1669,7 +1691,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
 | 4.32.1 | `tests/record/vectors/output_time.json` 每一筆 `{t, first_start, pauses, l_out, expect}` 應同時滿足：`_record_lib.output_time` 結果 = `expect`（±0.0005）；`l_out=0` 的筆與 `e2e_check.record_to_output` 結果相同；Swift `outputTime(recordT:firstSegmentStart:pauses:lOut:)` 結果相同。向量至少涵蓋 R2 §4.18 的 `outputTime` 案例、沒配對的 pause、`l_out=0.18`。 | Q9a | `test_r3_record_lib.py::test_output_time_vectors`；`swift:R3RecordLibVectorTests.swift::testOutputTimeVectors` |
-| 4.32.2 | `levels_intervals` 應：門檻嚴格大於（-60.0 視為無聲）；間隔 < `merge_gap` 合併、= 不合併；前後補 `pad` 但夾在 [0, total]；`null` 視為無聲。向量檔 `levels_intervals.json` Python 與 Swift 共用。 | Q9a、T4 | `test_r3_record_lib.py::test_levels_intervals_vectors`；`swift:R3RecordLibVectorTests.swift::testLevelsIntervalsVectors` |
+| 4.32.2 | `levels_intervals(levels, window, threshold_db, merge_gap, pad, total)` 應回 `[[start, end], …]`（遞增、不重疊）：`levels` 是**一維陣列**，第 i 個元素是窗 [i × `window`, (i+1) × `window`) 的 dBFS 或 `null`（`clip_timestamps` 傳入的是同一窗兩路的 max，`null` 視為無聲，`design.md` R3-D6 T4）；門檻嚴格大於（-60.0 視為無聲）；間隔 < `merge_gap` 合併、= 不合併；前後補 `pad` 但夾在 [0, total]；`null` 視為無聲。向量檔 `levels_intervals.json`（陣列，每筆 `{name, levels, window, threshold_db, merge_gap, pad, total, expect}`）Python 與 Swift 共用。有聲區間**只在 Python 端計算**：Swift Core **不新增** `levelsIntervals`（§3.20 不列），Swift 測試只驗共用向量本身合乎本條規則，語意比對只在 Python（Red 層補字面）。 | Q9a、T4 | `test_r3_record_lib.py::test_levels_intervals_vectors`（語意比對）；`swift:R3RecordLibVectorTests.swift::testLevelsIntervalsVectors`（只驗向量合乎規則） |
 | 4.32.3 | `paused_total` 應等於已配對暫停長度和（沒配對的不計）；`clip_timestamps(rec_dir)` 在缺 `manifest.json` 或沒有 `levels` 時回 `None`。 | Q9a | `test_r3_record_lib.py::test_paused_total_and_clip_none` |
 | 4.32.4 | `python3 bin/lib/_record_lib.py clip <錄音目錄>` 應印 §3.19 的 JSON、回 0；目錄不存在回 2。 | §3.19 | `test_r3_record_lib.py::test_cli_clip` |
 | 4.32.5 | `bin/lib/` 底下每一個 `*.py` 都應通過 `ast.parse`，且 `bin/lib/_record_lib.py` 存在；`bash bin/_lint.sh` 仍回「lint 通過（26 個檔）」。 | `req:280`；修正輪 E；§4.24.5 | `test_r3_record_lib.py::test_bin_lib_syntax`；既有 `test_regression.py::test_lint_passes_26_files`（不改） |
@@ -1679,7 +1701,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
-| 4.33.1 | 根目錄下兩個場次都含關鍵字時，應回 0、依 §3.19 的格式輸出，較新的場次在前；大小寫不分（`Stand-up` 搜得到 `stand-up`）；關鍵字含 `.*` 時照字面比對。 | F1 | `test_r3_search.py::test_hits_sorted_and_literal` |
+| 4.33.1 | 根目錄下兩個場次都含關鍵字時，應回 0、依 §3.19 的格式輸出，較新的場次在前；`<檔名>` 帶 `錄音/`（§3.19）；大小寫不分（`Stand-up` 搜得到 `stand-up`）；關鍵字含 `.*` 時照字面比對。 | F1 | `test_r3_search.py::test_hits_sorted_and_literal` |
 | 4.33.2 | 沒有結果回 1、stdout 空；缺參數或根目錄不存在回 2。 | F1；R3-§2.2 | `test_r3_search.py::test_exit_codes` |
 | 4.33.3 | 不得讀根目錄以外的檔（以根目錄外放一個含關鍵字的檔、symlink 進根目錄驗：不出現在結果）。 | 客戶資料邊界 | `test_r3_search.py::test_single_root_only` |
 | 4.33.4 | `meeting.sh help` 應列出 `search`；`meeting.sh` 原有子指令與結束碼不變（`test_cli_dispatch.py::test_existing_exit_codes_unchanged` 不改）。 | §4.1.3 | `test_r3_search.py::test_usage_lists_search` |
@@ -1698,8 +1720,8 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
 | 4.35.1 | `e2e_check.py --sync`（`c_sync`，ffplay 路徑，< 100 ms）的行為與 R2 相同；`test_e2e_check.py::test_hfp_and_sync_check` 不改。 | D3-A | 既有測試 |
-| 4.35.2 | `e2e_check.py --sync-player <場次>` 應：把閃白與嗶聲配對後依 60 秒時段分組，每組取差值中位數；全部組 \|中位數\| < 45 ms → PASS。合成 fixture：某一組有一個 159 ms 的離群值、其他 8 個差值 20 ms → PASS；所有差值 60 ms → FAIL。有 `finalize.json.syncCompensation` 時，報告列出各段套用的延遲。 | D3-A；`spec.md:708` | `test_r3_sync_measure.py::test_sync_player_median` |
-| 4.35.3 | `e2e_check.py --sync-acoustic <場次>` 應印每個 60 秒時段的 mic − sys 中位數（毫秒，整數）與組數，回 0（只報數字）；沒有可配對的嗶聲時印「沒有可配對的嗶聲」、回 0。 | S-A | `test_r3_sync_measure.py::test_sync_acoustic_report` |
+| 4.35.2 | `e2e_check.py --sync-player <場次>` 應：把閃白與嗶聲配對後依 60 秒時段分組，每組取差值中位數；全部組 \|中位數\| < 45 ms → PASS。合成 fixture：某一組有一個 159 ms 的離群值、其他 8 個差值 20 ms → PASS；所有差值 60 ms → FAIL。有 `錄音/tracks/finalize.json` 的 `syncCompensation` 時，報告列出各段套用的延遲（秒，例 `0.15`）。檢查名為 `sync_player`（`--json` 輸出中恰一筆檢查名含 `player`；命名同既有 `sync`、`segment_tracks` 的蛇形寫法；Red 層補字面）。 | D3-A；`spec.md:708` | `test_r3_sync_measure.py::test_sync_player_median` |
+| 4.35.3 | `e2e_check.py --sync-acoustic <場次>` 應印每個 60 秒時段的 mic − sys 中位數（毫秒，整數）與組數，回 0（只報數字）；沒有可配對的嗶聲時印「沒有可配對的嗶聲」、回 0。**輸入**（Red 層補字面）：讀 `<場次>/錄音/tracks/` 的雙音軌段落（收尾前、或 `keep-segments` 保留的 `seg-*.mov`；第 1 條音軌＝系統聲音、第 2 條＝麥克風）與 `tracks/manifest.json` 的 `segments[].startedAt`；嗶聲時刻＝各音軌過 `band_pcm` 的 1 kHz 帶通、1 ms 窗 RMS 包絡，每個 > -60 dBFS 的峰取第一個 ≥ 峰值 50% 的窗起點（同 `sync_offsets` 的起點判定），加上該段 `startedAt` 換成錄製時鐘；每個系統嗶聲配 ±0.5 秒內最近的麥克風嗶聲，配不到的不計。時段＝錄製時鐘 [0, 60)、[60, 120)、…。**輸出**（stdout，每個有配對的時段一行，依時間遞增）：`<mm:ss>–<mm:ss> mic − sys 中位數 <整數> ms（<n> 組）`，`<n>`＝該時段配對到的嗶聲數（例 `00:00–01:00 mic − sys 中位數 80 ms（4 組）`；負值寫 ASCII 減號）。 | S-A | `test_r3_sync_measure.py::test_sync_acoustic_report` |
 | 4.35.4 | `e2e_check.py --print-sync-file <路徑>` 應只寫到指定路徑，產出可被 `ffprobe` 讀出影像與聲音兩軌的檔。 | S-A | `test_r3_sync_measure.py::test_print_sync_file` |
 | 4.35.5 | `reportedLatencySeconds` 應：(48000, 24, 144, 0, 512) → 0.0142（小數 4 位）；任一參數 nil → nil；`sampleRate` 0 → nil。`OutputLatency` 不得是 `AudioDeviceInfo` 的欄位，`AudioDeviceInfo` 的 Equatable 結果不受延遲值影響。 | S-B | `swift:R3SyncTests.swift::testReportedLatency` |
 | 4.35.6 | `RecordMeta.outputLatencies` 為 nil 時編碼不得有該鍵（`testMetaJSONKeys` 不改）；有值時鍵名同 §3.17。 | S-B；R2-Q10 | `swift:R3SyncTests.swift::testOutputLatenciesOmittedWhenNil` |
@@ -1712,10 +1734,10 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
 | 4.36.1 | `sample(video, 0.0, 0.016)` → `[open(1, .first, 0.0), write(1, video)]`。 | Q6；R2-D3a | `swift:R3SegmentSchedulerTests.swift::testFirstSample` |
-| 4.36.2 | 定期換段：…之後 `sample(system, 60.0, 60.02)` → `[open(2, .periodic, 60.0), write(2, system)]`，`prev == 1`；之後 `sample(mic, 59.99, 60.01)` → `[write(1, mic), write(2, mic)]`（跨邊界兩邊都寫，`routeSample` 語意）；三路都出現過 start ≥ 60 的 sample 時回傳含 `finish(1)`，`prev == nil`。 | §3.2；`routeSample` | `swift:R3SegmentSchedulerTests.swift::testPeriodicSwitchAndPrevClose` |
+| 4.36.2 | 定期換段：…之後 `sample(system, 60.0, 60.02)` → `[open(2, .periodic, 60.0), write(2, system)]`，`prev == 1`；之後 `sample(mic, 59.99, 60.01)` → `[write(1, mic), write(2, mic)]`（跨邊界兩邊都寫，`routeSample` 語意）；**收 prev 的條件**（照現行 `RecordingSession.swift:436-440`；Red 層補字面）：三路（video、system、mic）各自都出現過一個對 prev 邊界 `routeSample` 結果 `!= .old`（即 `.new` 或 `.both`，**跨邊界的 sample 也算數**）的 sample 時，該 sample 的回傳含 `finish(1)`，之後 `prev == nil`；回傳中 `write` 在前、`finish` 在後（自動測試只驗含有）。例：上述 system 60.0（`.new`）與 mic 59.99–60.01（`.both`）之後，`sample(mic, 60.01, 60.03)` → `[write(2, mic)]`（video 還沒有），`sample(video, 60.016, 60.016)` → 含 `finish(1)` 與 `write(2, video)`。 | §3.2；`routeSample` | `swift:R3SegmentSchedulerTests.swift::testPeriodicSwitchAndPrevClose` |
 | 4.36.3 | prev 逾時：有 prev 時 `prevTimeout(segment: 1)` → `[finish(1)]`；prev 已收掉時同一事件 → `[]`。 | 現行 1 秒收尾 | `swift:R3SegmentSchedulerTests.swift::testPrevTimeout` |
-| 4.36.4 | 暫停／繼續：已處理 sample 的最大 end 為 10.0 時 `pause` → 目前段轉 prev（停止點 E＝10.0），回傳不含 `open`；`sample(video, 9.98, 10.0)` → `[write(1, video)]`；`sample(video, 12.0, 12.016)` → `[drop(video)]`；`resume` → `[]`；`sample(mic, 15.0, 15.02)` → `[open(2, .resume, 15.0), write(2, mic)]`。暫停時目前段沒有寫過任何 sample → 回傳 `cancel(該段)`。 | R2-D3 | `swift:R3SegmentSchedulerTests.swift::testPauseResume`、`::testPauseEmptySegmentCancelled` |
-| 4.36.5 | 停止：目前段有內容 → `stop` 回傳 `finish(目前段)`（有 prev 也一併 `finish`）；目前段剛開、沒有 sample → `cancel(目前段)`；`stop` 之後任何 `sample` → `[drop(…)]`。 | §4.6 | `swift:R3SegmentSchedulerTests.swift::testStopFinishOrCancel` |
+| 4.36.4 | 暫停／繼續：已處理 sample 的最大 end 為 10.0 時 `pause` → 目前段轉 prev（停止點 E＝10.0），回傳不含 `open`；`sample(video, 9.98, 10.0)` → `[write(1, video)]`；`sample(video, 12.0, 12.016)` → `[drop(video)]`；`resume` → `[]`；`sample(mic, 15.0, 15.02)` → `[open(2, .resume, 15.0), write(2, mic)]`。沒有目前段時 `pause` 不開段、不 `cancel`。暫停時目前段沒有寫過任何 sample → 回傳 `cancel(該段)`：這是**防禦性分支**，只用 §3.20 的公開事件造不出「目前段已開、沒有 sample」（每個 `open` 都伴隨同一 sample 的 `write`），**自動測試只驗反面**：目前段有內容時 `pause` 不得 `cancel`（Red 層補字面）。 | R2-D3 | `swift:R3SegmentSchedulerTests.swift::testPauseResume`、`::testPauseEmptySegmentCancelled` |
+| 4.36.5 | 停止：目前段有內容 → `stop` 回傳 `finish(目前段)`（有 prev 也一併 `finish`）；目前段剛開、沒有 sample → `cancel(目前段)`（**防禦性分支**，理由同 4.36.4；**自動測試只驗反面**：目前段有內容時 `stop` 不得 `cancel`、不得 `open`；Red 層補字面）；`stop` 之後任何 `sample`（含 `formatChanged: true`）→ `[drop(…)]`。 | §4.6 | `swift:R3SegmentSchedulerTests.swift::testStopFinishOrCancel` |
 | 4.36.6 | writer 失敗：`writerFailed(segment: 1)` → `[]`、`current == nil`；下一個 `sample(video, 30.0, 30.016)` → `[open(2, .writerFailure, 30.0), write(2, video)]`；連續再失敗一次 → 下一個 sample 開 `open(3, .writerFailure, …)`；新段邊界不早於上一段起點。 | `RecordingSession.swift:560` | `swift:R3SegmentSchedulerTests.swift::testWriterFailureRepeated` |
 | 4.36.7 | 格式變更：`sample(system, 20.0, 20.02, formatChanged: true)` → `[open(2, .formatChange, 20.0), write(2, system)]`；1 秒內同一路再一次 `formatChanged` → 不開新段。 | D20；§4.9.3 | `swift:R3SegmentSchedulerTests.swift::testFormatChange` |
 | 4.36.8 | 輸出裝置變更：`outputDeviceChange` → `[]`；下一個 sample（任一路，start=s）→ `[open(n, .outputDeviceChange, s), write(n, …)]`；暫停中發生的 `outputDeviceChange` 由 `resume` 的換段吸收（不另開段）。 | S-C；R3-D9 | `swift:R3SegmentSchedulerTests.swift::testOutputDeviceChange` |
@@ -1755,7 +1777,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.39.1 | `notificationPolicy`：`alertWarning` 且 `timeSensitiveAllowed` → `.timeSensitive`，不允許時 `.active`；`failure`、`completion`、`meetingDetected` → `.active`；`hotkeyFeedback`、`onboarding` → `.passive`。`threadIdentifier`＝非空 `runId`，否則 `"mh.app"`；`meetingDetected` 一律 `"mh.app"`。 | U3 | `swift:R3MenuBarTests.swift::testNotificationPolicy` |
 | 4.39.2 | `newAlertWarnings(previous:current:)` 只回 `current` 中 `isAlert` 為 true 且（`t`, `kind`）不在 `previous` 的項；同一則告警連續兩次輪詢只發一次。 | U3 | `swift:R3MenuBarTests.swift::testNewAlertWarnings` |
-| 4.39.3 | 錄製中出現新告警時，menu bar 應發通知（`interruptionLevel` 依 4.39.1、`threadIdentifier` 依 4.39.1）；通知標題與內文不得含場次名或視窗標題。entitlements 仍恰為 2 項（§4.2.8 不改）。實作形狀：`Notifier.swift` 含 `interruptionLevel`、`threadIdentifier`；`MenuBar.swift` 呼叫 `newAlertWarnings(`。 | U3；R3-D11 | `test_r3_app_static.py::NotifyStatic.test_policy_applied`；實機（Time Sensitive 是否生效，§7 疑慮 44） |
+| 4.39.3 | 錄製中出現新告警時，menu bar 應發通知（`interruptionLevel` 依 4.39.1、`threadIdentifier` 依 4.39.1）；通知標題與內文不得含場次名或視窗標題（**由實機驗收場確認**，§4.47.4 觸發告警時一併檢查通知文字；自動測試不驗；Red 層補字面）。entitlements 仍恰為 2 項（§4.2.8 不改）。實作形狀：`Notifier.swift` 含 `interruptionLevel`、`threadIdentifier`；`MenuBar.swift` 呼叫 `newAlertWarnings(`。 | U3；R3-D11 | `test_r3_app_static.py::NotifyStatic.test_policy_applied`；實機（Time Sensitive 是否生效，§7 疑慮 44；通知不含場次名與視窗標題，§4.47.4） |
 | 4.39.4 | 通知的文字與動作照本節；外觀為系統原生（D11 不出稿）。 | intent R3-2 | 設計審查 |
 
 #### 4.40 HUD（U2；推翻 §6 第 105、106 條）
@@ -1821,7 +1843,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
-| 4.45.1 | `meeting.sh record help`、`meeting.sh help` 的 record 段、SKILL.md 與 README.md 的 `record-cli` 區塊照 §2.4 維持 12 個寫法（修正輪：`sync` 改為頂層 `meeting sync`，不進封閉清單）；§4.1.2、§4.1.11、§4.12.6–§4.12.8、§4.24.2 的一致性檢查照舊通過。`meeting sync`、`meeting search`、`meeting reminders` 列在 `usage()` 的其他指令段與 SKILL.md、README 的區塊外。 | §2.4；§6 第 117 條（撤回） | 既有 `test_cli_dispatch.py`、`test_docs.py`、`test_surface_parsers.py`（不改）；`test_r3_search.py::test_usage_lists_search` |
+| 4.45.1 | `meeting.sh record help`、`meeting.sh help` 的 record 段、SKILL.md 與 README.md 的 `record-cli` 區塊照 §2.4 維持 12 個寫法（修正輪：`sync` 改為頂層 `meeting sync`，不進封閉清單）；§4.1.2、§4.1.11、§4.12.6–§4.12.8、§4.24.2 的一致性檢查照舊通過。`usage()` 的「其他指令」段（`meeting help` 輸出中「其他指令」行與「錄製（meeting record」行之間）必須各有一行以 `meeting search ` 與 `meeting sync` 開頭；`meeting reminders` 列不列在 `usage()` **不要求**（Red 層補字面）。三者都寫在 SKILL.md、README 的 `record-cli` 區塊外（§4.34.4、§4.45.3）。 | §2.4；§6 第 117 條（撤回） | 既有 `test_cli_dispatch.py`、`test_docs.py`、`test_surface_parsers.py`（不改）；`test_r3_search.py::test_usage_lists_search` |
 | 4.45.2 | **撤回**（修正輪）：`EXIT_CODE_CASES` 不新增、不改（§6 第 117 條撤回）。 | — | 既有 `test_record_sh.py::test_exit_code_matrix`（不改） |
 | 4.45.3 | SKILL.md（meeting-record）與 README 應說明：開錄鎖與「已有錄製在跑」、`stop` 的 pid 確認、收尾逾時與取消、`tracks/unreadable/`、`meeting sync` 三種模式與預設 off、`meeting search`、`meeting reminders`（含 iCloud 說明）、HUD、捨棄只在選單、會議偵測只提示不自動開錄。meeting-transcribe SKILL.md 說明 VAD 與 `transcript.quality.json`；meeting-notes SKILL.md 說明「## 標記」「## 錄製註記」。 | R3 全部 | `test_r3_docs.py::test_record_skill_r3`、`test_r3_transcript_vad.py::test_transcribe_skill_updated`、`test_r3_annotations.py::test_notes_skill_updated` |
 
@@ -1843,7 +1865,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.47.1 | E4 聲學回授：內建喇叭與藍牙耳機各錄一段同步測試源，`e2e_check.py --sync-acoustic` | 記下各時段 mic − sys 中位數；寫入 `sync-calibration.json` 的候選值（使用者決定是否採用） |
 | 4.47.2 | E2 補償型播放端：同一場次以 off 與 reported 各收尾一次，用 QuickTime／Chrome 播 `--print-sync-file` 的檔，`e2e_check.py --sync-player` | 記錄兩種 mode 的 PASS／FAIL 與中位數；**使用者據此決定 S-C 預設**（§4.37.8） |
 | 4.47.3 | HUD 的 `sharingType`：在會議 app 分享整個螢幕時 HUD 是否被分享出去 | 記錄結果；被分享出去時改預設或加說明（選項式提問） |
-| 4.47.4 | Time Sensitive：觸發一個告警（例如拔掉麥克風） | 記錄是否以 Time Sensitive 呈現（§7 疑慮 44） |
+| 4.47.4 | Time Sensitive：觸發一個告警（例如拔掉麥克風） | 記錄是否以 Time Sensitive 呈現（§7 疑慮 44）；通知標題與內文不含場次名與視窗標題（§4.39.3） |
 | 4.47.5 | `.ics` 匯入提醒事項與 `meeting reminders`：權限框、寫入、重跑去重 | 第二次 `created=0`；缺負責人／期限的項目照實留空 |
 | 4.47.6 | F3：開一個 ★ 清單的會議 app 並使用麥克風 | 只提示一次、「開始錄製」走 quick-start、「這次不要」後同 episode 不再提示 |
 | 4.47.7 | F2：錄 30 秒後捨棄 | 錄音資料夾在垃圾桶、可放回原處、沒有跑收尾 |
@@ -1858,7 +1880,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|
 | `bin/record.sh` | 試鎖、stop 四項確認（含 `MH_RECORDER_COMM` 測試旁路）、stop 等待上限對齊收尾期限、preflight 錄製中回 2、`write_defaults` 經 `merge_defaults` 合併 | `r3-lock` |
 | `bin/meeting.sh` | `run_diarize` 不刪 raw、`--annotate-speakers` 後處理掛勾；頂層 `sync`、`search`；`reminders` | `r3-vtt-raw`、`r3-search`、`r3-reminders` |
-| `bin/transcribe.sh` | 拿掉無效參數；VAD clip；`segments.json` 一律輸出；品質檔 | `r3-vtt-raw`、`r3-transcript-vad` |
+| `bin/transcribe.sh` | 拿掉無效參數；VAD clip；`transcript.segments.json` 一律輸出；品質檔 | `r3-vtt-raw`、`r3-transcript-vad` |
 | `bin/_render.py`（`bin/_merge_speakers.py` 不改，只被匯入） | VTT 同一套歸屬（照抄判準＋一致性測試）；`speakers.md` 後處理；標示、標記、聽不清、summary 兩段 | `r3-vtt-raw`、`r3-annotations` |
 | `bin/summarize-local.py` | 地端 summary 接上「## 標記」「## 錄製註記」 | `r3-annotations` |
 | `bin/_record_finalize.py` | 收尾鎖、mkstemp、逐步逾時、unreadable；S-C 混音 | `r3-finalize-guard`、`r3-sync-compensate` |

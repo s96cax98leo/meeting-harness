@@ -726,7 +726,7 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
    │  收尾：FinalizeRunner（逾時、取消）──▶ _record_finalize.py（tracks/.finalize.lock、逐步逾時、unreadable/、S-C）
    │  捨棄：record.discard.json ──▶ 跳過收尾、移到垃圾桶
    ▼
- meeting prep：transcribe.sh（VAD clip、segments.json、transcript.quality.json）──▶ _merge_speakers.py（不改）──▶ _render.py --annotate-speakers（speakers.md 後處理）──▶ _render.py（VTT 同一套歸屬、標示、## 標記、## 錄製註記；summarize-local.py 共用兩段）
+ meeting prep：transcribe.sh（VAD clip、transcript.segments.json、transcript.quality.json）──▶ _merge_speakers.py（不改）──▶ _render.py --annotate-speakers（speakers.md 後處理）──▶ _render.py（VTT 同一套歸屬、標示、## 標記、## 錄製註記；summarize-local.py 共用兩段）
  meeting search（bin/lib/_search.py）  meeting reminders（bin/lib/_reminders.py ──▶ MeetingRecorder reminders ──▶ EventKit）
  bin/lib/_record_lib.py：merge_defaults、output_time／paused_total／levels_intervals／clip_timestamps（Swift Core 共用測試向量 tests/record/vectors/）
 ```
@@ -758,16 +758,16 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 - **收尾鎖（Q4）**：`_record_finalize.py` 開頭在 `錄音/tracks/.finalize.lock` 取 `flock(LOCK_EX|LOCK_NB)`，持有到結束；取不到 → 結束碼 5、stderr「這個場次正在收尾」，不讀不寫任何其他檔（連 `finalize.json` 都不碰）。`write_json_atomic` 的暫存檔改用 `tempfile.mkstemp(dir=同目錄)`，不再用固定的 `.tmp` 後綴。
 - **逐步逾時（Q3 的 Python 端）**：每個 `ffmpeg()`／`probe()` 呼叫都帶 `timeout`：`ffprobe` 30 秒；逐段正規化 max(120, 該段長度 × 10) 秒；串接與混音 max(300, 全片長度 × 3) 秒。`MH_FINALIZE_STEP_TIMEOUT`（秒，正數）存在時一律用它（測試用）。逾時：先 `terminate`、5 秒後 `kill`，`finalize.json` 寫 `timedOut: {step, seconds}`，結束碼 5，段落全部保留。每一步的耗時寫進 `record.log`（intent R3-9 的衍生工作併入，也替 D14a 的上限提供依據）。
 - **總上限與取消（Q3 的 Swift 端）**：錄製實例跑收尾改由新檔 `Capture/FinalizeRunner.swift` 負責：以 `Process` 啟動、設總期限＝錄製長度（`recordedSeconds`，扣暫停）× 3 ＋ 600 秒（D14a-A；純函式 `finalizeDeadline(recordedSeconds:)`）。逾時或收到取消時對子程序送 SIGTERM、5 秒後 SIGKILL，狀態寫 `phase=failed`、`code=5`，message 含「收尾逾時」或「收尾已取消」與「段落保留，可用 meeting record finish <場次> 重跑」。**取消**＝收尾中再收到一次 SIGTERM（`requestStop` 目前 `guard !stopping` 直接忽略，`RecordingSession.swift:818`；改成 `phase==finalizing` 時轉成取消）；menu bar 在收尾階段提供「取消收尾」（R3-D12）。
-- **讀不到的段落（D12-A）**：`skipped` 的段落不再被 `cleanup_segments` 刪掉，改搬到 `錄音/tracks/unreadable/`（同名，撞名加 `-1`、`-2`），`finalize.json` 的 `skipped[]` 每筆加 `movedTo`（相對 `錄音/` 的路徑）。成功收尾後仍只刪可讀且已併入成品的段落（§6 第 111 條改寫，§6 第 126 條）。
+- **讀不到的段落（D12-A）**：`skipped` 的段落不再被 `cleanup_segments` 刪掉，改搬到 `錄音/tracks/unreadable/`（同名，撞名加 `-1`、`-2`），`錄音/tracks/finalize.json` 的 `skipped[]` 每筆改為物件 `{file, movedTo}`（`movedTo` 相對 `錄音/`；讀取端對舊場次同時接受字串與物件，`spec.md` §3.17，Red 層補字面）。成功收尾後仍只刪可讀且已併入成品的段落（§6 第 111 條改寫，§6 第 126 條）。
 - 其他方案：只做 Swift 總上限、Python 不設逐步逾時——`meeting record finish`（CLI 直接跑 Python，沒有 Swift 包著）就仍然會卡死，不採。
 
 ### R3-D4 逐字稿源頭（T1、T2、T3、T4、T5）
 
 - **T1**（修正輪 E 改寫）：`_render.py` 產 VTT 時改用和 `_merge_speakers.py` 相同的歸屬：以 `importlib` 載入它**既有**的 `assign_speaker`、`load_speaker_segments`、`UNKNOWN`（`bin/_merge_speakers.py:20`、`:45`、`:47`，模組層函式，有 `__main__` 保護，可直接匯入）；`main()` 裡的套名判準（`:71-81`：有 `apply` 聽 `apply`，沒有就 `confidence` ≥ 0.7）、`MH_MIN_SPEAKER_SEC` 併入（`:93-111`）與退到含重疊那份（`:113-119`）照抄，一致性測試（`spec.md` §4.29.5）保證兩邊對每一段掛的真名相同。對不到名字的講者，VTT 不加 `<v>`（不再用 `_render.py:232-273` 自己的 0.3 比例規則）。`bin/_merge_speakers.py` 一字不改（§4.12.4 照舊，原 §6 第 122 條撤回）。
-- **T2**：`run_diarize`（`bin/meeting.sh:247`）不再刪 `transcript.raw.md`。缺 `segments.json` 時，改在暫存目錄重轉一次只為了取得 `segments.json`，raw 與既有衍生檔一律不動；暫存目錄結束時刪除。
+- **T2**：`run_diarize`（`bin/meeting.sh:247`）不再刪 `transcript.raw.md`。缺 `transcript.segments.json` 時，改在暫存目錄重轉一次只為了取得 `transcript.segments.json`，raw 與既有衍生檔一律不動；暫存目錄結束時刪除。
 - **T3**：`bin/transcribe.sh` 拿掉沒有作用的 `--compression-ratio-threshold 2.4`；`meeting-transcribe` SKILL.md 對應的描述改成實際行為。
-- **T4（VAD clip）**：有聲判斷＝同一個 0.5 秒時段 max(系統聲音, 麥克風) > -60 dBFS（`null` 視為無聲）；相鄰有聲區間的空隙 < 2.0 秒就合併；每段前後各補 0.75 秒（不超出 0 與全長）；暫停區間先依 `pauseEvents` 換成成品時間（`_record_lib.output_time`），所以 clip 是成品時間軸上的區間。送給 ASR 的參數是 `clip_timestamps`。環境變數：`MH_VAD`（`0` 關閉，預設開）、`MH_VAD_THRESHOLD_DB`（預設 -60）、`MH_VAD_PAD`（預設 0.75）、`MH_VAD_MERGE_GAP`（預設 2.0）。沒有 `manifest.json.levels`（ingest 進來的舊檔、非錄製器產的音檔）或全場都沒有有聲區間時，退回現行做法（整檔送）。raw 標頭在 `> 來源：… 模型：…` 之後多一行 `> VAD：clip <N> 段，門檻 <x> dBFS，補 <p> 秒，合併間隔 <g> 秒`（沒套用時寫 `> VAD：未套用（<原因>）`）。實際門檻要用 R3 實機驗收場的 `keep-segments` 真實多人會議調（D13），預設值只是起點。
-- **T5（品質檔）**：`segments.json` 一律輸出（不再只在 `MH_EMIT_SEGMENTS=1` 時）。新增 `transcript.quality.json`：陣列，每筆 `{start, end, reason}`，`reason` ∈ `compression_ratio`（該段 zlib 壓縮比 > 2.4）、`no_speech_loop`（同一句連續重複 ≥ 3 次）、`repeat_run`（相鄰 ≥ 4 段文字相同）；沒有問題就寫 `[]`。`QUALITY_WARNING` 的既有格式（`transcribe.sh:141-184`）保留。衍生檔（`transcript.speakers.md`、VTT）裡被列入品質檔的段落，文字前加「（聽不清）」，raw 不改（鐵則 1、4）。`speakers.md` 的部分由 `_render.py --annotate-speakers` 後處理加（R3-D5），所以由 `r3-annotations` 做（排在 `r3-vtt-raw` 之後，intent R3-8 的要求）。
+- **T4（VAD clip）**：有聲判斷＝同一個 0.5 秒時段 max(系統聲音, 麥克風) > -60 dBFS（`null` 視為無聲）；相鄰有聲區間的空隙 < 2.0 秒就合併；每段前後各補 0.75 秒（不超出 0 與全長）；暫停區間先依 `pauseEvents` 換成成品時間（`_record_lib.output_time`），所以 clip 是成品時間軸上的區間。送給 ASR 的參數是 `clip_timestamps`（`mlx_whisper` 的 `--clip-timestamps <start>,<end>,…`，`spec.md` §3.18）。環境變數：`MH_VAD`（`0` 關閉，預設開）、`MH_VAD_THRESHOLD_DB`（預設 -60）、`MH_VAD_PAD`（預設 0.75）、`MH_VAD_MERGE_GAP`（預設 2.0）。沒有 `manifest.json.levels`（ingest 進來的舊檔、非錄製器產的音檔）或全場都沒有有聲區間時，退回現行做法（整檔送）。raw 標頭在 `> 來源：… 模型：…` 之後多一行 `> VAD：clip <N> 段，門檻 <x> dBFS，補 <p> 秒，合併間隔 <g> 秒`（沒套用時寫 `> VAD：未套用（<原因>）`）。實際門檻要用 R3 實機驗收場的 `keep-segments` 真實多人會議調（D13），預設值只是起點。
+- **T5（品質檔）**：`transcript.segments.json` 一律輸出（不再只在 `MH_EMIT_SEGMENTS=1` 時）。新增 `transcript.quality.json`：陣列，每筆 `{start, end, reason}`，`reason` ∈ `compression_ratio`（該段 zlib 壓縮比 > 2.4）、`no_speech_loop`（同一句連續重複 ≥ 3 次）、`repeat_run`（相鄰 ≥ 4 段文字相同）；沒有問題就寫 `[]`。`QUALITY_WARNING` 的既有格式（`transcribe.sh:141-184`）保留。衍生檔（`transcript.speakers.md`、VTT）裡被列入品質檔的段落，文字前加「（聽不清）」，raw 不改（鐵則 1、4）。`speakers.md` 的部分由 `_render.py --annotate-speakers` 後處理加（R3-D5），所以由 `r3-annotations` 做（排在 `r3-vtt-raw` 之後，intent R3-8 的要求）。
 
 ### R3-D5 標示與標記（T6、T7、D11）
 
