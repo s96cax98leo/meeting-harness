@@ -608,7 +608,8 @@ cmd_stop() {
   if [[ $# -gt 0 ]]; then err "✗ stop 不接參數：$*"; return 2; fi
   # 送訊號前的四項確認（spec §4.27.2、R3-§2.2）：任一不成立回 3、不送任何訊號，stderr 說明是哪一項
   local pid spid comm want lrc
-  pid="$(tr -cd '0-9' < "${PID_FILE}" 2>/dev/null)"
+  pid=""
+  [[ -f "${PID_FILE}" ]] && pid="$(tr -cd '0-9' < "${PID_FILE}" 2>/dev/null)"
   if [[ -z "${pid}" ]]; then
     err "沒有錄製在跑。"
     return 3
