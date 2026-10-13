@@ -40,6 +40,10 @@ MeetingRecorder —— meeting-harness 的錄製器（本機）
       在 menu bar 放狀態圖示（待機／錄製中＋計時／暫停中／告警）與選單；
       ⌃⌥⌘R 開始錄製、⌃⌥⌘M 麥克風靜音、⌃⌥⌘P 暫停／繼續、⌃⌥⌘B 加標記。不帶任何子指令啟動時也進這個模式（登入時自動開啟）。
 
+  reminders --input <json> --list <名稱>
+      把會議交辦寫進提醒事項中名稱完全相同的清單（不代建）；以 URL 去重，重跑不重複寫入。
+      由 meeting reminders 叫起；結果寫 <json>.result.json（code 0／3 清單不存在／4 權限被拒／5 寫入失敗）。
+
   help
       印出這份說明。
 """
@@ -77,6 +81,8 @@ case "quick-start":
     Task { await cmdQuickStart(args) }
 case "menubar":
     runMenuBar(args)
+case "reminders":
+    cmdReminders(args)
 case "-h", "--help", "help":
     print(helpText)
     exit(0)
