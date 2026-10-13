@@ -99,13 +99,29 @@ class TestFinalize(FinalizeCase):
         self.assertIn("已完成", r2.stdout + r2.stderr)
         self.assertEqual(snapshot(sess), before, "第二次 finish 不得改動任何檔的內容或 mtime")
 
+    # spec §6 第 111 條
+    def test_segments_removed_after_success(self):
+        sb = Sandbox(self)
+        sess = m.make_record_session(sb.root, self.THREE)
+        tracks = sess / "錄音" / "tracks"
+        r = sb.meeting("record", "finish", sess, timeout=300)
+        self.ok(r)
+        self.assertEqual(list(tracks.glob("seg-*.mov")), [], "收尾成功後原始段落應刪除")
+        for keep in ("manifest.json", "record.meta.json", "finalize.json"):
+            self.assertTrue((tracks / keep).is_file(), f"{keep} 應保留")
+        self.assertTrue(self.video_file(sess).is_file())
+        r2 = sb.meeting("record", "finish", sess, timeout=300)
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        self.assertIn("已完成", r2.stdout + r2.stderr)
+
     # spec §4.6.7
     def test_tracks_preserved(self):
         sb = Sandbox(self)
         sess = m.make_record_session(sb.root, self.THREE)
         tracks = sess / "錄音" / "tracks"
         keep = {p.name: p.read_bytes() for p in tracks.glob("seg-*.mov")}
-        r = sb.meeting("record", "finish", sess, timeout=300)
+        # §6 第 111 條：預設收尾成功後刪原始段落；MH_KEEP_SEGMENTS=1（或 <home>/keep-segments）時保留且內容不變
+        r = sb.meeting("record", "finish", sess, timeout=300, MH_KEEP_SEGMENTS="1")
         self.ok(r)
         for name, data in keep.items():
             self.assertTrue((tracks / name).is_file(), f"{name} 不得被刪")
@@ -534,7 +550,8 @@ class TestFinalize(FinalizeCase):
                     return [(a, b - a) for a, b in zip(ts, ts[1:]) if b - a < close_max]
 
                 orig = sum(len(closes(m.frame_times(s))) for s in segs)
-                r = sb.meeting("record", "finish", sess, timeout=300)
+                # 收尾後還要量段落長度：保留原始段落（§6 第 111 條）
+                r = sb.meeting("record", "finish", sess, timeout=300, MH_KEEP_SEGMENTS="1")
                 self.ok(r)
                 ts = m.frame_times(self.video_file(sess))
                 got = closes(ts)

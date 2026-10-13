@@ -77,7 +77,7 @@ meeting ingest "<資料夾>"            # 依時間戳自動分場（間隔 <15 
 meeting ingest "<資料夾>" --split    # 一個錄影檔一場
 meeting ingest "<資料夾>" --dry-run  # 先看看會怎麼分
 ```
-會用**硬連結**把錄影歸到 `<場次>/錄音/`、截圖歸到 `<場次>/照片/`（不佔額外空間、原檔留在原地），並產出 `meeting.json` 草稿。
+會把錄影**移動**到 `<場次>/錄音/`、截圖移動到 `<場次>/照片/`（原處不再留一份，不會出現重複的影片），並產出 `meeting.json` 草稿。
 
 **`錄音/meeting.json`**（決定分離參數、總結模板、隱私後端）：
 ```json
@@ -104,7 +104,7 @@ meeting ingest "<資料夾>" --dry-run  # 先看看會怎麼分
 | `meeting summarize-local <場次>` | 只對單一場次用本機 LLM 總結 |
 | `meeting doctor` | 檢查工具鏈（含 ASR 模型與 Neural Engine 狀態） |
 | `meeting help` / `meeting version` | 完整說明／版本（git commit） |
-| `meeting record …` | 錄下會議視窗與雙路音訊（7 種寫法見下方〈錄製會議〉） |
+| `meeting record …` | 錄下會議視窗與雙路音訊，錄製中可暫停、麥克風靜音、加標記（12 種寫法見下方〈錄製會議〉） |
 
 **相容性**：`prep` / `notes` / `status` / `doctor` / `diarize` / `summarize-local` / `local` 的
 用法與語意完全沒變，舊腳本照跑；舊標記檔 `.meeting`（＝internal）與 `.diarize` 也仍然有效。
@@ -144,6 +144,9 @@ meeting record "<會議根目錄>"   # 互動：問場次名、型態、出席�
 meeting record stop             # 停止並收尾
 meeting record status           # 目前狀態；回 5 表示上次錄製異常中止
 meeting record finish "<場次>"  # 中斷後把已落盤的段落收尾（可重跑）
+meeting record pause            # 整段暫停（暫停的時段在成品裡剪掉）；meeting record resume 繼續
+meeting record mute             # 只靜音麥克風，系統聲音照錄；meeting record unmute 取消
+meeting record mark             # 加一個「標記 N」，收尾後在 錄音/markers.json
 ```
 
 <!-- record-cli:begin -->
@@ -155,14 +158,24 @@ meeting record finish "<場次>"  # 中斷後把已落盤的段落收尾（可�
 | `meeting record stop` | — | 0 3 5 |
 | `meeting record status` | — | 0 5 |
 | `meeting record finish <場次>` | — | 0 2 3 5 |
+| `meeting record pause` | — | 0 3 |
+| `meeting record resume` | — | 0 3 |
+| `meeting record mute` | — | 0 3 |
+| `meeting record unmute` | — | 0 3 |
+| `meeting record mark` | — | 0 3 |
 | `meeting record help` | — | 0 |
 <!-- record-cli:end -->
 
 `meeting.sh` 層旗標（所有寫法都能加，`record` 之後任何位置）：`--recorder`（明確要錄製，略過 `./record` 撞名檢查）、`--yes`（宣告沒有人可問）。
 目前目錄剛好有 `record` 資料夾而沒有人可問時回 2，請改寫成 `meeting record --recorder …` 或 `meeting prep ./record`。
 沒有 tty 的呼叫者（例如其他 session）要帶 `--window <id>`。完整說明：`meeting record help`。
+`pause`、`resume`、`mute`、`unmute`、`mark` 和 `help` 一樣是保留字，根目錄剛好叫這些名字時寫 `meeting record ./pause` 這種 `./` 寫法。
 
 `meeting record`（錄製）和 `meeting render`（由 `meeting.record.json` 重出產物）無關，別搞混。
+
+**錄製中控制**：暫停 ⌃⌥⌘P（暫停的時段在成品裡剪掉）、麥克風靜音 ⌃⌥⌘M（只靜音麥克風，系統聲音照錄）、加標記 ⌃⌥⌘B（收尾後在 `錄音/markers.json`，時間是扣掉暫停後的成品時間），開始錄製是 ⌃⌥⌘R；快捷鍵要 menu bar 開著才有，也可以用上面的終端機寫法或 menu bar 選單。舊版錄製器開的錄製不能暫停／靜音／標記（回 3），重建 app 後下一場才有。
+menu bar 的「錄這個視窗」「存到」、偏好設定（登入時自動開啟、停止後自動跑前處理，都預設關）、完成通知的「在 Finder 顯示」，
+詳見 [`.claude/skills/meeting-record/SKILL.md`](.claude/skills/meeting-record/SKILL.md) 的〈3. 錄製中：暫停、麥克風靜音、標記〉與〈8. 快捷鍵與 menu bar〉。
 
 > **會議視窗標記**：清單裡 ★ 的列是會議視窗（Teams、Zoom 等原生 app，或作用中分頁是會議網址的 Chrome 視窗）。
 > Chrome 的標記要允許 Apple Events（選用，不授權也能錄），細節、preflight 各項怎麼救、Shortcuts 快捷鍵與 menu bar 見

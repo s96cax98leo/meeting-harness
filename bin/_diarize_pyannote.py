@@ -20,6 +20,17 @@
 """
 import os, sys, json, time
 
+
+def harness_config(section):
+    """讀 repo 根的 config.json 的某一段（讀不到回 {}）；環境變數仍優先於這裡的值。"""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = json.load(f).get(section)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
 def _env_int(k):
     v = os.environ.get(k, "").strip()
     try:
@@ -29,7 +40,7 @@ def _env_int(k):
 
 def pick_device():
     import torch
-    want = os.environ.get("MH_DIARIZE_DEVICE", "auto").strip().lower()
+    want = str(os.environ.get("MH_DIARIZE_DEVICE") or harness_config("diarize").get("device", "auto")).strip().lower()
     if want == "cpu":
         return torch.device("cpu")
     if want == "mps" or want == "auto":

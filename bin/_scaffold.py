@@ -10,7 +10,8 @@
 分場規則：依「檔案修改時間」排序，前一段結束到下一段開始的間隔 < --gap（預設 15 分鐘）
 視為同一場（中途暫停/分段錄影），否則另起一場。--split 則一律一檔一場。
 
-檔案用**硬連結**搬進去（不佔額外空間、原檔留在原地）；已存在就跳過（冪等）。
+檔案**移動**進去（原處不再留一份，避免同一支影片在 Finder 裡出現兩次）；跨磁碟時先複製、確認大小相同才刪原檔。
+目的地已有同名檔就跳過、原檔不動（冪等；不會覆蓋）。
 """
 import sys, os, re, json, subprocess, datetime
 
@@ -36,19 +37,26 @@ def stamp(path):
             pass
     return os.path.getmtime(path)
 
-def link(src, dstdir, dry):
+def move(src, dstdir, dry):
     dst = os.path.join(dstdir, os.path.basename(src))
     if os.path.exists(dst):
         return "skip"
     if dry:                      # --dry-run 不得在磁碟上留下任何東西
-        return "would-link"
+        return "would-move"
     os.makedirs(dstdir, exist_ok=True)
     try:
-        os.link(src, dst)          # 同一顆磁碟：硬連結，不佔空間
+        os.rename(src, dst)        # 同一顆磁碟：直接改路徑
     except OSError:
-        import shutil; shutil.copy2(src, dst)
-        return "copy"
-    return "link"
+        # 跨磁碟：先複製到暫存名，大小相同才改名並刪原檔；中途失敗原檔一定還在
+        import shutil
+        tmp = dst + ".ingest-partial"
+        shutil.copy2(src, tmp)
+        if os.path.getsize(tmp) != os.path.getsize(src):
+            os.remove(tmp)
+            raise SystemExit(f"[scaffold] 複製 {src} 大小不符，已停止（原檔未動）")
+        os.rename(tmp, dst)
+        os.remove(src)
+    return "move"
 
 def main():
     a = sys.argv[1:]
@@ -96,10 +104,10 @@ def main():
         print(f"\n── [{i}] {name}　{t0:%H:%M}–{datetime.datetime.fromtimestamp(end):%H:%M}"
               f"（{len(grp)} 個檔，共 {sum(duration(f) for f in grp)/60:.0f} 分）")
         for f in grp:
-            print(f"   {link(f, rec, dry):>10}  錄音/{os.path.basename(f)}")
+            print(f"   {move(f, rec, dry):>10}  錄音/{os.path.basename(f)}")
         # 此場的截圖 → 照片/
         for im in img_of[i - 1]:
-            print(f"   {link(im, os.path.join(sess, '照片'), dry):>10}  照片/{os.path.basename(im)}")
+            print(f"   {move(im, os.path.join(sess, '照片'), dry):>10}  照片/{os.path.basename(im)}")
         # meeting.json 草稿
         mj = os.path.join(rec, "meeting.json")
         if not os.path.exists(mj) and not dry:

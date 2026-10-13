@@ -10,8 +10,8 @@
 #
 # 總結後端：預設 Claude（在 Claude Code /meeting-summary）。地端混合＝MH_LLM=local（總結本機、resolver 可上網）。
 #
-# 講者分離（選用，預設關閉）：在某場 `錄音/` 放一個空的 `.diarize` 檔，或設環境變數
-#   MH_DIARIZE=1，prep 時該場就會多跑分離。需先： brew install uv && bash bin/setup-diarize.sh
+# 講者分離（預設開啟，六種型態都跑）：config.json 的 diarize.enabled=false 可整個關掉；
+#   關掉時仍可用 MH_DIARIZE=1 單次強制開。需先： brew install uv && bash bin/setup-diarize.sh
 #
 # 場次 = 會議根目錄下、含 `錄音/*.m4a` 的子資料夾。
 # AI 步驟（總結/驗證/發佈 wiki+docx）請在 Claude Code 執行： /meeting-summary <會議根目錄>
@@ -61,6 +61,11 @@ meeting — 會議錄音/錄影 → 逐字稿 → 會議紀錄（本機、離線
   meeting record stop                 停止錄製並收尾成 影片/*.mov 與 錄音/*.wav
   meeting record status               看錄製狀態（上次異常中止會提示 finish）
   meeting record finish <場次>        把已落盤的段落收尾（當機救援；可重跑）
+  meeting record pause                暫停整段錄製（暫停的部分不進成品）
+  meeting record resume               繼續錄製
+  meeting record mute                 只靜音麥克風（系統聲音照錄）
+  meeting record unmute               取消麥克風靜音
+  meeting record mark                 在目前位置加一個標記（收尾時寫成 錄音/markers.json）
   meeting record help                 印出寫法、旗標與結束碼
   層旗標：--recorder（明確要錄製，略過 ./record 撞名檢查）、--yes（宣告沒有人可問）；record 之後任何位置都可以
   結束碼：0 成功、2 參數或前提不符、3 找不到目標、4 開錄前檢查失敗或權限、5 錄製或收尾出錯（段落保留）

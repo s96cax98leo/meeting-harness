@@ -497,3 +497,207 @@ verify 指令維持 `bash bin/_lint.sh && bash bin/meeting.sh doctor` 不變（`
 ## 11. 不在本設計範圍
 
 分軌（`req:257`）、行事曆提醒（`req:300`）、常駐第二條保險 stream（條件未成立，`PROBE-REPORT.md:16`）、收斂四份副檔名清單、`config.json:34` 的既有錯誤說明、把 `tools/**/*.sh` 納入 `_lint.sh`、Safari 與其他 Chromium 瀏覽器的會議分頁標記、LINE 通話標 ★、錄製中途 windowID 改變時重新掛載視窗 —— 皆列為衍生工作（不編號）。
+
+---
+
+## R2 第二輪設計（2026-10-12）
+
+- 性質：R2 增補。**本節以上的第一輪內容一字不改**；本節的決定若取代第一輪定案，逐條記在 `spec.md` 檔尾〈R2-§6 整合修訂與例外（續）〉第 77 條起。
+- 上游：`intent.md`〈R2 第二輪功能〉與〈R2 閘門 1 使用者決定〉（已核准）；需求正本 `_tpm/runs/20261010-sdlc-meeting-record/r2-brief.md`（本機、不在版控；簡寫 `brief:<行>`）；調研 `research-code-contracts.md`（簡寫 `cc:`，R2 節 :1-252）、`research-specs-adr.md`（`sa:`，:153 起）、`research-requirement.md`（`rq:`，:226 起）。
+- 第一輪基準點：本機 tag `meeting-record-r1-baseline`（＝`f084765`，R2-Q1）；程式行號以該點為準。
+- 範例名稱一律用「[Stand-up] 範例專案」；不寫任何真實客戶、會議或視窗標題。
+- 架構取捨（ADR，本輪新增四則）：`adr/adr-r2-control-file.md`（控制通道）、`adr/adr-r2-pause-cut.md`（暫停剪掉）、`adr/adr-r2-status-fields.md`（新欄位放哪）、`adr/adr-r2-login-item.md`（登入自動開與無參數啟動）。本節只摘結論。
+- **Swift `Core/` 的 R2 新名稱只以 `spec.md` 檔尾 R2 §3.14 為準**（沿用第一輪 `design.md §9` 的規則，本節不重抄簽名）。
+- **閘門 2 修正輪（2026-10-12）**：使用者在閘門 2 決定 (1) 時間軸照 R2-D5 原案（選項 A）、(2) 自動前處理先不讓路、t7 觀察（R2-D10）、(3) 新欄位 nil 省略鍵、`RecordsTests` 不改（R2-D6）、(4) skeptic 問題全部修正。本輪對設計的實質變更只有 R2-D3 的「暫停閘門與換段原因純函式化」（新增 R2-D3a）、R2-D11 的 `stop` 摘要有了驗收、R2-D12 的 `--pause-mute` 由六項增為九項；其餘是依據與對照的補記。細節見 R2-D15 末的〈閘門 2 使用者決定〉表。
+
+### R2-D1 元件與資料流
+
+```
+                ┌─────────── menu bar（常駐，--args menubar；無參數啟動也進這裡）──────────┐
+ ⌃⌥⌘R/M/P/B ──▶ │ HotKey（每組不同 id）→ TriggerDebouncer → 動作                               │
+ 選單         ──▶ │  ├ 暫停／靜音／標記：controlAvailability → requestControl（flock）→ kill(SIGUSR1) │
+                │  ├ 錄這個視窗 ▸：open -n -a 自己 --args windows --json --log <暫存> → 子選單     │
+                │  ├ 存到 ▸／偏好設定：menubar.prefs.json（只有 menu bar 寫）                      │
+                │  ├ 開始：open -n -a 自己 --args quick-start [--window … --root …]               │
+                │  └ 看到 done：完成通知（在 Finder 顯示）、停止後自動前處理（meeting.sh prep 場次） │
+                └───────────────────────────────▲──────────────────────────────────────────────┘
+                                                │ 每秒讀 record.status.json（新選用欄位：計時、暫停、靜音、標記數、收音）
+ meeting record pause|resume|mute|unmute|mark ──┤（bin/record.sh：同一套前提檢查＋flock＋SIGUSR1，等狀態反映）
+                                                ▼
+ 錄製實例（start／quick-start）：SIGUSR1 → readControl → controlActions → 暫停閘門／mic 歸零／標記
+   └ 寫 record.status.json（選用欄位）、tracks/record.meta.json（pauseEvents、micMuteEvents）、tracks/markers.json
+ finalize：串接（暫停段自然不在成品）→ gapStats 扣暫停、pausedTotal → 複製 markers.json 到 錄音/（在 already_done 之前）
+```
+
+### R2-D2 控制通道（R2-Q4、R2-Q11；ADR `adr-r2-control-file.md`）
+
+| 決定 | 理由 | 代價 |
+|---|---|---|
+| 控制檔存「目標狀態」`{schemaVersion, runId, paused, micMuted, markerSeq}`，錄製實例以 `controlActions` 算差異 | 重複寫、訊號合併都冪等（brief:35「切換是冪等的」）；`markerSeq` 差值＝要加幾個標記 | menu bar 的「切換」要先由目前狀態算出目標再寫 |
+| 錄製實例在 `installSignalHandlers()`（加裝 SIGUSR1）之後、寫 `record.pid` 之前呼叫 `resetControl` | 解決控制檔殘留（`cc:` C10）：上一場暫停中當機，下一場不會一開就暫停 | 開錄多一次寫檔 |
+| 送 SIGUSR1 的前提：`record.pid` 活著、等於 `status.pid`、`phase == recording`、`controlVersion ≥ 1`；pid 只取 `record.pid` | SIGUSR1 預設會終止程序（`cc:` C1）；舊版錄製實例沒有 `controlVersion` | 舊版開的錄製只能停止（回 3 並說明） |
+| `main.swift` dispatch 前 `signal(SIGUSR1, SIG_IGN)` | 新版任何模式（preflight 中的 quick-start 程序等）誤收都不會被殺 | 無 |
+| 寫者取 `<home>/record.control.lock` 的 `flock(LOCK_EX)` | menu bar 與 CLI 同時寫不互相蓋掉（快捷鍵連按加標記不丟） | 多一個鎖檔 |
+| CLI 寫完送訊號後，最多等 5 秒看 `record.status.json` 反映（`paused`／`micMuted`／`markers`）才回 0；沒反映回 3 | 讓其他 session 拿到確定的結果，不是「已送出」 | 錄製器忙時最多多等 5 秒 |
+
+### R2-D3 整段暫停（F2；R2-Q9、R2-Q16；ADR `adr-r2-pause-cut.md`）
+
+錄製實例（只在序列佇列 `q` 上）：
+
+1. **暫停**：E＝`maxEnd`（沒有任何 sample 時為目前段起點）；有 prev 先 `closePrev()`；目前段若沒有內容（E ≤ 段起點或沒寫過 sample）就 `cancel()` 並從 manifest 移除，否則轉成 prev（`prevEnd = E`、1 秒後或三路都越過 E 時收尾）；`cur = nil`、`nextBoundary` 失效、`switchOnNextSample = false`、`paused = true`；記 `pauseEvents{kind: pause, t: E − t0}`；偵測器停餵（`BlackDetector.interrupt(at:)` 收掉開著的黑畫面區間）。
+2. **暫停中**：`ingest` 的第一個判斷（在 `maxEnd` 更新之前）：`paused` 時，PTS < E 的 sample 照 `routeSample` 寫進 prev，其餘丟棄、**不更新 `maxEnd`、不觸發 `cur == nil` 的自動開段**；complete 幀仍更新 `lastFrame`（不寫入）；影片心跳因 `cur == nil` 自然停；`closeLevels` 照常每 0.5 秒補時段（沒有 feed＝null），但不餵靜音偵測器；每 30 秒的磁碟檢查照常（低於 2 GB 照 `spec.md §4.5.5` 停止收尾）。
+3. **繼續**：`paused = false`、設 `resumeOnNextSample`；下一個 PTS ≥ E 的 sample 以它的 PTS 為邊界開新段（`SwitchReason.resume`，加在 `RecordingSession.swift:28` 的 private enum），新段首幀以最後一個 complete 幀重新打戳（沿用 `:449-454`）。**閘門 2 修正輪**：`SwitchReason` 改搬到 `Core/Segments.swift` 並加 `resume`，Capture 刪掉 private 宣告（R2-D3a）；記 `pauseEvents{kind: resume, t: 新段 startedAt}`；`SilenceDetector`、`SuspendedDetector` 一律 `reset()`（暫停前的連續計時不得接到繼續後）。
+4. **暫停中按停止**：`requestStop` 的停止點＝`maxEnd`＝E（暫停中不前進），`drainWriters` 沒有 `cur`；`pauseEvents` 最後一筆是沒配對的 `pause`。
+5. **靜音中暫停、暫停中靜音**：兩個旗標互相獨立；暫停中切靜音只記事件，繼續後照目前的靜音旗標處理 mic。
+6. **暫停中加標記**：允許；`outputT` 落在剪點（＝該次暫停的 `outputT`）。
+
+`pausedSeconds`（status）＝已配對暫停的 Σ（resume.t − pause.t），用 sample 時鐘算，小數 3 位。
+
+### R2-D3a 暫停閘門與換段原因純函式化（閘門 2 修正輪；skeptic 問題 1、2、7）
+
+| 決定 | 理由 | 代價 |
+|---|---|---|
+| 暫停／繼續的狀態轉移（`PauseGate`、`pausing`、`resuming`、`segmentOpened`）、每個 sample 的去向（`pauseRoute` → normal／prevOnly／drop／resumeBoundary）與開段原因（`openReason`）放 `Core/Segments.swift`；`SwitchReason` 從 `RecordingSession.swift:28` 的 private enum 搬來並加 `resume` | intent R2-2 要求「Swift Core 單元測試涵蓋 resume 換段」；`Tests/run.sh` 只編 `Core/`，留在 Capture 的邏輯只能靠字串形狀檢查與 t7 | `ingest` 多一層呼叫；r2e 要刪掉 private enum（同名會遮蔽 Core 型別，靜態檢查擋） |
+| 事件 append 與狀態欄位（`appendingPauseEvent`、`appendingMuteEvent`、`pauseStatusFields`、`applyingPauseFields`）放 `Core/Control.swift` | `pauseEvents` 冪等、`outputT` 換算、`pausedAt` 繼續時刪鍵、`pausedSeconds` 更新原本只有 t7 驗（skeptic 問題 7） | Capture 不能自己組事件，一律呼叫 Core |
+| 偵測器餵送規則 `detectorFeed(paused:micMuted:)` 放 `Core/Detectors.swift`；Capture 在 `closeLevels` 與影格處理處都依它決定餵不餵 | F2「暫停期間不誤報黑畫面」原本只有 `.interrupt(at:` 字串形狀（skeptic 問題 2）；另在 `e2e_check.py` 加 `no_false_black` 做 t7 機械核對 | 多一個小型別 |
+
+語意與第一輪一致的地方：route 為 normal 時，`openReason` 只處理「`cur == nil` 或 writer 失敗後換段」那一支，定期換段與格式變更換段仍是 `ingest` 原本的判斷（第一輪行為不動）；route 為 resumeBoundary 但從沒開過段（暫停發生在第一個 sample 之前）時原因是 `first`，避免對不存在的段重新打戳。暫停前沒有任何 sample 時 `cutPoint` 為 nil、pause 事件的 `t` 記 0.000。
+
+### R2-D4 只靜音麥克風（F1）
+
+- **做法：改寫成數位 0，不停寫**。在 micQ 的 sample 回呼裡、算 `rmsDBFS` **之前**（`RecordingSession.swift:276` 之前）判斷靜音旗標，成立就以 `zeroedAudioSample(_:)`（Core，深拷貝 `CMBlockBuffer` 後全部清 0，時間與格式不變）取代原緩衝，之後照常算 RMS（得 -∞ → levels 的 mic 寫 null）與寫檔。不能用 `retimedVideoSample` 那種共用資料的淺拷貝（`Capture/SegmentWriter.swift:164-171`），也不能改 SCK 給的原緩衝。
+- **不採「停寫 mic 軌」**：finalize 對缺封包的音軌只部分處理（`bin/_record_finalize.py:174-175`、`:318-328`），停寫會讓那段 mic 軌變短、串接與混音的對齊要另外處理（brief:22）。
+- 靜音旗標由 `q` 寫、micQ 讀：以鎖或 atomic 保護的單一 Bool（實作選擇，不進契約）。
+- 偵測器：靜音期間 `closeLevels` 不餵 `micSilence`；取消靜音時 `micSilence.reset()`。系統聲音路照常。
+- 事件：`record.meta.json.micMuteEvents{t, outputT, wallClock, muted}`（brief 的 `{t, muted}` 加兩個欄位，`spec.md` §6 第 97 條）；append 一律經 Core `appendingMuteEvent`（閘門 2 修正輪，`spec.md` §4.17.7）。t7 以 `mute_timing`（麥克風軌數位 0 區段的起訖對事件時刻 ±0.5 秒）與 `event_output_t` 核對時間（`spec.md` §4.17.8、§4.18.12）。
+
+### R2-D5 時間軸（R2-Q8）
+
+| 資料 | `t` 用哪把尺 | 另附 |
+|---|---|---|
+| 既有：`levels`、`blackIntervals`、`deviceEvents`、`audioFormatEvents`、`warnings[].t`、`segments[].startedAt` | **錄製時鐘**（sample／host 時鐘 − t0，含暫停時間），不改 | — |
+| `pauseEvents`、`micMuteEvents`（`record.meta.json`） | 錄製時鐘 | `outputT`（成品時間）、`wallClock`（ISO 8601） |
+| `markers.json`（`tracks/` 與 `錄音/` 同內容） | **成品時間**（brief:27「錄到的時間，扣掉暫停」；下游 summary 要對逐字稿，用成品時間） | `recordT`（錄製時鐘）、`wallClock` |
+
+閘門 2 使用者決定 1（2026-10-12）：採本表（選項 A）。
+
+- 換算只有一個函式：`outputTime(recordT:firstSegmentStart:pauses:)`（Core）＝recordT − startedAt_1 − 已結束的暫停長度；落在暫停區間內的時刻夾到該次暫停點。段落邊界的微小空隙（< 0.5 秒）不計，所以 `outputT` 與成品實際位置的誤差上限是累積空隙（t7 容許 ±1 秒）。
+- `levels` 的暫停期間：照常每 0.5 秒補一個時段、兩路都是 null（沒有 feed）——保持「索引 × 0.5＝錄製時鐘」不變；靜音期間 mic 是 null（數位 0 的 RMS 是 -∞）。null 不再只代表「-∞ 或沒有緩衝」，所有讀 `levels` 的判準（`e2e_check.py` 的 `device_switch`、`hfp`、`interruption_report` 等）都要先排除 `pauseEvents` 的暫停區間（兩路）與 `micMuteEvents` 的靜音區間（mic 路）。混音軌（成品）上的量測要先把事件的錄製時鐘換成成品時間。
+
+### R2-D6 狀態欄位與計時（R2-Q10、R2-Q12；ADR `adr-r2-status-fields.md`）
+
+- `record.status.json` 新增 8 個頂層 Optional，**nil 時省略鍵**（`Records.swift:3-4` 慣例的例外）：`controlVersion`、`recordingStartedAt`、`paused`、`micMuted`、`pausedSeconds`、`pausedAt`、`markers`、`recentLevels`。錄製實例在 `phase` 轉 `recording`（`RecordingSession.swift:179-183`）時一次寫入 `controlVersion = 1`、`recordingStartedAt = isoNow()`、`paused = false`、`micMuted = false`、`pausedSeconds = 0`、`markers = 0`。
+- **計時**：`recordedSeconds(recordingStartedAt:pausedSeconds:pausedAt:now:)`＝now − recordingStartedAt − pausedSeconds −（暫停中再扣 now − pausedAt），向下取整、不小於 0；顯示 `clockText(seconds:)`：< 60 分鐘 `mm:ss`、≥ 60 分鐘 `h:mm:ss`（與第一輪 M9 的格式相同）。起點改用 `recordingStartedAt`，修掉 `startedAt` 早於開錄約 10 秒的既有偏差（`cc:` C8）；舊狀態檔沒有這個鍵時沿用第一輪的 `startedAt` 算法。
+- **收音指示（F9）**：錄製實例每 0.5 秒 `closeLevels` 後算 `recentLevels = {windowSeconds: 3, system, mic}`（各路最後 6 個時段的最大值，全 null 為 null；靜音中 mic 為 null；暫停中不寫此鍵），**每秒最多寫一次**狀態檔。menu bar 用 `levelIndicatorLine(recent:micMuted:paused:thresholdDBFS: -60)` 組字，「超過」＝嚴格大於 -60（與 `systemAudioCheck` 一致）。
+- 寫入頻率：第一輪狀態檔只在事件時寫；R2 錄製中每秒最多一次（tmp＋rename，檔很小）。
+- 閘門 2 使用者決定 3（2026-10-12）：nil 省略鍵、`RecordsTests` 不改（選項 A，`spec.md` §6 第 79 條）。
+
+### R2-D7 menu bar（F5、F9、R2-Q7；取代 D12 的「只放圖示」）
+
+| 主題 | R2 規則 | 取代／延伸 |
+|---|---|---|
+| 寬度與文字 | status item 改 `NSStatusItem.variableLength`；錄製中與暫停中在圖示右側顯示計時（`MenuBarModel.timerText`），字型 `NSFont.monospacedDigitSystemFont`（每秒更新寬度不抖）；其他狀態只放圖示 | 取代 `design.md §8.2`「寬度」列（D12）——使用者 R2 決定「紅點＋計時」（brief:13、:26） |
+| 圖示 | 待機 `record.circle`、錄製中 `record.circle.fill`（**系統紅色**＝「紅點」）、暫停中 `pause.circle.fill`（template、不加色）、告警 `exclamationmark.triangle.fill`（系統紅色）；麥克風靜音時計時前多一個 `mic.slash`（template）。形狀可區分四態，不只靠顏色 | 延伸 §8.2「圖示」列（原本只有告警態可加紅色）；新增 `MenuBarState.paused` |
+| 狀態對映 | `spec.md §3.4.1` 新增 M6b（錄製中且暫停 → 暫停態，排在 M7 之前，否則舊告警會蓋掉暫停狀態）；M9 的計時改用 `recordedSeconds`、靜音時狀態列加「麥克風靜音中」 | 列名不重編號（沿用 M6a 先例） |
+| 收音指示列 | 狀態列下方一行不可點的「收音：系統聲音 ● 有聲　麥克風 ○ 無聲」；靜音中麥克風顯示「⊘ 已靜音」、暫停中整行「收音：暫停中」；只在錄製中（`phase == recording` 且 pid 活著）顯示，其他狀態隱藏（資訊列不適用「灰掉不隱藏」） | 新增 |
+| 選單結構 | 見 `spec.md` §4.20.6 的順序；暫停／靜音／標記在「停止錄製」之前；「麥克風靜音」用打勾狀態（`NSControl.StateValue.on`）；「暫停錄製」暫停中改名「繼續錄製」；新項目照「灰掉不隱藏」 | 取代 §8.2「選單結構」列與 `spec.md §4.11.6` |
+| 快捷鍵 | ⌃⌥⌘R 開始、⌃⌥⌘M 麥克風靜音、⌃⌥⌘P 暫停／繼續、⌃⌥⌘B 加標記（brief:22-27）；`HotKey` 每組不同 `EventHotKeyID.id`（1–4），handler 以 `GetEventParameter(kEventParamDirectObject, typeEventHotKeyID)` 比對自己的 id，不是自己的回 `eventNotHandledErr`（`cc:` C2）；每組註冊失敗各寫一行 log、清掉該選單項的 `keyEquivalent`（沿用 `spec.md §4.11.3`、§6 第 75 條） | 延伸 §4.11.3 |
+| 重複觸發 | 選單展開時快速鍵與 Carbon hot key 可能各觸發一次（`Trigger/MenuBar.swift:22-24`）：暫停與靜音寫「目標狀態」（由目前狀態算出），同一次按鍵觸發兩次結果相同；另以 `TriggerDebouncer`（同一動作 1 秒內第二次忽略）擋加標記與快速連按；開始錄製沿用 2 秒去抖 | 新增 |
+| 即時性 | 沿用 `.common` mode 的每秒 refresh（`spec.md §4.11.9`），計時與收音列在選單展開時照常走 | 不變 |
+
+### R2-D8 選單選視窗與存檔位置（F3、F4；R2-Q3、R2-Q15）
+
+- **設定檔分工（R2-Q3 使用者決定：另開 menu bar 專用設定檔）**：新增 `~/.meeting-harness/menubar.prefs.json`，**只有 menu bar 寫**（偏好設定視窗屬於 menu bar 程序）；`record.defaults.json` 維持 `record.sh` 單一寫者（`bin/record.sh:315-327`），Swift 端只讀。鍵：`schemaVersion`、`root`（「存到 ▸」打勾的位置＝偏好設定的「預設存檔位置」，同一個設定在兩處顯示；nil＝沿用 `record.defaults.json` 的 `root`）、`recentRoots`（最多 5 個，最近的在前）、`autoPrep`（預設 false）、`lastSession`、`lastAutoPrepRunId`。
+- **quick-start 的存檔位置**：`quickStartRoot(argRoot:prefsRoot:defaultsRoot:isDirectory:)`——`--root` ＞ `menubar.prefs.json.root` ＞ `record.defaults.json.root`；選到的不是現存目錄 → code 2 並通知。⌃⌥⌘R、選單「開始錄製」、Shortcuts 捷徑都走 quick-start，所以三個入口一致。終端機 `meeting record` 不讀 prefs（照舊問根目錄，預設值是 `record.defaults.json.root`）。
+- **沒有完整 defaults**：`record.defaults.json` 不存在或沒有 `harness` 時，「錄這個視窗 ▸」「存到 ▸」灰掉，toolTip「先在終端機跑一次 meeting record」（`cc:` C9：只有 root 的 defaults 會讓收尾因 `harness` 缺值回 127）。
+- **列視窗（R2-Q15）**：menu bar **不在自己程序裡呼叫 SCK**，照 `record.sh` 的 `fetch_windows`（`bin/record.sh:204-234`）以 `open -n -a <自己> --args windows --json --log <暫存檔>` 另開短命程序列清單（不帶 `--ask-automation`，不跳 Apple Events 授權框），子選單打開時先顯示不可點的「讀取視窗清單中…」，讀到後換成清單（★ 列已由 app 排在前面，標題以 `truncatedStatusTitle(label, limit: 60)` 截斷、完整 label 放 toolTip），逾時 10 秒顯示「取不到視窗清單（螢幕錄製權限？）」。理由：沿用已實測的路徑、維持「menu bar 實例自己不擷取」（`design.md §8` 表）；代價是打開子選單要等約 1 秒。
+- **點視窗開錄**：`open -n -a <自己> --args quick-start --home <home> --window <id> --window-bundle <bundleID> --window-title <title> [--root <root>]`；quick-start 有 `--window` 時以 `resolveWindow`（`spec.md §3.8.8`）在通過篩選的視窗中認回，再交 `explicitWindowDecision(hasDefaults:resolution:)`——**略過 ★ 恰好一個的判斷**（使用者已明確選了，不是猜）；沒帶 `--window` 時行為與 `spec.md §4.11.1` 完全相同。
+- **存到 ▸**：子選單列 `root`（打勾）與 `recentRoots`（不存在的目錄灰掉並標「（找不到）」）、分隔線、「選擇資料夾…」（`NSOpenPanel`：只能選資料夾、可建新資料夾；開之前 `NSApp.activate`）；選定後寫 `root` 並以 `updatedRecentRoots(_:adding:limit: 5)` 更新清單。錄製中也可以改（影響下一場）。
+
+### R2-D9 偏好設定、登入自動開、無參數啟動（F7、R2-Q6；ADR `adr-r2-login-item.md`）
+
+- 偏好設定視窗（`Sources/Trigger/Preferences.swift`，選單「偏好設定…」⌘,）：一個不可縮放的小視窗，標題「MeetingRecorder 設定」，改了立即生效（沒有「確定」按鈕，HIG 的 settings window 慣例），⌘W 關閉。內容依序：
+  1. 預設存檔位置：路徑（過長中間省略）＋「更改…」（同「存到 ▸」的 `NSOpenPanel`）；
+  2. 快捷鍵一覽（唯讀）：四組各一行「⌃⌥⌘R　開始錄製（用上次的設定）」…，註冊失敗的那組加「（註冊失敗，可能被別的 app 佔用）」；
+  3. 「登入時自動開啟」勾選框＋`loginItemDisplay` 的說明文字；`.requiresApproval` 時多一顆「打開系統設定的登入項目」；
+  4. 「停止後自動跑前處理（轉錄；講者分離依會議型態）」勾選框，預設關。
+- 無參數啟動：`launchMode(arguments:)`——沒有參數或只有 `-psn_` 開頭的參數 → `menubar`；`help`／`-h`／`--help` 照舊。menubar 的單一實例鎖（`spec.md §4.11.10`）擋住重複圖示。
+- 只在使用者勾選時呼叫 `SMAppService.mainApp.register()`；任何自動流程都不得呼叫（不改使用者系統設定）。
+
+### R2-D10 停止後自動前處理與完成通知（F8、R2-Q13、R2-Q14）
+
+- **執行者：menu bar**。錄製實例收尾完就 `exit`（`RecordingSession.swift:770`），不能等數分鐘的轉錄；menu bar 常駐、每秒讀狀態。判斷交 Core `shouldAutoPrep(...)`：`autoPrep` 開、`phase == done` 且 `code == 0`、該 `runId` 在本次 menu bar 執行期間曾被看到處於進行中（避免重開 menu bar 時對舊場次補跑）、且不等於 `lastAutoPrepRunId`。
+- **指令**：`/bin/bash <record.defaults.json.harness>/bin/meeting.sh prep <場次目錄>`——明確傳**場次目錄**（傳根目錄會重跑整個根目錄，`sa:` C14）；`PATH` 照 `runFinalize`（`RecordingSession.swift:731`）；stdout／stderr append 到 `<home>/autoprep.log`；以 `terminationHandler` 非同步等結束（不阻塞主執行緒）；同時只跑一個，後到的排隊。結束時通知「前處理完成：<場次名>」或「前處理失敗（結束碼 N），見 autoprep.log」。說法是「跑既有前處理」——講者分離只在 `MH_DO_DIARIZE=1`（依會議型態）時跑（`bin/meeting.sh:232`），驗收看 `錄音/transcript.raw.md`。不碰逐字稿內容（五條鐵則）。
+- **與下一場錄製的資源競爭**：不讓路、不自動停（閘門 2 使用者決定 2，2026-10-12：選項 A，t7 實機觀察）。理由：自動停會讓「一條龍」變成不確定；ASR 跑 GPU（MPS）、錄製用 SCK 與硬體編碼器，衝突程度沒有本機數據。列為疑慮（`spec.md` R2-§7），t7 觀察丟幀摘要。
+- **完成通知與「在 Finder 顯示」（R2-Q14）**：錄製實例照舊發完成通知，但識別碼固定為 `completionNotificationID(runId:)`；menu bar 看到同一個 `runId` 轉 `done` 時，以**同一個識別碼**再發一次帶 category（動作「在 Finder 顯示」）的通知——同 id 的通知會取代前一則，所以使用者只留一則可點的。menu bar 是 `UNUserNotificationCenter` 的 delegate，按下動作後 `NSWorkspace.activateFileViewerSelecting` 選取 `影片/*.mov`（沒有就選場次目錄）。menu bar 沒開時只有錄製實例那則（不能點動作），保底入口是選單「顯示上一場成品」（`lastSession`，或狀態檔 `phase == done` 的 `session`）。
+
+### R2-D11 CLI（R2-Q5 使用者決定「全面更新子指令」）
+
+- `meeting record pause|resume|mute|unmute|mark`：不接參數、沒有寫法旗標；寫法結束碼 `0 3`。0＝已套用（含「本來就是這個狀態」的冪等情形，不送訊號、印「已經是暫停中」之類）；3＝沒有可控制的錄製（沒在錄、還在開錄前檢查、正在收尾、舊版錄製器、5 秒內沒有回應），stderr 一句說明原因；多餘的位置參數回 2（與 `stop` 現行行為相同，`bin/record.sh:509`；不列入寫法結束碼）；未知選項回通則 2。
+- 五個字比照 `help` 成為保留字：根目錄剛好叫這幾個字時寫 `meeting record ./pause`（`spec.md` R2-§7）。
+- `bin/record.sh` 在 `*)` 之前加五個 case，共用一個 `cmd_control <動作>`；鎖、讀寫控制檔、前提檢查在同一段 Python（與 Swift 的 `controlAvailability`、`requestControl` 同語意，各自有測試）。`bin/meeting.sh` 只改 `usage()`（`record_cmd` 會透傳新子指令，`cc:` §1.4）。不新增 `bin/` 檔（`_lint.sh` 檔數維持 26）。
+- `meeting record status`：錄製中改用 `recordingStartedAt` 與暫停扣除算計時，並多印「暫停中」「麥克風靜音中」「標記 N 個」（有才印）；`stop` 的摘要多一行「暫停 N 次、共 mm:ss；標記 N 個」（有才印）；N、共、標記數的來源與「有才印」的條件以 `spec.md` §4.16.11 為準（閘門 2 修正輪補驗收）。
+
+### R2-D12 finalize 與 `e2e_check.py`
+
+- `bin/_record_finalize.py`：(1) 在 `already_done` 判斷**之前**把 `tracks/markers.json` 複製到 `錄音/markers.json`（內容相同就不覆寫；來源不存在就不建；`cc:` C14）；(2) `gapStats`：讀 `record.meta.json.pauseEvents`，邊界 k→k+1 若有 `resume` 的 `t` 與 `startedAt_{k+1}` 相差 < 0.5 秒，該邊界的 g 扣掉這次暫停長度；新增 `pausedTotal`（沒有暫停寫 0.0）；`wallClock` 定義不變。串接不變（暫停段本來就不在任何段落裡）。
+- `tests/record/e2e_check.py`：既有判準在沒有 `pauseEvents`／`micMuteEvents` 的場次上結果**完全不變**（既有自我測試的預期不改）；有事件時：`gap` 扣暫停、`wall <= 240` 的短場次分界改用（wall − pausedTotal）；`segment_cadence` 把 resume 邊界列為提前換段；`stop_tail` 加 `pausedTotal`、停止時仍在暫停則以最後一筆 pause 的 `t` 代替 `wallClock`；讀 `levels` 的判準排除暫停與靜音區間，讀混音軌的判準先把錄製時鐘換成成品時間。新增 `--pause-mute` 一組判準（`spec.md` §4.17.5、§4.18.6、§4.19.4）；閘門 2 修正輪再加 `mute_timing`、`no_false_black`、`event_output_t`（`spec.md` §4.17.8、§4.18.11、§4.18.12），共九項：`pause_events`、`pause_cut`、`mic_mute_zero`、`mute_system_kept`、`no_false_silence`、`markers`、`mute_timing`、`no_false_black`、`event_output_t`。
+
+### R2-D13 Swift 原始碼切分（增補 `design.md §9`）
+
+```
+Sources/Core/Control.swift      新增：控制檔型別與讀寫（flock）、controlActions、controlAvailability、暫停／靜音事件、
+                                     markers、outputTime、計時、收音指示、menubar.prefs.json、quick-start 的 root 與指定視窗判斷、
+                                     launchMode、loginItemDisplay、shouldAutoPrep、通知識別碼、HotKeySpec、TriggerDebouncer
+Sources/Core/Records.swift      RecordStatus／RecordMeta／GapStats 加 Optional 欄位（nil 省略）、RecentLevels
+Sources/Core/Detectors.swift    SilenceDetector.reset()、SuspendedDetector.reset()、BlackDetector.interrupt(at:)、detectorFeed（閘門 2 修正輪）
+Sources/Core/Segments.swift     SwitchReason（自 Capture 搬入＋resume）、PauseGate、pauseRoute、openReason 等（閘門 2 修正輪，R2-D3a）
+Sources/Core/AudioLevel.swift   zeroedAudioSample(_:)
+Sources/Core/Trigger.swift      MenuBarState.paused、MenuBarModel 新欄位（有預設值）、M6b、M9 計時
+Sources/Capture/                RecordingSession（SIGUSR1、呼叫 Core 的暫停閘門、mic 歸零、標記、事件、狀態欄位；刪 private SwitchReason）、PreflightRunner（RunContext.controlURL）、
+                                     Notifier（可指定識別碼）
+Sources/Trigger/                MenuBar（變寬、計時、新選單、子選單、控制、完成通知、自動前處理）、HotKey（多組）、QuickStart（--window／--root）、
+                                     Preferences.swift（新增）
+Sources/main.swift              SIGUSR1 → SIG_IGN、launchMode
+```
+
+`Tests/run.sh` 把 `Core/*.swift` 一起編，新檔不用改執行器；新的測試檔要登記在 `Tests/main.swift` 的 `mrtSuites`。
+
+### R2-D14 測試策略增補與設計審查
+
+- Swift：新增 `ControlTests.swift`、`MenuBarR2Tests.swift`（`spec.md` §4.16–§4.23 的 Core 項）。
+- Python：新增 `tests/record/test_r2_cli.py`、`test_r2_finalize.py`、`test_r2_e2e_check.py`、`test_r2_static.py`、`test_r2_docs.py`；`fakes/fake_recorder.sh` 加 `FAKE_CONTROL` 情境（接 SIGUSR1 並依控制檔改狀態、忽略、或舊版不接）。靜態檢查一律只掃**單一子任務擁有的路徑**（第一輪的教訓，`plan.md §1`），函式名以 `test_capture_`、`test_trigger_`、`test_main_` 開頭區分歸屬。
+- **既有測試預期的修改**只有 R2-Q5 核准的 CLI 封閉清單那幾處（`spec.md` §6 第 77、93 條逐條列出），其餘既有測試一字不改；`RecordsTests` 的鍵集合測試不改（ADR `adr-r2-status-fields.md`）。既有的**測試工具與替身**（`e2e_check.py`、`fakes/fake_recorder.sh`、`_media.py`，必要時 `_helpers.py`／`_fixtures.py` 只加不改）與 `Tests/main.swift` 的 `mrtSuites` 登記會修改，完整清單在 `spec.md` R2-§5（閘門 2 修正輪補列）。
+- **`has_ui`**：R2 多了真正的視窗（偏好設定）與變寬的 status item。延伸第一輪 D12 的例外：R2 的 test 段 `has_ui=true`，派 `dev-design-reviewer`，依據 macOS HIG 的 menu bar extra 與 settings window 慣例（`spec.md` §4.20.4、§4.20.6、§4.22.4），截圖由使用者在 t7 截（agent 不得啟動 app）。`has_security` 維持 false。
+
+### R2-D15 R2-Q3～Q16 定案總表
+
+| # | 定案 | 理由（細節見上） |
+|---|---|---|
+| R2-Q3 | （使用者決定）`menubar.prefs.json` 另開；`root` 一個設定兩處顯示；沒有完整 defaults 時兩個子選單灰掉 | R2-D8 |
+| R2-Q4 | 只送 `record.pid`；四項前提；`controlVersion`；`main.swift` SIG_IGN；不成立回 3 | R2-D2 |
+| R2-Q5 | （使用者決定）五個子指令、保留字、封閉清單 12 寫法；結束碼 `0 3`，冪等回 0 | R2-D11 |
+| R2-Q6 | 無參數＝menubar；`SMAppService.mainApp` 無法帶參數（依 API 形狀，未實測） | R2-D9、ADR |
+| R2-Q7 | 每組不同 id、handler 比對 id；失敗各自記 log、清選單快速鍵 | R2-D7 |
+| R2-Q8 | meta 事件用錄製時鐘＋`outputT`；`markers.json` 的 `t`＝成品時間（brief 原文）＋`recordT`；`levels` 暫停補 null、判準以事件排除 | R2-D5 |
+| R2-Q9 | 暫停＝目前段轉 prev（停止點 E）；`gapStats` 扣暫停＋`pausedTotal`；§4.4.3／§4.4.8 加排除 | R2-D3、R2-D12 |
+| R2-Q10 | 頂層 Optional、nil 省略鍵；既有鍵集合測試不改 | R2-D6、ADR |
+| R2-Q11 | 控制檔帶 `runId`；開錄時 `resetControl`；`markerSeq` 以 `runId` 為範圍 | R2-D2 |
+| R2-Q12 | `recordingStartedAt`＋`pausedSeconds`＋`pausedAt`；≥ 60 分鐘 `h:mm:ss`；等寬數字 | R2-D6 |
+| R2-Q13 | menu bar 執行、傳場次目錄、排隊單一執行、不讓路（疑慮） | R2-D10 |
+| R2-Q14 | 同識別碼取代；menu bar 當 delegate；「顯示上一場成品」保底 | R2-D10 |
+| R2-Q15 | menu bar 以 `open -n -a … windows --json --log` 列視窗，不在常駐程序呼叫 SCK；登入項目前提只能 t7 驗 | R2-D8、R2-D9 |
+| R2-Q16 | 暫停中停止、靜音×暫停、暫停中標記、繼續重設偵測器、暫停中磁碟檢查照跑、markers 在 `already_done` 前複製、`recentLevels` 形狀、t7 容許誤差（成品長度 ±1 秒、短場次分界用扣暫停後的時長） | R2-D3、R2-D6、R2-D12、`spec.md` §4.25 |
+
+#### 閘門 2 使用者決定（2026-10-12）
+
+| # | 決定 | 落在哪裡 |
+|---|---|---|
+| 1 | `markers.json` 的 `t` 用成品時間、另附 `recordT`；`record.meta.json` 事件 `t` 用錄製時鐘、另附 `outputT`（選項 A） | R2-D5；`spec.md` §3.11、§3.12、§6 第 95 條 |
+| 2 | 停止後自動前處理遇到下一場開錄時先不讓路，t7 實機觀察（選項 A） | R2-D10；`spec.md` §6 第 96 條、§7 疑慮 38 |
+| 3 | `record.status.json`／`record.meta.json` 新欄位 nil 時省略鍵、`RecordsTests` 不改（選項 A，使用者接受主 session 依建議） | R2-D6；`spec.md` §3.10、§6 第 79 條 |
+| 4 | skeptic 問題全部修正；resume 換段要有自動測試（換段判斷抽到 Core 純函式） | R2-D3a；`spec.md` §3.14、§4.16.11、§4.17.7–§4.17.8、§4.18.8–§4.18.12、R2-§5、§6 第 98、99 條；`plan.md` §9 |
+
+### R2-D16 不在 R2 範圍
+
+brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動偵測與行事曆提醒、捨棄這次錄製、Sparkle、Dock 備用入口）；summary 端使用 `markers.json`；標記自訂文字（public repo 與 `spec.md §4.14` 的考量，label 一律「標記 N」）；自動前處理在下一場開錄時讓路——皆列為衍生工作（不編號）。

@@ -30,10 +30,17 @@ F_PREFLIGHT = "meeting record preflight"
 F_STOP = "meeting record stop"
 F_STATUS = "meeting record status"
 F_FINISH = "meeting record finish <場次>"
+# R2（spec §6 第 77 條）：pause、resume、mute、unmute、mark 五個寫法
+F_PAUSE = "meeting record pause"
+F_RESUME = "meeting record resume"
+F_MUTE = "meeting record mute"
+F_UNMUTE = "meeting record unmute"
+F_MARK = "meeting record mark"
 F_HELP = "meeting record help"
 
 SURFACE = Parsed(
-    forms=[F_ROOT, F_WINDOWS, F_PREFLIGHT, F_STOP, F_STATUS, F_FINISH, F_HELP],
+    forms=[F_ROOT, F_WINDOWS, F_PREFLIGHT, F_STOP, F_STATUS, F_FINISH, F_PAUSE, F_RESUME, F_MUTE, F_UNMUTE, F_MARK,
+           F_HELP],
     form_flags={
         (F_ROOT, "--window <id>"),
         (F_WINDOWS, "--json"),
@@ -46,6 +53,11 @@ SURFACE = Parsed(
         (F_STOP, 0), (F_STOP, 3), (F_STOP, 5),
         (F_STATUS, 0), (F_STATUS, 5),
         (F_FINISH, 0), (F_FINISH, 2), (F_FINISH, 3), (F_FINISH, 5),
+        (F_PAUSE, 0), (F_PAUSE, 3),
+        (F_RESUME, 0), (F_RESUME, 3),
+        (F_MUTE, 0), (F_MUTE, 3),
+        (F_UNMUTE, 0), (F_UNMUTE, 3),
+        (F_MARK, 0), (F_MARK, 3),
         (F_HELP, 0),
     },
     layer_flags=["--recorder", "--yes"],

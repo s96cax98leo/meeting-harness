@@ -60,9 +60,9 @@ class TestCliDispatch(unittest.TestCase):
         self.assertEqual(len(heads), 1, f"段頭行應恰好一行：{USAGE_HEADER}")
         assert_component_equal(self, "forms", parse_usage(r.stdout).forms, SURFACE.forms)
         h = heads[0]
-        body = lines[h + 1:h + 1 + 7]
+        body = lines[h + 1:h + 1 + 12]
         self.assertEqual([re.split(r" {2,}", l[2:], 1)[0] for l in body], SURFACE.forms,
-                         "段頭後應緊接 7 行寫法")
+                         "段頭後應緊接 12 行寫法")
         for l in body:
             self.assertRegex(l, r"^  meeting record.* {2,}\S", "寫法後應接兩個以上空白與說明")
             self.assertNotRegex(re.split(r" {2,}", l[2:], 1)[0], r"--", "寫法後不得接旗標")
@@ -74,9 +74,9 @@ class TestCliDispatch(unittest.TestCase):
         self.assertEqual(len(codes), 1)
         pos = [codes[0].find(f"{c} ") for c in ("0", "2", "3", "4", "5")]
         self.assertTrue(all(p >= 0 for p in pos) and pos == sorted(pos), codes[0])
-        self.assertEqual(lines[h + 8], layer[0])
-        self.assertEqual(lines[h + 9], codes[0])
-        self.assertEqual(lines[h + 10], "", "record 段之後應接一個空行")
+        self.assertEqual(lines[h + 13], layer[0])
+        self.assertEqual(lines[h + 14], codes[0])
+        self.assertEqual(lines[h + 15], "", "record 段之後應接一個空行")
 
     # spec §4.1.3
     def test_existing_exit_codes_unchanged(self):

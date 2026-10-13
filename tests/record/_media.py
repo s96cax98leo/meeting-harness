@@ -1,5 +1,6 @@
 """合成素材（只在 TMPDIR 產生；repo 內不得留下任何媒體檔，spec §4.14.1）。"""
 import json
+import math
 import random
 import shutil
 import subprocess
@@ -533,3 +534,159 @@ def build_e2e_session(base, *, dur=6.0, fps=60, size=(320, 240), nseg=3, seg_siz
     ff("-i", master, "-map", "0:a:0", "-ar", 16000, "-ac", 1, "-c:a", "pcm_s16le", "-f", "wav",
        rec / f"{name} {TS}.wav")
     return sess
+
+
+# ---------- R2（spec §3.11、§3.12、§4.17–§4.19）：暫停、麥克風靜音、標記的合成場次 ----------
+
+def _local(intervals, st, length):
+    """錄製時鐘上的區間 → 該段的段內時間區間（只留與 [st, st+length] 重疊的部分）。"""
+    out = []
+    for a, b in intervals:
+        lo, hi = max(a, st), min(b, st + length + 1.0)
+        if hi > lo:
+            out.append((round(lo - st, 6), round(hi - st, 6)))
+    return out
+
+
+def make_pause_mute_segment(path, *, dur, w=160, h=120, fps=10, mic_zero=(), sys_silent=(), impulses=(),
+                            level_db=-20.0):
+    """R2 段落（影片＋系統聲音 440 Hz 雙聲道＋麥克風 1000 Hz 單聲道，48 kHz、level_db dBFS）。
+    mic_zero／sys_silent：段內時間區間 [(起, 迄)]，該路在區間內為數位 0；impulses：段內秒數，麥克風在該樣本加一個非 0 樣本。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    amp = sine_amp(level_db)
+    mic = f"{amp}*sin(2*PI*1000*t){_silence_factor(mic_zero)}"
+    mic += "".join(f"+0.5*eq(n,{int(round(x * 48000))})" for x in impulses)
+    sysa = f"{amp}*sin(2*PI*440*t){_silence_factor(sys_silent)}"
+    ff("-f", "lavfi", "-i", f"testsrc2=s={w}x{h}:r={fps}:d={dur}",
+       "-f", "lavfi", "-i", f"aevalsrc='{sysa}':s=48000:c=stereo:d={dur}",
+       "-f", "lavfi", "-i", f"aevalsrc='{mic}':s=48000:c=mono:d={dur}",
+       "-map", "0:v", "-map", "1:a", "-map", "2:a",
+       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-b:v", "400k",
+       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac:a:0", "2", "-ac:a:1", "1", "-f", "mov", path)
+    return path
+
+
+def wall_clock(t):
+    """事件的 wallClock（範例：2026-10-12T21:00:00+08:00 起算 t 秒）。"""
+    import datetime
+    base = datetime.datetime(2026, 10, 12, 21, 0, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+    return (base + datetime.timedelta(seconds=round(t))).isoformat()
+
+
+def pause_events(pauses, first_start):
+    """[(t, "pause"|"resume")] → spec §3.11 的 pauseEvents（outputT 以 e2e_check.record_to_output 算）。"""
+    from tests.record.e2e_check import record_to_output
+
+    out = []
+    for t, kind in pauses:
+        e = {"t": round(t, 3), "outputT": 0.0, "wallClock": wall_clock(t), "kind": kind}
+        e["outputT"] = record_to_output(e["t"], first_start, out + [e])
+        out.append(e)
+    return out
+
+
+def mute_events(mutes, first_start, pauses_ev):
+    """[(t, muted)] → spec §3.11 的 micMuteEvents。"""
+    from tests.record.e2e_check import record_to_output
+
+    return [{"t": round(t, 3), "outputT": record_to_output(round(t, 3), first_start, pauses_ev),
+             "wallClock": wall_clock(t), "muted": bool(muted)} for t, muted in mutes]
+
+
+def marker_items(record_ts, first_start, pauses_ev):
+    """recordT 清單 → spec §3.12 的 markers.json 內容（t＝成品時間、label＝標記 N）。"""
+    from tests.record.e2e_check import record_to_output
+
+    return [{"t": record_to_output(round(rt, 3), first_start, pauses_ev), "recordT": round(rt, 3),
+             "wallClock": wall_clock(rt), "label": f"標記 {i}"} for i, rt in enumerate(record_ts, start=1)]
+
+
+def build_pause_mute_session(base, *, segs, mic_zero=(), sys_silent=(), impulses=(), pauses=(), mutes=(),
+                             markers=None, name=SESSION_NAME, wav_len=None, wall=None, w=160, h=120, fps=10):
+    """合成一個「R2 錄製器錄完並 finalize 過」的場次（e2e_check.py --pause-mute 的自我測試用；只在 TMPDIR）。
+
+    segs：[(startedAt, 長度秒)]（錄製時鐘）；mic_zero／sys_silent：錄製時鐘上該路為數位 0 的區間；impulses：錄製時鐘上
+    麥克風的單一非 0 樣本；pauses：[(t, "pause"|"resume")]；mutes：[(t, muted)]；markers：recordT 清單（None＝不建 markers.json）。
+    manifest 的 audioDuration 與 gapStats 用 e2e_check 的 §3.2 量法（暫停邊界扣暫停長度、pausedTotal）；levels 在暫停期間
+    兩路為 null、靜音期間 mic 為 null；錄音/ 的 wav 長度預設＝各段長度和（暫停被剪掉）。影片/ 不建。"""
+    from tests.record.e2e_check import paused_total, pause_pairs, segment_audio_duration
+
+    sess = Path(base) / DAY / name
+    rec, tracks = sess / "錄音", sess / "錄音" / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    first = segs[0][0]
+    pev = pause_events(pauses, first)
+    mev = mute_events(mutes, first, pev)
+    recs = []
+    for i, (st, length) in enumerate(segs, start=1):
+        f = tracks / f"seg-{i:04d}.mov"
+        make_pause_mute_segment(f, dur=length, w=w, h=h, fps=fps, mic_zero=_local(mic_zero, st, length),
+                                sys_silent=_local(sys_silent, st, length),
+                                impulses=[x - st for x in impulses if st <= x < st + length])
+        ad = segment_audio_duration(f)
+        recs.append({"file": f.name, "requestedAt": round(max(st - 0.005, 0.0), 3), "startedAt": round(st, 3),
+                     "finishedAt": round(st + length, 3), "width": w, "height": h, "audioDuration": round(ad, 3)})
+    pairs = [(a, b) for a, b in pause_pairs(pev) if b is not None]
+    gaps = []
+    for a, b in zip(recs, recs[1:]):
+        g = b["startedAt"] - a["startedAt"] - a["audioDuration"]
+        hit = next(((p, r) for p, r in pairs if abs(r - b["startedAt"]) < 0.5), None)
+        if hit:
+            g -= hit[1] - hit[0]
+        gaps.append(round(g, 3))
+    end = recs[-1]["startedAt"] + recs[-1]["audioDuration"]
+    nwin = int(math.ceil(end / 0.5))
+    p_iv = [(a, b if b is not None else math.inf) for a, b in pause_pairs(pev)]
+    m_open, m_iv = None, []
+    for e in mev:
+        if e["muted"] and m_open is None:
+            m_open = e["t"]
+        elif not e["muted"] and m_open is not None:
+            m_iv.append((m_open, e["t"]))
+            m_open = None
+    if m_open is not None:
+        m_iv.append((m_open, math.inf))
+
+    def inside(k, ivs):
+        c = (k + 0.5) * 0.5
+        return any(a <= c < b for a, b in ivs)
+
+    sysl = [None if inside(k, p_iv) else -20.0 for k in range(nwin)]
+    micl = [None if inside(k, p_iv) or inside(k, m_iv) else -30.0 for k in range(nwin)]
+    manifest = {"schemaVersion": 1, "segmentSeconds": 60, "segments": recs,
+                "frameStatus": {"complete": 100, "idle": 0, "blank": 0, "suspended": 0, "started": 1, "stopped": 0},
+                "blackIntervals": [], "levels": {"windowSeconds": 0.5, "system": sysl, "mic": micl},
+                "gapStats": {"boundaries": gaps, "max": max(gaps) if gaps else 0.0, "total": round(sum(gaps), 3),
+                             "wallClock": round(end if wall is None else wall, 3),
+                             "pausedTotal": paused_total(pev)},
+                "outputCanvas": {"width": w, "height": h}, "outputVideoBitrate": 1000000}
+    (tracks / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta = {"schemaVersion": 1,
+            "window": {"windowID": 89596, "app": "Google Chrome", "bundleID": "com.google.Chrome",
+                       "title": "[Stand-up] 範例專案"},
+            "config": dict(CONFIG_SNAPSHOT),
+            "devices": {"input": {"uid": "BuiltInMic", "name": "內建麥克風", "transport": "builtIn"},
+                        "output": {"uid": "BuiltInSpk", "name": "內建揚聲器", "transport": "builtIn"}},
+            "preflight": [], "deviceEvents": [], "audioFormatEvents": [],
+            "pauseEvents": pev, "micMuteEvents": mev}
+    (tracks / "record.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    (rec / "meeting.json").write_text(json.dumps(MEETING_JSON, ensure_ascii=False, indent=2), encoding="utf-8")
+    if markers is not None:
+        body = json.dumps(marker_items(markers, first, pev), ensure_ascii=False, indent=2)
+        (tracks / "markers.json").write_text(body, encoding="utf-8")
+        (rec / "markers.json").write_text(body, encoding="utf-8")
+    length = sum(r["audioDuration"] for r in recs) if wav_len is None else wav_len
+    ff("-f", "lavfi", "-i", f"sine=f=440:sample_rate=16000:d={length:.3f}", "-ac", 1, "-c:a", "pcm_s16le",
+       "-f", "wav", rec / f"{name} {TS}.wav")
+    return sess
+
+
+def write_status_for(session, path, warnings=(), **extra):
+    """場次對應的 record.status.json（e2e_check.py --status 用）。"""
+    st = {"schemaVersion": 1, "runId": "00000000-0000-4000-8000-000000000001", "pid": 4242, "phase": "done",
+          "code": 0, "message": "", "session": str(session), "startedAt": "2026-10-12T21:00:00+08:00",
+          "updatedAt": "2026-10-12T21:05:00+08:00", "segments": 2, "preflight": [], "warnings": list(warnings)}
+    st.update(extra)
+    Path(path).write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+    return Path(path)

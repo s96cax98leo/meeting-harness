@@ -1,0 +1,128 @@
+# 設計審查 R2 靜態證據（HEAD 59d4047；基準 tag meeting-record-r1-baseline）
+
+## §1 第一輪畫面測試與 Info.plist 有沒有改（應為空）
+$ git diff --stat meeting-record-r1-baseline..HEAD -- tools/MeetingRecorder/Tests/TriggerTests.swift tools/MeetingRecorder/Resources/
+
+## §2 R2 statusLine／levelLine 量測（Core 實際輸出；量測程式在 scratchpad，只編 Sources/Core/*.swift，不建置 app）
+[M9 短名] state=recording symbol=record.circle.fill timer=1:02:05
+  statusLine(19 字)=錄製中 1:02:05・1430 會議
+  選單顯示=錄製中 1:02:05・1430 會議
+  levelLine(21 字)=收音：系統聲音 ● 有聲　麥克風 ○ 無聲
+  a11y=MeetingRecorder：錄製中 1:02:05・1430 會議
+[M9 靜音 ≥1h] state=recording symbol=record.circle.fill timer=1:02:05
+  statusLine(27 字)=錄製中 1:02:05（麥克風靜音中）・1430 會議
+  選單顯示=錄製中 1:02:05（麥克風靜音中）・1430 會議
+  levelLine(22 字)=收音：系統聲音 ● 有聲　麥克風 ⊘ 已靜音
+  a11y=MeetingRecorder：錄製中 1:02:05（麥克風靜音中）・1430 會議
+[M9 長名] state=recording symbol=record.circle.fill timer=1:02:05
+  statusLine(43 字)=錄製中 1:02:05・[Stand-up] 範例專案 第三季產品規劃與跨部門協調會議
+  選單顯示=錄製中 1:02:05・[Stand-up] 範例專案 第三季產品規劃與跨部門…
+  levelLine(21 字)=收音：系統聲音 ● 有聲　麥克風 ○ 無聲
+  a11y=MeetingRecorder：錄製中 1:02:05・[Stand-up] 範例專案 第三季產品規劃與跨部門協調會議
+[M6b 短名＋告警2] state=paused symbol=pause.circle.fill timer=1:01:55
+  statusLine(27 字)=已暫停 1:01:55・1430 會議（告警 2 則）
+  選單顯示=已暫停 1:01:55・1430 會議（告警 2 則）
+  levelLine(6 字)=收音：暫停中
+  a11y=MeetingRecorder：已暫停 1:01:55・1430 會議（告警 2 則）
+[M6b 長名＋告警2] state=paused symbol=pause.circle.fill timer=1:01:55
+  statusLine(51 字)=已暫停 1:01:55・[Stand-up] 範例專案 第三季產品規劃與跨部門協調會議（告警 2 則）
+  選單顯示=已暫停 1:01:55・[Stand-up] 範例專案 第三季產品規劃與跨部門…
+  levelLine(6 字)=收音：暫停中
+  a11y=MeetingRecorder：已暫停 1:01:55・[Stand-up] 範例專案 第三季產品規劃與跨部門協調會議（告警 2 則）
+[M7 靜音中＋告警] state=warning symbol=exclamationmark.triangle.fill timer=1:02:05
+  statusLine(31 字)=告警：系統聲音已靜默超過 60 秒，請確認會議 app 的輸出
+  選單顯示=告警：系統聲音已靜默超過 60 秒，請確認會議 app 的輸出
+  levelLine(22 字)=收音：系統聲音 ● 有聲　麥克風 ⊘ 已靜音
+  a11y=MeetingRecorder：告警：系統聲音已靜默超過 60 秒，請確認會議 app 的輸出
+
+## §3 選單項順序與快捷鍵（spec §4.20.6）
+72:        startItem.keyEquivalentModifierMask = [.control, .option, .command]
+73:        pauseItem.keyEquivalentModifierMask = [.control, .option, .command]
+74:        muteItem.keyEquivalentModifierMask = [.control, .option, .command]
+75:        markItem.keyEquivalentModifierMask = [.control, .option, .command]
+76:        prefsItem.keyEquivalentModifierMask = [.command]
+77:        quitItem.keyEquivalentModifierMask = [.command]
+86:        menu.addItem(statusLine)
+87:        menu.addItem(levelItem)
+88:        menu.addItem(detailItem)
+89:        menu.addItem(.separator())
+90:        menu.addItem(startItem)
+91:        menu.addItem(windowsItem)
+92:        menu.addItem(saveToItem)
+93:        menu.addItem(.separator())
+94:        menu.addItem(pauseItem)
+95:        menu.addItem(muteItem)
+96:        menu.addItem(markItem)
+97:        menu.addItem(stopItem)
+98:        menu.addItem(.separator())
+99:        menu.addItem(openItem)
+100:        menu.addItem(lastItem)
+101:        menu.addItem(.separator())
+102:        menu.addItem(prefsItem)
+103:        menu.addItem(quitItem)
+
+## §4 status item：variableLength、template、tint、等寬數字、mic.slash 以 NSTextAttachment 放進 attributedTitle（spec §4.20.4）
+16:    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+200:        image?.isTemplate = true      // template image：淺色／深色 menu bar 都清楚
+202:        button.contentTintColor = (m.state == .recording || m.state == .warning) ? .systemRed : nil
+208:            let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+211:                mic.isTemplate = true
+212:                let attachment = NSTextAttachment()
+213:                attachment.image = mic
+221:        button.setAccessibilityLabel(m.accessibilityText)
+
+## §5 app 沒有 main menu（偏好設定視窗的 ⌘W／Esc 沒有對應的選單項可走）
+$ grep -rn "mainMenu" tools/MeetingRecorder/Sources
+（無）
+22:                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+23:        window.title = "MeetingRecorder 設定"
+35:        NSApp.activate(ignoringOtherApps: true)
+
+## §6 偏好設定的區段標籤與勾選框文字（用語一致性）
+12:    private let loginCheckbox = NSButton(checkboxWithTitle: "登入時自動開啟", target: nil, action: nil)
+15:    private let autoPrepCheckbox = NSButton(checkboxWithTitle: "停止後自動跑前處理", target: nil, action: nil)
+98:            [sectionLabel("預設存檔位置："), rootRow],
+99:            [sectionLabel("快捷鍵："), keys],
+100:            [sectionLabel("開機："), login],
+101:            [sectionLabel("錄完之後："), prep],
+32:    private let prefsItem = NSMenuItem(title: "偏好設定…", action: #selector(openPreferences), keyEquivalent: ",")
+
+## §7 加標記成功後的回饋（menu bar 端）
+376:    @objc private func addMarker() {
+377-        sendControl(.mark, action: "mark")
+378-    }
+379-
+388:        case .ready(let pid, let runId):
+389-            do {
+390-                _ = try requestControl(cmd, home: home, runId: runId)
+391-            } catch {
+392-                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "寫控制檔失敗：\(error.localizedDescription)")
+393-                return
+394-            }
+395-            if kill(pid, SIGUSR1) != 0 {
+396-                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "通知錄製實例失敗（errno \(errno)）")
+397-            }
+398-        }
+$ grep -n "markers" tools/MeetingRecorder/Sources/Core/Trigger.swift
+（無：menuBarModel 沒有讀 status.markers）
+
+## §8 「存到」子選單與偏好設定的路徑顯示（沒有截斷）
+tools/MeetingRecorder/Sources/Trigger/MenuBar.swift:337:            let shown = (path as NSString).abbreviatingWithTildeInPath
+tools/MeetingRecorder/Sources/Trigger/Preferences.swift:49:        l.preferredMaxLayoutWidth = 320
+tools/MeetingRecorder/Sources/Trigger/Preferences.swift:63:        rootLabel.lineBreakMode = .byTruncatingMiddle
+tools/MeetingRecorder/Sources/Trigger/Preferences.swift:64:        rootLabel.preferredMaxLayoutWidth = 320
+tools/MeetingRecorder/Sources/Trigger/Preferences.swift:86:        loginNote.preferredMaxLayoutWidth = 320
+tools/MeetingRecorder/Sources/Trigger/Preferences.swift:124:        rootLabel.stringValue = root.map { ($0 as NSString).abbreviatingWithTildeInPath }
+
+## §9 「錄這個視窗」取清單失敗：固定等滿 10 秒、不說原因
+279:        windowsMenu.addItem(placeholder("讀取視窗清單中…"))
+291:            } else if Date().timeIntervalSince(started) >= 10 {
+295:                self.windowsMenu.addItem(self.placeholder("取不到視窗清單"))
+
+## §10 第一輪 N-1／N-2／N-3 的現況
+tools/MeetingRecorder/Sources/Capture/Commands.swift:171:    // quick-start 沒有終端機看得到 warn：送一則通知（設計審查 N-2）
+tools/MeetingRecorder/Sources/Trigger/MenuBar.swift:120:            if hotKey == nil {   // 被別的 app 佔用等：選單上不顯示用不了的快捷鍵（設計審查 N-3），只記一行
+tools/MeetingRecorder/Sources/Trigger/MenuBar.swift:176:        // 失敗類的完整訊息（停止原因、補救指令）狀態列放不下：另給一項可複製（設計審查 N-1）
+tools/MeetingRecorder/Sources/Core/Trigger.swift:15:    /// 狀態列 toolTip 的完整內容（設計審查 N-1）：失敗類（M2–M4）為完整多行訊息，其餘同 statusLine。
+tools/MeetingRecorder/Sources/Core/Trigger.swift:75:    /// 收尾失敗時首行常被停止原因佔滿、補救指令落在 40 字以後，改放固定短句（設計審查 N-1）。
+tools/MeetingRecorder/Sources/Core/Trigger.swift:193:/// quick-start 沒有終端機：preflight 有 warn 時開錄後送一則通知（設計審查 N-2）。

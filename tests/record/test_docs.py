@@ -13,7 +13,7 @@ SKILL = REPO / ".claude" / "skills" / "meeting-record" / "SKILL.md"
 SUMMARY_SKILL = REPO / ".claude" / "skills" / "meeting-summary" / "SKILL.md"
 README = REPO / "README.md"
 MAIN_SWIFT = REPO / "tools" / "MeetingRecorder" / "Sources" / "main.swift"
-SUBCOMMANDS = {"windows", "preflight", "stop", "status", "finish", "help"}
+SUBCOMMANDS = {"windows", "preflight", "stop", "status", "finish", "help", "pause", "resume", "mute", "unmute", "mark"}
 ALLOWED_FLAGS = {"--window", "--json", "--recorder", "--yes", "--help"}
 SERVICES = ["M+ Meet", "Google Meet", "Teams", "Zoom", "Webex", "騰訊會議"]
 CRASH_LOSS = "最後一段未收尾的 1 分鐘會丟"
@@ -169,7 +169,7 @@ class TestDocs(unittest.TestCase):
         doc = parse_block(read(self, SKILL))
         runs = [(form, fl, None) for form, fl in sorted(doc.form_flags)]
         runs += [(form, None, lf) for form in doc.forms for lf in SURFACE.layer_flags]
-        self.assertEqual(len(runs), 17)
+        self.assertEqual(len(runs), 27)
         for form, fl, lf in runs:
             with self.subTest(form=form, flag=fl, layer=lf):
                 sb = Sandbox(self, windows=fx.WINDOWS_WITH_STAR)

@@ -7,11 +7,14 @@
 #   record.sh preflight --window <id>     只跑開錄前檢查
 #   record.sh stop | status               停止／看狀態
 #   record.sh finish <場次>               把已落盤的段落收尾（冪等）
+#   record.sh pause|resume|mute|unmute|mark  控制錄製中的實例（R2；spec R2-§2.2、§4.16）
 #   record.sh help | -h | --help          印出寫法、旗標與結束碼
 #
 # 錄製器一律用 open -n -a 啟動（TCC 的責任程序才會是 app 本身），不直接執行 app 裡的二進位；
 # 測試以 MH_RECORD_OPEN 換成替身。app 的結果不經 open 回傳，只看 record.status.json（runId 相符才採信）。
 # 本檔不改使用者的預設輸入／輸出裝置。
+# 控制（R2）：在 record.control.lock 的 flock 下改 record.control.json，再送 SIGUSR1 給錄製實例，
+# 等 record.status.json 在 5 秒內反映；舊版錄製器（狀態檔沒有 controlVersion）一律不送訊號。
 set -uo pipefail
 
 HARNESS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,6 +24,9 @@ APP="${MH_RECORDER_APP:-$HOME/Applications/MeetingRecorder.app}"
 STATUS_FILE="${REC_HOME}/record.status.json"
 PID_FILE="${REC_HOME}/record.pid"
 DEFAULTS_FILE="${REC_HOME}/record.defaults.json"
+CONTROL_FILE="${REC_HOME}/record.control.json"
+CONTROL_LOCK="${REC_HOME}/record.control.lock"
+CONTROL_WAIT_SECONDS=5       # 送出控制後等狀態檔反映的上限（spec R2-§2.2）
 FIRST_STATUS_SECONDS=20      # open 之後多久內要看到本次的狀態（spec §4.1.6）
 ASK_AUTOMATION_SECONDS=120   # 帶 --ask-automation 時等 windows 輸出的上限（使用者要讀授權框，spec §3.5）
 
@@ -37,6 +43,11 @@ meeting record — 錄下會議視窗與雙路音訊（系統聲音＋麥克風�
   meeting record stop            結束碼 0 3 5
   meeting record status          結束碼 0 5
   meeting record finish <場次>   結束碼 0 2 3 5
+  meeting record pause           結束碼 0 3
+  meeting record resume          結束碼 0 3
+  meeting record mute            結束碼 0 3
+  meeting record unmute          結束碼 0 3
+  meeting record mark            結束碼 0 3
   meeting record help            結束碼 0
 
 旗標：
@@ -51,14 +62,17 @@ meeting.sh 層旗標：
 結束碼：
   0  成功（status 含「沒有錄製在跑」；finish 含「已完成」）
   2  參數或前提不符（缺參數、根目錄不存在、app 未建置、場次撞名、已有錄製在跑、非互動又沒有 --window）；任何寫法遇到未知的選項、或 ./record 撞名而沒有人可問也回 2
-  3  找不到目標（視窗不存在、沒有錄製在跑、該場次沒有段落）
+  3  找不到目標（視窗不存在、沒有錄製在跑、該場次沒有段落；pause 等五個寫法：沒有可控制的錄製或 5 秒內沒有回應）
   4  開錄前檢查的 hard 項失敗（權限、RMS、磁碟），或開錄後 20 秒內沒有任何狀態（多半是權限）
   5  錄製或收尾出錯，已落盤段落保留（用 meeting record finish 收尾）；status 回 5 表示上次錄製異常中止
 
 說明：
   有 tty 時 meeting record 會依序問根目錄、場次名、會議型態、出席者、要錄的視窗（★ 列是預設）；
   沒有 tty 的呼叫者一定要帶 --window（id 從 meeting record windows 取得）。
-  help 是保留字：根目錄剛好叫 help 時寫 meeting record ./help。
+  pause／resume 暫停與繼續整段錄製（暫停的部分不進成品）；mute／unmute 只靜音麥克風（系統聲音照錄）；
+  mark 在目前位置加一個標記（收尾時寫成 錄音/markers.json）。這五個寫法不接參數；舊版錄製器開的錄製不能控制。
+  help、pause、resume、mute、unmute、mark 是保留字：根目錄剛好叫這些名字時寫 meeting record ./help、
+  meeting record ./pause、./resume、./mute、./unmute、./mark。
   record（錄製）和 meeting render（由 meeting.record.json 重出產物）無關。
   當機救回時，最後一段未收尾的 1 分鐘會丟。
 HELP
@@ -462,15 +476,17 @@ PY
   esac
 }
 
-# stop 之後的摘要：黑畫面區間（mm:ss–mm:ss）與各類告警次數
-stop_summary() {
-  python3 - "${STATUS_FILE}" <<'PY'
-import json, os, sys
+# stop 之後的摘要：黑畫面區間（mm:ss–mm:ss）與各類告警次數；
+# 收尾成功且有暫停或標記時多印一行「暫停 N 次、共 mm:ss；標記 M 個」（R2，spec §4.16.11）
+stop_summary() { # <收尾成功：1|0>
+  python3 - "${STATUS_FILE}" "${1:-0}" <<'PY'
+import json, math, os, sys
 from collections import Counter
 try:
     st = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
     sys.exit(0)
+ok = sys.argv[2] == "1"
 def mmss(t):
     t = int(t or 0)
     return f"{t // 60:02d}:{t % 60:02d}"
@@ -501,6 +517,29 @@ if counts:
         print(f"  {NAMES.get(k, k)}：{n} 次")
 else:
     print("告警次數：沒有")
+if ok:
+    try:
+        meta = json.load(open(os.path.join(sess, "錄音", "tracks", "record.meta.json"), encoding="utf-8"))
+    except Exception:
+        meta = {}
+    ev = meta.get("pauseEvents") if isinstance(meta, dict) else None
+    ev = [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
+    n_pause = sum(1 for e in ev if e.get("kind") == "pause")
+    markers = st.get("markers")
+    markers = markers if isinstance(markers, int) and not isinstance(markers, bool) else 0
+    if n_pause > 0 or markers > 0:
+        total, last = 0.0, None  # 同 Core pausedTotal：只計已配對的暫停
+        for e in ev:
+            t = e.get("t")
+            if not isinstance(t, (int, float)) or isinstance(t, bool):
+                continue
+            if e.get("kind") == "pause":
+                last = t
+            elif e.get("kind") == "resume":
+                if last is not None:
+                    total += t - last
+                last = None
+        print(f"暫停 {n_pause} 次、共 {mmss(math.floor(round(total, 3)))}；標記 {markers} 個")
 PY
 }
 
@@ -549,7 +588,7 @@ PY
     fi
     sleep 0.2
   done
-  stop_summary
+  if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then stop_summary 1; else stop_summary 0; fi
   if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then
     echo "✓ 已停止並收尾完成。"
     return 0
@@ -566,7 +605,7 @@ cmd_status() {
     return 0
   fi
   python3 - "${STATUS_FILE}" "${PID_FILE}" <<'PY'
-import datetime, json, os, sys, time
+import datetime, json, math, os, sys, time
 st_path, pid_path = sys.argv[1], sys.argv[2]
 try:
     st = json.load(open(st_path, encoding="utf-8"))
@@ -587,16 +626,49 @@ except (OSError, ValueError):
 phase, code, sess = st.get("phase"), st.get("code", 0), st.get("session") or ""
 msg = (st.get("message") or "").strip()
 LABEL = {"preflight": "開錄前檢查中", "recording": "錄製中", "stopping": "停止中", "finalizing": "收尾中"}
+def parse_iso(s):
+    if not isinstance(s, str):
+        return None
+    for fn in (datetime.datetime.fromisoformat, lambda x: datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")):
+        try:
+            return fn(s).timestamp()
+        except ValueError:
+            pass
+    return None
+def clock_text(sec):  # 同 Core clockText：< 3600 → mm:ss；≥ 3600 → h:mm:ss
+    sec = max(0, int(sec))
+    h, r = divmod(sec, 3600)
+    return f"{h}:{r // 60:02d}:{r % 60:02d}" if h else f"{r // 60:02d}:{r % 60:02d}"
 if phase in LABEL:
     if alive(pid):
         line = LABEL[phase]
-        try:
-            t = datetime.datetime.strptime(st["startedAt"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
-            e = int(time.time() - t)
-            line += f" {e // 60:02d}:{e % 60:02d}"
-        except Exception:
-            pass
+        rs = parse_iso(st.get("recordingStartedAt"))
+        if rs is not None:  # R2（§4.16.9、§6 第 94 條）：扣掉暫停的錄製時間（同 Core recordedSeconds）
+            now = time.time()
+            e = now - rs - float(st.get("pausedSeconds") or 0)
+            pa = parse_iso(st.get("pausedAt"))
+            if pa is not None:
+                e -= now - pa
+            line += " " + clock_text(math.floor(max(0, e)))
+        else:
+            try:
+                t = datetime.datetime.strptime(st["startedAt"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+                e = int(time.time() - t)
+                line += f" {e // 60:02d}:{e % 60:02d}"
+            except Exception:
+                pass
         print(f"{line}　場次：{sess}　已落盤 {st.get('segments', 0)} 段")
+        extra = []
+        if st.get("paused") is True:
+            pa = parse_iso(st.get("pausedAt"))
+            extra.append("暫停中" + (f"（已暫停 {clock_text(time.time() - pa)}）" if pa is not None else ""))
+        if st.get("micMuted") is True:
+            extra.append("麥克風靜音中")
+        n = st.get("markers")
+        if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+            extra.append(f"標記 {n} 個")
+        if extra:
+            print("  " + "、".join(extra))
         alerts = [w for w in st.get("warnings") or [] if w.get("kind") not in ("device_change", "audio_format_change")]
         if alerts:
             print(f"  ⚠ 告警 {len(alerts)} 次；最新：{alerts[-1].get('message', '')}")
@@ -628,7 +700,8 @@ cmd_finish() {
   if [[ $# -gt 1 ]]; then shift; err "✗ 多了參數：$*"; return 2; fi
   if [[ ! -d "${sess}" ]]; then err "✗ 找不到場次目錄：${sess}"; return 2; fi
   sess="$(cd "${sess}" && pwd)"
-  if ! ls "${sess}/錄音/tracks"/seg-*.mov >/dev/null 2>&1; then
+  # 原始段落在收尾成功後會刪掉（spec §6 第 111 條）：有 finalize.json 就交給 _record_finalize.py 判斷「已完成」
+  if ! ls "${sess}/錄音/tracks"/seg-*.mov >/dev/null 2>&1 && [[ ! -f "${sess}/錄音/tracks/finalize.json" ]]; then
     err "✗ 這個場次沒有錄製段落（${sess}/錄音/tracks/seg-*.mov）。"
     return 3
   fi
@@ -640,6 +713,162 @@ cmd_finish() {
   esac
 }
 
+# R2 控制（spec R2-§2.2、§3.9、§3.14 的 controlAvailability／requestControl、§4.16.5–§4.16.8）。
+# 一支 python 做完：判斷可否控制 → 取 flock 寫控制檔 → 需要時送 SIGUSR1 → 等狀態檔反映。
+# 結束碼：0 已套用（或本來就是目標狀態）；3 沒有可控制的錄製或沒有回應。
+cmd_control() { # <pause|resume|mute|unmute|mark> 參數…
+  local word="$1"
+  shift
+  check_unknown "" "" "$@" || return 2
+  if [[ $# -gt 0 ]]; then err "✗ ${word} 不接參數：$*"; return 2; fi
+  python3 - "${word}" "${STATUS_FILE}" "${PID_FILE}" "${CONTROL_FILE}" "${CONTROL_LOCK}" "${CONTROL_WAIT_SECONDS}" <<'PY'
+import datetime, fcntl, json, math, os, signal, sys, tempfile, time
+word, st_path, pid_path, ctl_path, lock_path, wait_s = sys.argv[1:7]
+wait_s = float(wait_s)
+FIELD = {"pause": ("paused", True), "resume": ("paused", False),
+         "mute": ("micMuted", True), "unmute": ("micMuted", False)}
+
+
+def err(msg):
+    print(msg, file=sys.stderr)
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, TypeError):
+        return False
+
+
+def parse_iso(s):
+    if not isinstance(s, str):
+        return None
+    for fn in (datetime.datetime.fromisoformat, lambda x: datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")):
+        try:
+            return fn(s).timestamp()
+        except ValueError:
+            pass
+    return None
+
+
+def clock_text(sec):  # 同 Core clockText：< 3600 → mm:ss；≥ 3600 → h:mm:ss
+    sec = max(0, int(sec))
+    h, r = divmod(sec, 3600)
+    return f"{h}:{r // 60:02d}:{r % 60:02d}" if h else f"{r // 60:02d}:{r % 60:02d}"
+
+
+def recorded(st):  # 同 Core recordedSeconds；舊狀態檔沒有 recordingStartedAt 時用 startedAt
+    start = parse_iso(st.get("recordingStartedAt")) or parse_iso(st.get("startedAt"))
+    if start is None:
+        return None
+    now = time.time()
+    e = now - start - float(st.get("pausedSeconds") or 0)
+    pa = parse_iso(st.get("pausedAt"))
+    if pa is not None:
+        e -= now - pa
+    return max(0, math.floor(e))
+
+
+# 1. 可否控制（§3.14 controlAvailability 的順序；回 3 時不碰控制檔）
+st = load(st_path)
+try:
+    rpid = int("".join(ch for ch in open(pid_path).read() if ch.isdigit()))
+except (OSError, ValueError):
+    rpid = None
+if st is None or rpid is None or not alive(rpid):
+    err("✗ 沒有錄製在跑。")
+    sys.exit(3)
+if st.get("pid") != rpid:
+    err("✗ 沒有錄製在跑（狀態檔不是這個錄製實例的）。")
+    sys.exit(3)
+phase = st.get("phase")
+if phase == "preflight":
+    err("✗ 還在開錄前檢查，開始錄製後才能控制。")
+    sys.exit(3)
+if phase in ("stopping", "finalizing"):
+    err("✗ 正在收尾，不能再控制。")
+    sys.exit(3)
+if phase != "recording":
+    err("✗ 沒有錄製在跑。")
+    sys.exit(3)
+cv = st.get("controlVersion")
+if isinstance(cv, bool) or not isinstance(cv, int) or cv < 1:
+    err("✗ 這場是舊版錄製器開的錄製，不能暫停／靜音／標記（重建錄製器後開的下一場才能用）。")
+    sys.exit(3)
+run_id = st.get("runId")
+
+# 2. 在 record.control.lock 的 flock 下 read-modify-write（requestControl：讀不到或 runId 不同就從 fresh 起算）
+home = os.path.dirname(ctl_path) or "."
+os.makedirs(home, exist_ok=True)
+with open(lock_path, "a") as lk:
+    fcntl.flock(lk, fcntl.LOCK_EX)
+    cur = load(ctl_path) or {}
+    if cur.get("runId") != run_id or cur.get("schemaVersion") != 1:
+        cur = {}
+    ctl = {"schemaVersion": 1, "runId": run_id, "paused": cur.get("paused") is True,
+           "micMuted": cur.get("micMuted") is True,
+           "markerSeq": cur.get("markerSeq") if isinstance(cur.get("markerSeq"), int) else 0}
+    if word == "mark":
+        ctl["markerSeq"] += 1
+    else:
+        ctl[FIELD[word][0]] = FIELD[word][1]
+    fd, tmp = tempfile.mkstemp(dir=home, prefix=".record.control.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(ctl, fh, ensure_ascii=False)
+    os.replace(tmp, ctl_path)
+
+# 3. 本來就是目標狀態 → 不送訊號、直接回 0
+if word != "mark" and (st.get(FIELD[word][0]) is True) == FIELD[word][1]:
+    print({"pause": "已經是暫停中", "resume": "本來就在錄製中", "mute": "麥克風本來就是靜音",
+           "unmute": "麥克風本來就沒有靜音"}[word])
+    sys.exit(0)
+
+
+def reflected(s):
+    if not s or s.get("runId") != run_id:
+        return False
+    if word == "mark":
+        n = s.get("markers")
+        return isinstance(n, int) and not isinstance(n, bool) and n >= ctl["markerSeq"]
+    return s.get(FIELD[word][0]) is FIELD[word][1]
+
+
+# 4. 送 SIGUSR1，等狀態檔在時限內反映
+try:
+    os.kill(rpid, signal.SIGUSR1)
+except OSError:
+    err("✗ 沒有錄製在跑（送不到錄製器）。")
+    sys.exit(3)
+deadline = time.monotonic() + wait_s
+while True:
+    s = load(st_path)
+    if reflected(s):
+        break
+    if time.monotonic() >= deadline:
+        err(f"✗ 錄製器 {wait_s:g} 秒內沒有回應（狀態檔沒有反映）。用 meeting.sh record status 確認。")
+        sys.exit(3)
+    time.sleep(0.1)
+if word == "pause":
+    e = recorded(s)
+    print("已暫停" + (f"（已錄 {clock_text(e)}）" if e is not None else ""))
+elif word == "mark":
+    print(f"已加標記 {ctl['markerSeq']}")
+else:
+    print({"resume": "已繼續錄製", "mute": "麥克風已靜音", "unmute": "麥克風已取消靜音"}[word])
+sys.exit(0)
+PY
+}
+
 sub="${1:-}"
 case "${sub}" in
   help|-h|--help) shift; check_unknown "" "" "$@" || exit 2; usage_help; exit 0 ;;
@@ -648,5 +877,6 @@ case "${sub}" in
   stop)      shift; cmd_stop "$@"; exit $? ;;
   status)    shift; cmd_status "$@"; exit $? ;;
   finish)    shift; cmd_finish "$@"; exit $? ;;
+  pause|resume|mute|unmute|mark) shift; cmd_control "${sub}" "$@"; exit $? ;;
   *)         cmd_start "$@"; exit $? ;;
 esac

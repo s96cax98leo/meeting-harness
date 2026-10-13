@@ -13,6 +13,7 @@ from tests.record import _media as m
 from tests.record._helpers import (FAILING_FFMPEG, FAKE_RECORDER, MEETING_SH, PromptResponder, Sandbox,
                                    app_args, dead_pid, flag_value, run_pty)
 from tests.record.surface import F_FINISH, F_HELP, F_PREFLIGHT, F_ROOT, F_STATUS, F_STOP, F_WINDOWS, SURFACE, form_argv
+from tests.record.surface import F_MARK, F_MUTE, F_PAUSE, F_RESUME, F_UNMUTE
 
 W = ["--window", "41001"]
 
@@ -21,7 +22,7 @@ def case(form, expect, scenario=None, setup=None, extra_args=()):
     return {"form": form, "scenario": scenario, "setup": setup, "extra_args": list(extra_args), "expect": expect}
 
 
-# spec §2.4.7：{(form, expect)} 必須等於 SURFACE.form_codes（22 組）；不含通則的 2（未知選項、./record 撞名）。
+# spec §2.4.7：{(form, expect)} 必須等於 SURFACE.form_codes（32 組）；不含通則的 2（未知選項、./record 撞名）。
 EXIT_CODE_CASES = [
     case(F_ROOT, 0, "recording", None, W),
     case(F_ROOT, 2, None, "app_missing", W),
@@ -50,6 +51,17 @@ EXIT_CODE_CASES = [
     case(F_FINISH, 3, None, "session_no_segments"),
     case(F_FINISH, 5, None, "ffmpeg_fails"),
     case(F_HELP, 0),
+    # R2（spec §4.16.5、§4.16.6、§6 第 77 條）：五個寫法 × 0／3；0＝替身以 FAKE_CONTROL=1 錄製中，3＝沒有錄製在跑
+    case(F_PAUSE, 0, None, "running_controllable"),
+    case(F_RESUME, 0, None, "running_controllable"),
+    case(F_MUTE, 0, None, "running_controllable"),
+    case(F_UNMUTE, 0, None, "running_controllable"),
+    case(F_MARK, 0, None, "running_controllable"),
+    case(F_PAUSE, 3, None, None),
+    case(F_RESUME, 3, None, None),
+    case(F_MUTE, 3, None, None),
+    case(F_UNMUTE, 3, None, None),
+    case(F_MARK, 3, None, None),
 ]
 
 
@@ -93,6 +105,9 @@ def run_exit_case(tc, c, timeout=180):
         start_fake_recorder(tc, sb, 0)
     elif setup == "running_stop_fails_5":
         start_fake_recorder(tc, sb, 5)
+    elif setup == "running_controllable":  # R2 §4.16.5：可控制的錄製實例替身
+        sb.extra_env["FAKE_CONTROL"] = "1"
+        start_fake_recorder(tc, sb, 0)
     elif setup == "crashed":
         write_crashed_status(sb, sb.root / m.DAY / m.SESSION_NAME)
     elif setup not in (None, "app_missing", "root_missing", "session_missing"):

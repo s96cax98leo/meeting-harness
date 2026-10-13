@@ -20,8 +20,24 @@
 """
 import sys, os, json, math, datetime
 
-RENAME_TH = 0.75   # 這之上才改名（_merge_speakers.py 的門檻是 0.7，留一點餘裕）
-HINT_TH = 0.60     # 這之上留作線索
+RENAME_TH_DEFAULT = 0.75   # 這之上才改名（_merge_speakers.py 的門檻是 0.7，留一點餘裕）
+HINT_TH_DEFAULT = 0.60     # 這之上留作線索
+
+def harness_config(section):
+    """讀 repo 根的 config.json 的某一段（讀不到回 {}）；環境變數仍優先於這裡的值。"""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = json.load(f).get(section)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_VP = harness_config("voiceprint")
+RENAME_TH = float(_VP.get("renameThreshold", RENAME_TH_DEFAULT))
+HINT_TH = float(_VP.get("hintThreshold", HINT_TH_DEFAULT))
+ENABLED = _VP.get("enabled", True) is not False
 
 def vault_dir(harness):
     return os.path.join(harness, "vault", "voiceprints")
@@ -56,6 +72,9 @@ def session_embeddings(sess):
     return (json.load(open(p, encoding="utf-8")) or {}).get("speakers", {})
 
 def cmd_match(sess, harness):
+    if not ENABLED:   # config.json voiceprint.enabled=false：不比對（生物特徵資料，使用者可關掉）
+        print(json.dumps({"status": "skip", "reason": "config.json 的 voiceprint.enabled 是 false"},
+                         ensure_ascii=False)); return 0
     emb = session_embeddings(sess)
     if not emb:
         print(json.dumps({"status": "skip", "reason": "此場次沒有 錄音/embeddings.json"},
@@ -72,17 +91,18 @@ def cmd_match(sess, harness):
         except Exception: existing = {}
 
     matched, hints = [], []
-    used = set()
-    for tag, vec in emb.items():
-        best, best_cos = None, 0.0
-        for name, rec in prints.items():
-            c = cosine(vec, rec["vector"])
-            if c > best_cos:
-                best_cos, best = c, name
-        if not best or best_cos < HINT_TH:
+    # 全域依信心由高到低指派（ultrareview）：同一個名字只給信心最高的 SPEAKER，
+    # 被搶走的 SPEAKER 還可以拿自己的次佳名字；不再依 embeddings.json 的順序先到先得
+    pairs = sorted(((cosine(vec, rec["vector"]), tag, name)
+                    for tag, vec in emb.items() for name, rec in prints.items()),
+                   key=lambda x: -x[0])
+    used, done_tags = set(), set()
+    for best_cos, tag, best in pairs:
+        if best_cos < HINT_TH:
+            break
+        if tag in done_tags or best in used:      # 同一個人不會同時是兩個 SPEAKER
             continue
-        if best in used:      # 同一個人不會同時是兩個 SPEAKER
-            continue
+        done_tags.add(tag)
         src = prints[best].get("sources", ["?"])[0]
         # apply 明確標出「這個名字可不可以直接套用」。
         # 不用信心值自己去撞下游門檻——_merge_speakers.py 的門檻是 0.7，
@@ -119,6 +139,10 @@ def cmd_add(sess, tag, name, harness):
         rec = json.load(open(p, encoding="utf-8"))
         n = int(rec.get("samples", 1))
         old = rec["vector"]
+        if len(old) != len(vec):   # 換了分離模型：維度不同不得硬平均（zip 會靜默截斷，ultrareview）
+            print(f"✗ {name} 的聲紋是 {len(old)} 維，這個場次的語者向量是 {len(vec)} 維（分離模型不同）；"
+                  f"先 voiceprint remove {name} 再重新建檔", file=sys.stderr)
+            return 2
         rec["vector"] = [(o * n + v) / (n + 1) for o, v in zip(old, vec)]   # 累積平均
         rec["samples"] = n + 1
         rec.setdefault("sources", []).append(src)

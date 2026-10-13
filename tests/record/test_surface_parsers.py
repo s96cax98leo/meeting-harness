@@ -29,6 +29,11 @@ VALID_BLOCK = f"""前言
 | `meeting record stop` | — | 0 3 5 |
 | `meeting record status` | — | 0 5 |
 | `meeting record finish <場次>` | — | 0 2 3 5 |
+| `meeting record pause` | — | 0 3 |
+| `meeting record resume` | — | 0 3 |
+| `meeting record mute` | — | 0 3 |
+| `meeting record unmute` | — | 0 3 |
+| `meeting record mark` | — | 0 3 |
 | `meeting record help` | — | 0 |
 {BLOCK_END}
 
@@ -47,6 +52,11 @@ VALID_USAGE = """meeting — 說明
   meeting record stop            停止並收尾
   meeting record status          看錄製狀態
   meeting record finish <場次>   補做收尾
+  meeting record pause           暫停錄製
+  meeting record resume          繼續錄製
+  meeting record mute            麥克風靜音
+  meeting record unmute          取消麥克風靜音
+  meeting record mark            加標記
   meeting record help            完整說明
   層旗標：--recorder（明確要錄製）、--yes（沒有人可問）
   結束碼：0 成功、2 參數、3 找不到、4 檢查失敗、5 錄製出錯
@@ -57,10 +67,10 @@ VALID_USAGE = """meeting — 說明
 
 class TestSurfaceParsers(unittest.TestCase):
     def test_surface_constant_shape(self):
-        # spec §2.4.2：7 個寫法、3 組寫法旗標、22 組結束碼
-        self.assertEqual(len(SURFACE.forms), 7)
+        # spec §2.4.2：12 個寫法、3 組寫法旗標、32 組結束碼（R2 前為 7、22；spec §6 第 77 條）
+        self.assertEqual(len(SURFACE.forms), 12)
         self.assertEqual(len(SURFACE.form_flags), 3)
-        self.assertEqual(len(SURFACE.form_codes), 22)
+        self.assertEqual(len(SURFACE.form_codes), 32)
         self.assertEqual(SURFACE.layer_flags, ["--recorder", "--yes"])
         self.assertEqual(SURFACE.codes, [0, 2, 3, 4, 5])
         self.assertEqual({c for f, c in SURFACE.form_codes if f == "meeting record status"}, {0, 5})

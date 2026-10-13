@@ -17,12 +17,14 @@
      edit list，priming 與補零變成真的音訊、逐段延後；spec §4.6.20），以 -enc_time_base demux 確認可完整解碼、
      以 ffprobe 確認每條軌 dts 嚴格遞增；
   5. 由串接結果抽 wav（.part）；
-  6. 影片 rename 進 影片/；manifest.json 寫回 gapStats、各段 audioDuration、outputCanvas、outputVideoBitrate（其他鍵不動）；
+  6. 影片 rename 進 影片/；manifest.json 寫回 gapStats（R2：暫停邊界扣暫停長度、pausedTotal，spec §3.11）、各段 audioDuration、outputCanvas、outputVideoBitrate（其他鍵不動）；
      寫 finalize.json；
   7. 最後才把 wav rename 進 錄音/（同一檔案系統，原子）——場次在這一刻才存在，finalize 期間不會被 status／prep 列出；
   8. 清掉 .finalize/；.pipeline-state.json 記 record: done。
+R2：一開始（已完成判斷之前）把 tracks/markers.json 原樣複製成 錄音/markers.json（內容相同不重寫，spec §4.19.3）。
 冪等：finalize.json 存在、兩個輸出都在、輸入段（檔名＋大小）相同 → 印「已完成」回 0，不寫任何檔。
-tracks/ 的段落永遠保留，不刪。
+收尾成功後刪 tracks/seg-*.mov（manifest、record.meta.json、finalize.json 留著；keep-segments 或 MH_KEEP_SEGMENTS=1 時保留，spec §6 第 111 條）。
+段落只刪掉一部分（刪檔失敗）的場次：剩下的段落都在 finalize.json 的輸入裡、成品都在 → 視為已完成並重試清除，不拿殘缺段落重做。
 
 結束碼：0 完成或已完成；2 參數錯；3 沒有段落或全部讀不到；5 失敗（段落保留）。
 環境變數：MH_FFMPEG（ffmpeg 路徑，可為測試替身）、MH_FFPROBE、MH_RECORD_HOME（讀 record.defaults.json 的 ffmpeg 路徑）。
@@ -60,8 +62,59 @@ def say(msg):
     print(msg, flush=True)
 
 
+def record_home():
+    return os.environ.get("MH_RECORD_HOME") or os.path.expanduser("~/.meeting-harness")
+
+
+def keep_segments():
+    """收尾成功後是否保留原始段落：MH_KEEP_SEGMENTS=1 或 <record home>/keep-segments 存在（實機驗收要用段落時）。"""
+    return os.environ.get("MH_KEEP_SEGMENTS") == "1" or os.path.exists(os.path.join(record_home(), "keep-segments"))
+
+
+def cleanup_segments(segs):
+    """收尾成功（成品已通過長度檢查、wav 已原子出現）後刪掉原始段落：內容與 影片/ 重疊，空間加倍（spec §6 第 111 條）。
+    manifest、record.meta.json、levels、finalize.json 留著。"""
+    if keep_segments():
+        say("  保留原始段落（keep-segments）")
+        return
+    removed = 0
+    for p in segs:
+        try:
+            os.remove(p)
+            removed += 1
+        except OSError as e:
+            say(f"  ⚠ 刪不掉 {os.path.basename(p)}：{e}")
+    say(f"  已刪除原始段落 {removed} 個（成品已驗證；內容與 影片/ 重疊）")
+
+
+def finalized_without_segments(sess, tracks):
+    """原始段落已在收尾成功後刪掉：finalize.json 記的成品都還在 → 已完成。"""
+    fin = load_json(os.path.join(tracks, "finalize.json"), None)
+    if not isinstance(fin, dict):
+        return None
+    outs = fin.get("outputs") or {}
+    paths = [os.path.join(sess, outs.get(k, "")) for k in ("video", "audio")]
+    if all(outs.get(k) for k in ("video", "audio")) and all(os.path.isfile(p) for p in paths):
+        return paths
+    return None
+
+
+def finalized_with_partial_cleanup(sess, tracks, segs):
+    """上次收尾成功、清除段落時只刪掉一部分：剩下的段落是 finalize.json 輸入的真子集、成品都在。
+    這時不得用殘缺的段落重做收尾、覆蓋好的成品（ultrareview）。"""
+    done = finalized_without_segments(sess, tracks)
+    if not done:
+        return None
+    fin = load_json(os.path.join(tracks, "finalize.json"), None) or {}
+    recorded = [(d.get("file"), d.get("size")) for d in fin.get("inputs") or [] if isinstance(d, dict)]
+    now = [(d["file"], d["size"]) for d in input_list(segs)]
+    if now and len(now) < len(recorded) and set(now) <= set(recorded):
+        return done
+    return None
+
+
 def defaults_ffmpeg():
-    home = os.environ.get("MH_RECORD_HOME") or os.path.expanduser("~/.meeting-harness")
+    home = record_home()
     try:
         with open(os.path.join(home, "record.defaults.json"), encoding="utf-8") as f:
             v = json.load(f).get("ffmpeg")
@@ -257,6 +310,84 @@ def already_done(sess, tracks, segs):
             and fin.get("inputs") == input_list(segs):
         return paths
     return None
+
+
+def paused_total(events):
+    """spec §3.14 pausedTotal：Σ（resume.t − 緊接在前的 pause.t）；沒配對的 pause、沒有前導 pause 的 resume 不計；小數 3 位。"""
+    total, last_pause = 0.0, None
+    for e in events:
+        t = num(e.get("t"))
+        if t is None:
+            continue
+        if e.get("kind") == "pause":
+            last_pause = t
+        elif e.get("kind") == "resume":
+            if last_pause is not None:
+                total += t - last_pause
+            last_pause = None
+    return round(total, 3)
+
+
+def pause_events_of(tracks):
+    """record.meta.json 的 pauseEvents（R2，§3.11）；沒有或格式不對 → []。"""
+    meta = load_json(os.path.join(tracks, "record.meta.json"), {})
+    ev = meta.get("pauseEvents") if isinstance(meta, dict) else None
+    return [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
+
+
+def has_pause_events_key(tracks):
+    """record.meta.json 有 pauseEvents 鍵（R2 錄製器開錄就寫 []）。"""
+    meta = load_json(os.path.join(tracks, "record.meta.json"), {})
+    return isinstance(meta, dict) and "pauseEvents" in meta
+
+
+def pause_length_before(events, resume_t):
+    """邊界上那筆 resume 的暫停長度（resume.t − 前一筆 pause.t）；找不到前導 pause → 0。"""
+    for k, e in enumerate(events):
+        if e.get("kind") == "resume" and num(e.get("t")) == resume_t:
+            for prev in reversed(events[:k]):
+                if prev.get("kind") == "pause" and num(prev.get("t")) is not None:
+                    return resume_t - num(prev["t"])
+                if prev.get("kind") == "resume":
+                    return 0.0
+            return 0.0
+    return 0.0
+
+
+def boundary_gaps(used, events):
+    """spec §3.2＋§3.11：g_k＝startedAt_{k+1} − startedAt_k − audioDuration_k；暫停邊界（有 resume.t 與
+    startedAt_{k+1} 相差 < 0.5 秒）再扣掉該次暫停長度。"""
+    resumes = [num(e.get("t")) for e in events if e.get("kind") == "resume" and num(e.get("t")) is not None]
+    gaps = []
+    for k in range(len(used) - 1):
+        nxt = used[k + 1]["startedAt"]
+        g = nxt - used[k]["startedAt"] - used[k]["audioDuration"]
+        near = [r for r in resumes if abs(r - nxt) < 0.5]
+        if near:
+            r = min(near, key=lambda x: abs(x - nxt))
+            g -= pause_length_before(events, r)
+        gaps.append(round(g, 3))
+    return gaps
+
+
+def copy_markers(rec, tracks):
+    """spec §3.12、§4.19.3：tracks/markers.json 原樣複製成 錄音/markers.json；內容相同就不重寫（mtime 不變）。"""
+    src = os.path.join(tracks, "markers.json")
+    if not os.path.isfile(src):
+        return
+    dst = os.path.join(rec, "markers.json")
+    with open(src, "rb") as f:
+        data = f.read()
+    try:
+        with open(dst, "rb") as f:
+            if f.read() == data:
+                return
+    except OSError:
+        pass
+    tmp = dst + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, dst)
 
 
 def session_stamp(segs, fin_old):
@@ -494,9 +625,20 @@ def finalize(sess):
     segs = sorted(os.path.join(tracks, f) for f in os.listdir(tracks)
                   if f.startswith("seg-") and f.endswith(".mov"))
     if not segs:
+        done = finalized_without_segments(sess, tracks)
+        if done:
+            copy_markers(rec, tracks)
+            say(f"✓ 已完成（不重做；原始段落已在收尾時清除）：{done[0]}")
+            return 0
         print(f"✗ 這個場次沒有錄製段落（seg-*.mov）：{tracks}", file=sys.stderr)
         return 3
 
+    copy_markers(rec, tracks)  # 在 already_done 之前（已完成的場次之後才出現 markers 也要補上，§4.19.3）
+    partial = finalized_with_partial_cleanup(sess, tracks, segs)
+    if partial:
+        say(f"✓ 已完成（不重做；上次清除原始段落只刪了一部分，重試清除）：{partial[0]}")
+        cleanup_segments(segs)
+        return 0
     done = already_done(sess, tracks, segs)
     if done:
         say(f"✓ 已完成（不重做）：{done[0]}")
@@ -599,13 +741,16 @@ def finalize(sess):
             s["audioDuration"] = round(ads[s["file"]], 3) if ads[s["file"]] is not None else None
     used = [s for s in segments if isinstance(s, dict) and s.get("file") in ads
             and num(s.get("startedAt")) is not None and s.get("audioDuration") is not None]
-    gaps = [round(used[k + 1]["startedAt"] - used[k]["startedAt"] - used[k]["audioDuration"], 3)
-            for k in range(len(used) - 1)]
+    pevents = pause_events_of(tracks)
+    gaps = boundary_gaps(used, pevents)
     wall = num(segments[-1].get("finishedAt")) if segments and isinstance(segments[-1], dict) else None
     if wall is None:
         wall = round(sum(a for a in ads.values() if a), 3)
     manifest["gapStats"] = {"boundaries": gaps, "max": max(gaps) if gaps else 0.0,
                             "total": round(sum(gaps), 3), "wallClock": wall}
+    # pausedTotal 只寫給 R2 錄製器的場次（meta 有 pauseEvents 鍵）；第一輪場次維持 4 個鍵（spec §6 第 100 條）
+    if has_pause_events_key(tracks):
+        manifest["gapStats"]["pausedTotal"] = paused_total(pevents)
     manifest["outputCanvas"] = {"width": W, "height": H}
     manifest["outputVideoBitrate"] = bitrate
     write_json_atomic(manifest_path, manifest)
@@ -620,6 +765,7 @@ def finalize(sess):
     # 8. 清暫存、記狀態
     shutil.rmtree(work, ignore_errors=True)
     set_state_done(sess)
+    cleanup_segments(segs)
     say(f"✓ 影片：{video_out}")
     say(f"✓ 錄音：{wav_out}")
     if gaps:
