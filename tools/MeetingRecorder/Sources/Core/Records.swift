@@ -2,6 +2,8 @@
 //
 // JSON 鍵名＝Swift 屬性名（不做 snake_case 轉換）。Optional 為 nil 時一律寫 null、不省略鍵：
 // 合成的 Codable 對 Optional 用 encodeIfPresent（會省略鍵），所以含 Optional 的型別各自實作 encode(to:)。
+// 例外（spec §3.10、§3.11、§6 第 79 條）：RecordStatus、RecordMeta、GapStats 的 R2 選用欄位 nil 時「省略鍵」，
+// 靠的正是合成 Codable 的 encodeIfPresent——這三個型別不得改成自訂 encode(to:)，否則第一輪的鍵集合會變。
 import Foundation
 
 enum RecordPhase: String, Codable {
@@ -41,6 +43,30 @@ struct RecordStatus: Codable, Equatable {
     var segments: Int
     var preflight: [PreflightResult]
     var warnings: [RecordWarning]
+    // ---- R2 選用欄位（spec §3.10）：nil 時省略鍵；舊版錄製器的狀態檔沒有這些鍵 ----
+    var controlVersion: Int? = nil
+    var recordingStartedAt: String? = nil
+    var paused: Bool? = nil
+    var micMuted: Bool? = nil
+    var pausedSeconds: Double? = nil
+    var pausedAt: String? = nil
+    var markers: Int? = nil
+    var recentLevels: RecentLevels? = nil
+}
+
+/// spec §3.10：status 的 recentLevels。JSON 鍵恰為 3 個；system／mic 為 nil 時寫 null（不省略）。
+struct RecentLevels: Codable, Equatable {
+    var windowSeconds: Double
+    var system: Double?
+    var mic: Double?
+
+    enum CodingKeys: String, CodingKey { case windowSeconds, system, mic }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(windowSeconds, forKey: .windowSeconds)
+        try c.encode(system, forKey: .system)
+        try c.encode(mic, forKey: .mic)
+    }
 }
 
 struct SegmentRecord: Codable, Equatable {
@@ -80,6 +106,7 @@ struct GapStats: Codable, Equatable {
     var max: Double
     var total: Double
     var wallClock: Double
+    var pausedTotal: Double? = nil      // R2（spec §3.11）：finalize 寫；nil 時省略鍵
 }
 
 struct PixelSize: Codable, Equatable {
@@ -222,6 +249,9 @@ struct RecordMeta: Codable, Equatable {
     var preflight: [PreflightResult]
     var deviceEvents: [DeviceEvent]
     var audioFormatEvents: [AudioFormatEvent]
+    // ---- R2（spec §3.11）：R2 錄製實例開錄時寫空陣列；nil 時省略鍵（舊場次沒有這兩鍵）----
+    var pauseEvents: [PauseEvent]? = nil
+    var micMuteEvents: [MicMuteEvent]? = nil
 }
 
 /// t6 第二輪（缺陷 D，§4.4.9）：錄製結束時寫進 record.status.json 與 record.log 的最終結果。

@@ -1,9 +1,9 @@
-// Core/Trigger.swift —— menu bar 狀態對映與 quick-start 判斷（spec §3.4、§3.4.1、§4.11）
-// 對映規則的唯一正本是 spec §3.4.1 全表（M1–M10 加 M6a）：由上而下取第一個成立的列。
+// Core/Trigger.swift —— menu bar 狀態對映與 quick-start 判斷（spec §3.4、§3.4.1、§3.14.1、§4.11、§4.20.2）
+// 對映規則的唯一正本是 spec §3.4.1 全表（M1–M10 加 M6a）與 §3.14.1 的 M6b：由上而下取第一個成立的列。
 // statusLine 一律是給人看的中文句子，不得含 WarningKind／RecordPhase 的 raw value（§4.11.8）。
 import Foundation
 
-enum MenuBarState: String, Equatable { case idle, recording, warning }
+enum MenuBarState: String, Equatable { case idle, recording, warning, paused }
 
 struct MenuBarModel: Equatable {
     let state: MenuBarState
@@ -14,6 +14,12 @@ struct MenuBarModel: Equatable {
     let canOpenSession: Bool
     /// 狀態列 toolTip 的完整內容（設計審查 N-1）：失敗類（M2–M4）為完整多行訊息，其餘同 statusLine。
     var detailText: String = ""
+    // ---- R2（spec §3.14.1）：只在 phase == recording 且 pid 活著的列（M6b、M7、M9）設定，其他列為預設值 ----
+    var timerText: String = ""
+    var paused: Bool = false
+    var micMuted: Bool = false
+    var canControl: Bool = false
+    var levelLine: String = ""
 }
 
 extension MenuBarModel {
@@ -29,6 +35,7 @@ private func symbol(for state: MenuBarState) -> String {
     case .idle: return "record.circle"
     case .recording: return "record.circle.fill"
     case .warning: return "exclamationmark.triangle.fill"
+    case .paused: return "pause.circle.fill"
     }
 }
 
@@ -36,13 +43,20 @@ private func firstLine(_ s: String) -> String {
     s.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
 }
 
-/// 經過時間：mm:ss；≥ 60 分鐘時 h:mm:ss。
+/// 經過時間：mm:ss；≥ 60 分鐘時 h:mm:ss（第一輪：now − startedAt）。
 private func elapsedText(from startedAt: String, now: Date) -> String? {
     let f = ISO8601DateFormatter()
     guard let start = f.date(from: startedAt) else { return nil }
-    let total = max(0, Int(now.timeIntervalSince(start)))
-    let h = total / 3600, m = (total % 3600) / 60, s = total % 60
-    return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    return clockText(seconds: Int(now.timeIntervalSince(start)))
+}
+
+/// spec §3.14.1 M9 的計時：有 recordingStartedAt 時＝clockText(recordedSeconds(...))；沒有時沿用第一輪的 now − startedAt。
+private func recordingTimerText(_ st: RecordStatus, now: Date) -> String? {
+    if let rsa = st.recordingStartedAt {
+        return recordedSeconds(recordingStartedAt: rsa, pausedSeconds: st.pausedSeconds ?? 0,
+                               pausedAt: st.pausedAt, now: now).map { clockText(seconds: $0) }
+    }
+    return elapsedText(from: st.startedAt, now: now)
 }
 
 func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarModel {
@@ -87,16 +101,36 @@ func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarMo
     if st.phase == .stopping || st.phase == .finalizing, !alerts.isEmpty {   // M6a（D17）：告警數不去重
         return model(.recording, "收尾中…（告警 \(alerts.count) 則）", start: false, stop: false, open: true)
     }
+    // 以下 M6b、M7（recording）、M9 是「錄製中且 pid 活著」的列，要帶 R2 欄位（§3.14.1）
+    let name = (st.session as NSString).lastPathComponent
+    let timer = st.phase == .recording ? (recordingTimerText(st, now: now) ?? "") : ""
+    let isPaused = st.paused ?? false
+    let isMuted = st.micMuted ?? false
+    func withR2(_ m: MenuBarModel) -> MenuBarModel {
+        guard st.phase == .recording else { return m }
+        var m = m
+        m.timerText = timer
+        m.paused = isPaused
+        m.micMuted = isMuted
+        m.canControl = (st.controlVersion ?? 0) >= 1
+        m.levelLine = levelIndicatorLine(recent: st.recentLevels, micMuted: isMuted, paused: isPaused, thresholdDBFS: -60)
+        return m
+    }
+    if st.phase == .recording, isPaused {   // M6b：排在 M7 前，舊告警不得蓋掉暫停狀態
+        let t = timer.isEmpty ? "" : " \(timer)"
+        let warn = alerts.isEmpty ? "" : "（告警 \(alerts.count) 則）"
+        return withR2(model(.paused, "已暫停\(t)・\(name)\(warn)", start: false, stop: true, open: true))
+    }
     if let latest = alerts.max(by: { $0.t < $1.t }) {   // M7
-        return model(.warning, "告警：\(latest.message)", start: false, stop: st.phase == .recording, open: true)
+        return withR2(model(.warning, "告警：\(latest.message)", start: false, stop: st.phase == .recording, open: true))
     }
     switch st.phase {
     case .preflight:          // M8
         return model(.recording, "開錄前檢查中…", start: false, stop: false, open: true)
     case .recording:          // M9
-        let name = (st.session as NSString).lastPathComponent
-        let elapsed = elapsedText(from: st.startedAt, now: now).map { " \($0)" } ?? ""
-        return model(.recording, "錄製中\(elapsed)・\(name)", start: false, stop: true, open: true)
+        let t = timer.isEmpty ? "" : " \(timer)"
+        let muted = isMuted ? "（麥克風靜音中）" : ""
+        return withR2(model(.recording, "錄製中\(t)\(muted)・\(name)", start: false, stop: true, open: true))
     default:                  // M10：stopping、finalizing
         return model(.recording, "收尾中…", start: false, stop: false, open: true)
     }

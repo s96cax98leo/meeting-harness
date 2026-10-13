@@ -59,7 +59,10 @@ typealias MRTCase = (name: String, run: () throws -> Void)
 
 let mrtSuites: [(String, [MRTCase])] = [
     ("AudioLevelTests", mrtAudioLevelTests),
+    ("ControlTests", mrtControlTests),
     ("DetectorsTests", mrtDetectorsTests),
+    ("MenuBarR2Tests", mrtMenuBarR2Tests),
+    ("T7Tests", mrtT7Tests),
     ("PreflightTests", mrtPreflightTests),
     ("RecordsTests", mrtRecordsTests),
     ("SegmentsTests", mrtSegmentsTests),

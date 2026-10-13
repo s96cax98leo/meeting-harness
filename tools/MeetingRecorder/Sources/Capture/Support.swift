@@ -15,8 +15,14 @@ final class Logger {
         if !append || !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: nil, attributes: nil)
         }
-        handle = FileHandle(forWritingAtPath: path)
-        if append { handle?.seekToEndOfFile() }
+        if append {
+            // O_APPEND：每次寫入都接在當下檔尾。錄製實例、menu bar、quick-start 會同時寫 record.log，
+            // 只在開檔時 seek 一次會互相覆蓋（t7，spec §6 第 109 條）
+            let fd = open(path, O_WRONLY | O_APPEND | O_CLOEXEC)
+            handle = fd >= 0 ? FileHandle(fileDescriptor: fd, closeOnDealloc: true) : nil
+        } else {
+            handle = FileHandle(forWritingAtPath: path)
+        }
     }
 
     func line(_ s: String) {

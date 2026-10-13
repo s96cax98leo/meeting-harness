@@ -5,6 +5,11 @@
 // 時間：
 //   - sample 時鐘：SCK sample 的 PTS（host clock）。writer 的 session 時間軸直接用 PTS（design §7.2）。
 //   - manifest／levels 的秒數＝PTS 秒數 − t0（t0＝startCapture 前一刻的 host clock），寫檔時取小數 3 位。
+//
+// R2（spec §4.16.4、§4.17.2、§4.18.2、§4.18.3、§4.19.2、§4.23.3）：
+//   - 控制：SIGUSR1 → 在 q 上 readControl → controlActions → 套用（暫停／繼續、麥克風靜音、標記）。
+//   - 暫停閘門、換段原因、事件 append、狀態欄位、偵測器餵送一律經 Core 純函式（Segments.swift、Control.swift、
+//     Detectors.swift）；本檔只負責呼叫與落盤。
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -25,8 +30,6 @@ func hostSeconds() -> Double { CMClockGetTime(CMClockGetHostTimeClock()).seconds
 
 // 可變狀態只在序列佇列 q 上讀寫（見檔頭），所以標 @unchecked Sendable。
 final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    private enum SwitchReason { case first, periodic, formatChange, writerFailure }
-
     private let ctx: RunContext
     private let status: StatusWriter
     private let defaults: RecordDefaults?
@@ -88,6 +91,17 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private var signals: [DispatchSourceSignal] = []
     private var deviceMonitor: AudioDeviceMonitor?
 
+    // R2 控制（spec §3.9–§3.12）。除 micMutedForMicQ 外都只在 q 上讀寫。
+    private var controlEnabled = false                 // phase 轉 recording 後才接受控制
+    private var applied: RecordControl                 // 已套用的控制狀態（與控制檔比差異）
+    private var gate = PauseGate()                     // 暫停閘門（Core/Segments.swift）
+    private var micMuted = false
+    private var markers: [Marker] = []
+    private var lastRecentLevelsWrite = -Double.infinity
+    /// 麥克風靜音旗標給 micQ 的 sample 回呼讀（q 寫、micQ 讀，以鎖保護）。
+    private let muteLock = NSLock()
+    private var micMutedForMicQ = false
+
     init(ctx: RunContext, status: StatusWriter, window: SCWindow, preflight: [PreflightResult], defaults: RecordDefaults?) {
         self.ctx = ctx
         self.status = status
@@ -111,6 +125,9 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
                                                        microphoneCaptureDeviceID: nil, excludesCurrentProcessAudio: true,
                                                        fileType: "mov", videoCodec: "h264", segmentSeconds: segmentSeconds),
                           devices: currentDevices(), preflight: preflight, deviceEvents: [], audioFormatEvents: [])
+        meta.pauseEvents = []          // R2：開錄就寫兩個空陣列（spec §3.11）
+        meta.micMuteEvents = []
+        applied = freshControl(runId: ctx.runId)
         super.init()
     }
 
@@ -118,6 +135,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private func now() -> Double { hostSeconds() - t0 }
     private var manifestURL: URL { ctx.tracksDir.appendingPathComponent("manifest.json") }
     private var metaURL: URL { ctx.tracksDir.appendingPathComponent("record.meta.json") }
+    private var markersURL: URL { ctx.tracksDir.appendingPathComponent("markers.json") }
 
     // MARK: - 開始
 
@@ -128,6 +146,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             fail(code: 5, "建不了 \(ctx.tracksDir.path)：\(error.localizedDescription)")
         }
         installSignalHandlers()
+        // 控制檔殘留（上一場暫停中當機等）不得帶進這一場：寫 record.pid 之前重設（spec §4.16.4、design R2-D2）
+        do {
+            let fresh = try resetControl(home: ctx.home, runId: ctx.runId)
+            q.sync { applied = fresh }
+        } catch {
+            log.line("⚠ 重設 \(controlFileName) 失敗：\(error.localizedDescription)")
+        }
 
         // 畫布＝當下會議視窗的像素大小（D8）
         cfg.width = curSize.width
@@ -176,10 +201,18 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             }
         }
         log.line("● 開始錄製：視窗 [\(window.windowID)]、畫布 \(cfg.width)×\(cfg.height) px、場次 \(ctx.session.path)")
+        q.sync { controlEnabled = true }
         status.update {
             $0.phase = .recording
             $0.code = 0
             $0.message = "錄製中"
+            // R2 選用欄位（spec §3.10）：controlVersion 讓 menu bar／CLI 知道可以送控制
+            $0.controlVersion = controlProtocolVersion
+            $0.recordingStartedAt = isoNow()
+            $0.paused = false
+            $0.micMuted = false
+            $0.pausedSeconds = 0
+            $0.markers = 0
         }
 
         q.sync {
@@ -236,12 +269,24 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             s.resume()
             signals.append(s)
         }
+        // R2 控制（spec §4.16.4）：與 SIGTERM 相同的 DispatchSource 模式；預設動作會終止程序，所以先忽略
+        signal(SIGUSR1, SIG_IGN)
+        let usr1 = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: q)
+        usr1.setEventHandler { [weak self] in self?.applyControl() }
+        usr1.resume()
+        signals.append(usr1)
     }
 
     // MARK: - SCStreamDelegate
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         q.async {
+            // t7（§6 第 103 條）：使用者從選單列的系統「畫面錄製」指示按停止 → 一般停止（結束碼 0），不是中斷
+            if isUserStoppedStream(error) {
+                self.log.line("● 使用者從系統的畫面錄製指示停止，照一般停止收尾")
+                self.requestStop()
+                return
+            }
             self.log.line("✗ 擷取串流中斷：\(error.localizedDescription)")
             self.hadError = true
             self.forced = self.forced ?? (5, "擷取串流中斷，已落盤段落保留：\(error.localizedDescription)")
@@ -272,13 +317,16 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             }
         case .audio, .microphone:
             let src: AudioSource = type == .audio ? .system : .mic
-            let fmt = audioFormat(of: sb)
-            let db = rmsDBFS(sampleBuffer: sb)
-            let end = audioEnd(sb, pts: pts, format: fmt)
+            // 麥克風靜音（spec §4.17.2）：算 RMS 之前以數位 0 的深拷貝取代，照常寫進 mic 軌（軌道不中斷）
+            var buf = sb
+            if type == .microphone, isMicMutedForMicQ(), let z = zeroedAudioSample(sb) { buf = z }
+            let fmt = audioFormat(of: buf)
+            let db = rmsDBFS(sampleBuffer: buf)
+            let end = audioEnd(buf, pts: pts, format: fmt)
             q.async {
                 let changed = self.onAudio(src, t: t, format: fmt, dbfs: db)
                 guard pts.isValid else { return }
-                self.ingest(sb, track: src == .system ? .system : .mic, start: pts, end: end,
+                self.ingest(buf, track: src == .system ? .system : .mic, start: pts, end: end,
                             formatChangedOn: changed ? src : nil)
             }
         @unknown default:
@@ -307,11 +355,11 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             case .started: manifest.frameStatus.started += 1
             case .stopped: manifest.frameStatus.stopped += 1
             }
-            if suspended.feed(t: t, status: st) {
+            if detectorFeed(paused: gate.paused, micMuted: micMuted).suspended, suspended.feed(t: t, status: st) {
                 warn(.suspended, "會議視窗的擷取已暫停超過 5 秒（多半是被最小化）：把視窗還原")
             }
         }
-        if let ratio, black.feed(t: t, nonBlackRatio: ratio) {
+        if let ratio, detectorFeed(paused: gate.paused, micMuted: micMuted).black, black.feed(t: t, nonBlackRatio: ratio) {
             warn(.black, "會議視窗畫面已連續 5 秒全黑：確認會議畫面是否正常（錄製照常進行）")
         }
     }
@@ -344,6 +392,19 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private func ingest(_ sb: CMSampleBuffer, track: SegmentTrack, start: CMTime, end: CMTime, formatChangedOn src: AudioSource?,
                         updatesLastFrame: Bool = true) {
         if let e = stopPoint, CMTimeCompare(start, e) >= 0 { return }     // 停止點之後不寫
+        // 暫停閘門（spec §4.18.2）：在 maxEnd 更新之前判斷；prevOnly、drop 不更新 maxEnd、不自動開段
+        let route = pauseRoute(gate, sampleStart: start.seconds)
+        switch route {
+        case .prevOnly:
+            if let p = prev { write(sb, track: track, to: p) }       // 停止點 E 之前晚到的 sample 只進舊段
+            if track == .video, updatesLastFrame { lastFrame = sb }
+            return
+        case .drop:
+            if track == .video, updatesLastFrame { lastFrame = sb }  // 照常更新最後一個 complete 幀（不寫入）
+            return
+        case .normal, .resumeBoundary:
+            break
+        }
         if stopPoint == nil, !maxEnd.isValid || CMTimeCompare(end, maxEnd) > 0 { maxEnd = end }
         if !firstSampleLogged {
             firstSampleLogged = true
@@ -353,11 +414,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
 
         if !stopping {
-            if cur == nil || switchOnNextSample {
+            if let reason = openReason(route: route, hasCurrent: cur != nil, everOpened: everOpened,
+                                       switchOnNextSample: switchOnNextSample) {
                 // 第一段：B_1＝第一個 sample 的 PTS。writer 失敗後的新段：以下一個 sample 的 PTS 當邊界，
-                // 但不早於上一段的起點（同一個時間點不會出現兩段重疊）。
+                // 但不早於上一段的起點（同一個時間點不會出現兩段重疊）。繼續（resume）：以第一個 PTS ≥ E 的 sample 為邊界。
                 let b = lastSegmentStart.isValid && CMTimeCompare(start, lastSegmentStart) < 0 ? lastSegmentStart : start
-                startNewSegment(boundary: b, reason: everOpened ? .writerFailure : .first, trigger: track, triggerStart: start)
+                startNewSegment(boundary: b, reason: reason, trigger: track, triggerStart: start)
+                if route == .resumeBoundary, cur != nil { resumedSegmentOpened(at: b) }
             } else if let src, let c = cur, shouldSwitchForFormat(src, at: start.seconds),
                       CMTimeCompare(start, c.start) > 0 {
                 // 格式變更提前換段：以第一個新格式緩衝的 PTS 為邊界（design §7.5）
@@ -557,18 +620,31 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     /// 平時延後 0.3 秒收斂（音訊緩衝送達比 PTS 晚幾十毫秒，太早收斂會把有聲音的時段誤記成空的）；停止時收到底。
     private func closeLevels(final: Bool = false) {
         let t = final ? now() : now() - 0.3
+        let feed = detectorFeed(paused: gate.paused, micMuted: micMuted)
         for p in sysPeak.close(upTo: t) {
             manifest.levels.system.append(round1OrNil(p))
-            if sysSilence.feed(t: Double(manifest.levels.system.count) * 0.5, dbfs: p) {
+            if feed.systemSilence, sysSilence.feed(t: Double(manifest.levels.system.count) * 0.5, dbfs: p) {
                 warn(.silenceSystem, "系統聲音已連續 15 秒幾乎沒有聲音（低於 -60 dBFS）：檢查會議 app 的輸出與音量")
             }
         }
         for p in micPeak.close(upTo: t) {
             manifest.levels.mic.append(round1OrNil(p))
-            if micSilence.feed(t: Double(manifest.levels.mic.count) * 0.5, dbfs: p) {
+            if feed.micSilence, micSilence.feed(t: Double(manifest.levels.mic.count) * 0.5, dbfs: p) {
                 warn(.silenceMic, "麥克風已連續 15 秒幾乎沒有聲音（低於 -60 dBFS）：檢查麥克風是否被拔掉或靜音")
             }
         }
+        if !final { updateRecentLevels() }
+    }
+
+    /// 收音指示（spec §3.10）：各路最後 6 個 0.5 秒時段的最大值；靜音中 mic 為 null；暫停中沒有此鍵；每秒最多寫一次。
+    private func updateRecentLevels() {
+        guard controlEnabled, !stopping, !gate.paused else { return }
+        let t = now()
+        guard t - lastRecentLevelsWrite >= 1.0 else { return }
+        lastRecentLevelsWrite = t
+        let sys = recentPeak(manifest.levels.system, count: 6)
+        let mic = micMuted ? nil : recentPeak(manifest.levels.mic, count: 6)
+        status.update { $0.recentLevels = RecentLevels(windowSeconds: 3, system: sys, mic: mic) }
     }
 
     private func deviceChanged(_ kind: DeviceKind, _ from: AudioDeviceInfo?, _ to: AudioDeviceInfo?) {
@@ -598,6 +674,140 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         let w = RecordWarning(t: round3(now()), kind: kind, message: message)
         log.line("⚠ \(message)")
         status.update { $0.warnings.append(w) }
+    }
+
+    // MARK: - R2 控制（只在 q 上呼叫；spec §4.16.4、§4.17.2、§4.18.2、§4.18.3、§4.19.2）
+
+    /// SIGUSR1：讀控制檔、與已套用的狀態比差異後套用。開錄前與停止中不接受（controlAvailability 也不會放行）。
+    private func applyControl() {
+        guard controlEnabled, !stopping else {
+            log.line("● 收到 SIGUSR1，但目前不接受控制（\(stopping ? "收尾中" : "還沒開始錄製")），略過")
+            return
+        }
+        let requested = readControl(ctx.home.appendingPathComponent(controlFileName))
+        let actions = controlActions(applied: applied, requested: requested)
+        if let p = actions.pause { if p { pauseRecording() } else { resumeRecording() } }
+        if let m = actions.micMute { setMicMuted(m) }
+        if actions.newMarkers > 0 { addMarkers(actions.newMarkers) }
+        if let r = requested, r.runId == applied.runId, r.schemaVersion == controlProtocolVersion {
+            applied.paused = r.paused
+            applied.micMuted = r.micMuted
+            applied.markerSeq = max(applied.markerSeq, r.markerSeq)
+        }
+    }
+
+    /// 成品時間換算的 startedAt_1（還沒有任何段落時為 0）。
+    private var firstSegmentStart: Double { manifest.segments.first?.startedAt ?? 0 }
+
+    /// 暫停（design R2-D3 第 1 步）：以停止點 E 收掉目前段落、偵測器停餵、記 pause 事件與狀態欄位。
+    private func pauseRecording() {
+        guard !gate.paused else { return }
+        let c = cur
+        gate = pausing(gate, maxEnd: maxEnd.isValid ? maxEnd.seconds : nil, segmentStart: c?.start.seconds)
+        let e: CMTime? = maxEnd.isValid ? maxEnd : c?.start
+        if prev != nil { closePrev() }
+        cur = nil
+        nextBoundary = .invalid
+        switchOnNextSample = false
+        if let c {
+            if c.hasFailed {
+                writerFailed(c, c.error)
+            } else if let e, CMTimeCompare(e, c.start) > 0, c.appendedTotal > 0 {
+                // 目前段轉成 prev：只收 PTS < E 的晚到 sample，1 秒後收尾（與換段相同）
+                prev = c
+                prevEnd = e
+                q.asyncAfter(deadline: .now() + 1.0) { [weak self, weak c] in
+                    guard let self, let c, self.prev === c else { return }
+                    self.closePrev()
+                }
+            } else {
+                // 段落沒有任何內容：捨棄並從 manifest 移除（與停止時相同）
+                c.cancel()
+                if let row = segRow[c.index], row == manifest.segments.count - 1 {
+                    manifest.segments.removeLast()
+                    segRow[c.index] = nil
+                }
+                log.line("● \(c.file) 沒有內容，捨棄")
+            }
+        }
+        let cutT = gate.cutPoint.map { $0 - t0 } ?? 0
+        black.interrupt(at: cutT)
+        let events = appendingPauseEvent(meta.pauseEvents ?? [], kind: .pause, t: cutT,
+                                         firstSegmentStart: firstSegmentStart, wallClock: isoNow())
+        meta.pauseEvents = events
+        writeManifest()
+        writeMeta()
+        let fields = pauseStatusFields(events)
+        status.update {
+            $0 = applyingPauseFields(fields, to: $0)
+            $0.recentLevels = nil
+        }
+        log.line("● 暫停錄製（停止點 \(String(format: "%.3f", cutT)) 秒）")
+    }
+
+    /// 繼續（design R2-D3 第 3 步）：下一個 PTS ≥ E 的 sample 開新段（SwitchReason.resume）；偵測器重設。
+    /// resume 事件的 t＝新段 startedAt，所以等開段時才記（resumedSegmentOpened）；狀態檔先反映「沒在暫停」。
+    private func resumeRecording() {
+        guard gate.paused else { return }
+        gate = resuming(gate)
+        sysSilence.reset()
+        micSilence.reset()
+        suspended.reset()
+        let provisional = appendingPauseEvent(meta.pauseEvents ?? [], kind: .resume, t: now(),
+                                              firstSegmentStart: firstSegmentStart, wallClock: isoNow())
+        let fields = pauseStatusFields(provisional)
+        status.update { $0 = applyingPauseFields(fields, to: $0) }
+        log.line("● 繼續錄製（等下一個 sample 開新段）")
+    }
+
+    /// 繼續後的新段已開：記 resume 事件（t＝新段 startedAt）、閘門回到一般狀態。
+    private func resumedSegmentOpened(at b: CMTime) {
+        gate = segmentOpened(gate)
+        let t = b.seconds - t0
+        let events = appendingPauseEvent(meta.pauseEvents ?? [], kind: .resume, t: t,
+                                         firstSegmentStart: firstSegmentStart, wallClock: isoNow())
+        meta.pauseEvents = events
+        writeMeta()
+        let fields = pauseStatusFields(events)
+        status.update { $0 = applyingPauseFields(fields, to: $0) }
+    }
+
+    /// 麥克風靜音／取消靜音（design R2-D4）：mic 緩衝改寫成數位 0；取消時重設 micSilence。系統聲音不受影響。
+    private func setMicMuted(_ muted: Bool) {
+        guard muted != micMuted else { return }
+        micMuted = muted
+        muteLock.lock(); micMutedForMicQ = muted; muteLock.unlock()
+        if !muted { micSilence.reset() }
+        meta.micMuteEvents = appendingMuteEvent(meta.micMuteEvents ?? [], muted: muted, t: now(),
+                                                firstSegmentStart: firstSegmentStart, pauses: meta.pauseEvents ?? [],
+                                                wallClock: isoNow())
+        writeMeta()
+        status.update {
+            $0.micMuted = muted
+            if muted, $0.recentLevels != nil { $0.recentLevels?.mic = nil }
+        }
+        log.line(muted ? "● 麥克風靜音" : "● 麥克風取消靜音")
+    }
+
+    private func isMicMutedForMicQ() -> Bool {
+        muteLock.lock(); defer { muteLock.unlock() }
+        return micMutedForMicQ
+    }
+
+    /// 標記（spec §3.12、§4.19.2）：t＝成品時間（暫停中為該次暫停點）、recordT＝錄製時鐘；整檔 tmp＋rename 重寫。
+    private func addMarkers(_ n: Int) {
+        let recordT = round3(now())
+        let pauses = meta.pauseEvents ?? []
+        for _ in 0..<n {
+            markers.append(Marker(t: outputTime(recordT: recordT, firstSegmentStart: firstSegmentStart, pauses: pauses),
+                                  recordT: recordT, wallClock: isoNow(), label: markerLabel(markers.count + 1)))
+        }
+        do { try writeJSONAtomically(markers, to: markersURL) } catch {
+            log.line("⚠ 寫 markers.json 失敗：\(error.localizedDescription)")
+        }
+        let count = markers.count
+        status.update { $0.markers = count }
+        log.line("● 加標記（共 \(count) 個）")
     }
 
     // MARK: - 停止（design §7.4）
@@ -766,7 +976,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         try? FileManager.default.removeItem(at: ctx.pidURL)
         log.line(outcome.code == 0 ? "✓ \(outcome.message)" : "✗ \(outcome.message)")
         Notifier.post(title: outcome.code == 0 ? "會議錄製完成" : "會議錄製結束（有錯誤）",
-                      body: outcome.code == 0 ? ctx.session.path : "\(outcome.message)\n\(ctx.session.path)")
+                      body: outcome.code == 0 ? ctx.session.path : "\(outcome.message)\n\(ctx.session.path)",
+                      identifier: completionNotificationID(runId: ctx.runId))
         exit(outcome.code)
     }
 
@@ -779,4 +990,10 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private func writeMeta() {
         do { try writeJSONAtomically(meta, to: metaURL) } catch { log.line("⚠ 寫 record.meta.json 失敗：\(error.localizedDescription)") }
     }
+}
+
+/// SCStreamError.userStopped（-3817）：使用者從系統的畫面錄製指示（選單列紫色圖示）停止擷取。
+func isUserStoppedStream(_ error: Error) -> Bool {
+    let e = error as NSError
+    return e.domain == SCStreamErrorDomain && e.code == SCStreamError.Code.userStopped.rawValue
 }

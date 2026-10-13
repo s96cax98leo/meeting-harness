@@ -39,14 +39,14 @@ struct PreflightResult: Codable, Equatable {
         self.item = item
         self.ok = ok
         self.message = message
-        self.warnOnly = warnOnly && item == .system_audio_rms && !ok
+        self.warnOnly = warnOnly && warnOnlyItems.contains(item) && !ok
     }
 
     var severity: Severity { warnOnly ? .warn : MeetingRecorder_severity(item) }
     var code: Int32 { ok || severity == .warn ? 0 : failCode(of: item) }
 
     // JSON 鍵固定為 item、ok、severity、code、message（warnOnly 以 severity 表達，不另加鍵）。
-    // decode 時忽略 code；severity 也以 item 重算，唯一例外：system_audio_rms、ok == false 且 severity == "warn" → warnOnly。
+    // decode 時忽略 code；severity 也以 item 重算，例外：warnOnlyItems 的項目、ok == false 且 severity == "warn" → warnOnly。
     enum CodingKeys: String, CodingKey { case item, ok, severity, code, message }
 
     init(from decoder: Decoder) throws {
@@ -55,7 +55,7 @@ struct PreflightResult: Codable, Equatable {
         ok = try c.decode(Bool.self, forKey: .ok)
         message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
         let sev = try? c.decodeIfPresent(Severity.self, forKey: .severity)
-        warnOnly = item == .system_audio_rms && !ok && sev == .warn
+        warnOnly = warnOnlyItems.contains(item) && !ok && sev == .warn
     }
 
     func encode(to encoder: Encoder) throws {
@@ -67,6 +67,9 @@ struct PreflightResult: Codable, Equatable {
         try c.encode(message, forKey: .message)
     }
 }
+
+/// 可以單筆降為 warn 的項目：第 5 項（D19 兩段式）與第 6 項（t7，§6 第 102 條：麥克風安靜只提醒、不擋開錄）。
+let warnOnlyItems: Set<PreflightItem> = [.system_audio_rms, .mic_rms]
 
 // PreflightResult 內的 computed 屬性名 severity 會遮蔽同名全域函式，經這個別名呼叫。
 private func MeetingRecorder_severity(_ item: PreflightItem) -> Severity { severity(of: item) }

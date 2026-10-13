@@ -116,3 +116,44 @@ func nonBlackRatio(lumaPlane: UnsafeBufferPointer<UInt8>, width: Int, height: In
     }
     return Double(nonBlack) / Double(grid * grid)
 }
+
+// ===== R2 增補（spec §3.14、§4.17.4、§4.18.10）=====
+
+extension SilenceDetector {
+    /// 之後的行為與 init(同參數) 的新實例完全相同（取消靜音、繼續錄製時呼叫）。
+    mutating func reset() {
+        runStart = nil
+        fired = false
+    }
+}
+
+extension SuspendedDetector {
+    /// 同 SilenceDetector.reset()。
+    mutating func reset() {
+        runStart = nil
+        fired = false
+    }
+}
+
+extension BlackDetector {
+    /// 暫停時呼叫：開啟中的區間（end 為 nil）在 t 關閉；連續計數歸零（之後的開區間判斷與新實例相同）；
+    /// 已記錄的區間保留。
+    mutating func interrupt(at t: Double) {
+        if let last = intervals.last, last.end == nil { intervals[intervals.count - 1].end = t }
+        open = false
+        runStart = nil
+    }
+}
+
+/// 各偵測器這一刻要不要餵（spec §4.18.10）：暫停中四項都不餵；麥克風靜音只停 micSilence。
+struct DetectorFeed: Equatable {
+    let systemSilence: Bool
+    let micSilence: Bool
+    let black: Bool
+    let suspended: Bool
+}
+
+func detectorFeed(paused: Bool, micMuted: Bool) -> DetectorFeed {
+    if paused { return DetectorFeed(systemSilence: false, micSilence: false, black: false, suspended: false) }
+    return DetectorFeed(systemSilence: true, micSilence: !micMuted, black: true, suspended: true)
+}

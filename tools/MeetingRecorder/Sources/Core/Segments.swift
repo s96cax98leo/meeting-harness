@@ -58,3 +58,56 @@ func shouldEmitVideoHeartbeat(samplePTS: Double, lastVideoPTS: Double?, hasLastF
     guard hasLastFrame, let last = lastVideoPTS, samplePTS.isFinite, last.isFinite, interval.isFinite else { return false }
     return samplePTS - last >= interval
 }
+
+// ===== R2 增補：暫停／繼續的換段判斷（spec §3.14、§4.18.2、§4.18.8；ADR adr-r2-pause-cut.md）=====
+// 時間一律是 sample PTS 秒數（與 Capture 的 maxEnd 同一把尺）。
+// 呼叫端（Capture）的規則：route ∈ {prevOnly, drop} 時不更新 maxEnd；route ∈ {normal, resumeBoundary} 照第一輪更新。
+
+/// 開新段的原因。自 Capture/RecordingSession.swift 的 private enum 搬來並加 resume。
+enum SwitchReason: String, CaseIterable { case first, periodic, formatChange, writerFailure, resume }
+
+struct PauseGate: Equatable {
+    var paused: Bool = false            // 暫停中
+    var cutPoint: Double? = nil         // 停止點 E；暫停前還沒有任何 sample 時為 nil
+    var resumePending: Bool = false     // 已繼續、還在等第一個 PTS ≥ E 的 sample 開新段
+}
+
+enum PauseSampleRoute: Equatable { case normal, prevOnly, drop, resumeBoundary }
+
+/// 已暫停 → 原樣；否則 (paused true, cutPoint＝maxEnd ?? segmentStart, resumePending false)。
+func pausing(_ g: PauseGate, maxEnd: Double?, segmentStart: Double?) -> PauseGate {
+    if g.paused { return g }
+    return PauseGate(paused: true, cutPoint: maxEnd ?? segmentStart, resumePending: false)
+}
+
+/// 沒在暫停 → 原樣；否則 (paused false, cutPoint 不變, resumePending true)。
+func resuming(_ g: PauseGate) -> PauseGate {
+    guard g.paused else { return g }
+    return PauseGate(paused: false, cutPoint: g.cutPoint, resumePending: true)
+}
+
+/// 暫停中或等繼續邊界時：PTS < 停止點 → prevOnly；否則暫停中 → drop、等邊界 → resumeBoundary。其餘 normal。
+func pauseRoute(_ g: PauseGate, sampleStart: Double) -> PauseSampleRoute {
+    guard g.paused || g.resumePending else { return .normal }
+    if let cut = g.cutPoint, sampleStart < cut { return .prevOnly }
+    return g.paused ? .drop : .resumeBoundary
+}
+
+/// 開了新段之後：resumePending → false、cutPoint → nil；paused 不變。
+func segmentOpened(_ g: PauseGate) -> PauseGate {
+    PauseGate(paused: g.paused, cutPoint: nil, resumePending: false)
+}
+
+/// 這個 sample 要不要開新段、原因為何。prevOnly／drop 一律不開（暫停中不因 cur == nil 自動開段）；
+/// 定期換段與格式變更換段仍由呼叫端照第一輪判斷（這裡回 nil）。
+func openReason(route: PauseSampleRoute, hasCurrent: Bool, everOpened: Bool, switchOnNextSample: Bool) -> SwitchReason? {
+    switch route {
+    case .prevOnly, .drop:
+        return nil
+    case .resumeBoundary:
+        return everOpened ? .resume : .first
+    case .normal:
+        guard !hasCurrent || switchOnNextSample else { return nil }
+        return everOpened ? .writerFailure : .first
+    }
+}

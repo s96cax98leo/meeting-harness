@@ -32,19 +32,26 @@ MeetingRecorder —— meeting-harness 的錄製器（本機）
   start  （同 preflight 的參數 ＋ --harness <meeting-harness 目錄>）
       先跑 preflight，全部 hard 項通過才開錄；收到 SIGTERM 時優雅停止並收尾。
 
-  quick-start
-      用上次 meeting record 留下的預設值開錄；清單裡恰好一個 ★ 視窗才開錄，否則以通知說明原因。
+  quick-start [--home <目錄>] [--window <id> --window-bundle <bundleID> --window-title <標題>] [--root <存檔位置>]
+      用上次 meeting record 留下的預設值開錄；沒帶 --window 時清單裡恰好一個 ★ 視窗才開錄，否則以通知說明原因。
+      帶 --window（選單「錄這個視窗」）時直接錄該視窗；存檔位置依 --root ＞ 選單的「存到」＞ 上次 meeting record。
 
   menubar
-      在 menu bar 放一個狀態圖示（待機／錄製中／告警）與選單；⌃⌥⌘R 等同「開始錄製」。
+      在 menu bar 放狀態圖示（待機／錄製中＋計時／暫停中／告警）與選單；
+      ⌃⌥⌘R 開始錄製、⌃⌥⌘M 麥克風靜音、⌃⌥⌘P 暫停／繼續、⌃⌥⌘B 加標記。不帶任何子指令啟動時也進這個模式（登入時自動開啟）。
 
   help
       印出這份說明。
 """
 
-let argv = Array(CommandLine.arguments.dropFirst())
-let sub = argv.first ?? ""
+// 無參數啟動（Finder 雙擊、登入項目）＝ menubar；系統可能多塞一個 -psn_… 參數，一併略過（spec §4.22.2）
+let argv = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
+let sub = launchMode(arguments: argv)
 let args = Args(Array(argv.dropFirst()))
+
+// SIGUSR1 是 menu bar／record.sh 通知錄製實例「讀控制檔」的訊號（spec §4.16.4）。預設動作是結束程序，
+// 所以在分派任何子指令之前先忽略：送錯程序（menubar、windows…）也不會被殺；錄製實例另以 DispatchSource 接收。
+signal(SIGUSR1, SIG_IGN)
 
 // 在分派任何 Task 之前，於主執行緒（頂層程式碼）建立 WindowServer（CGS／SkyLight）連線。
 // 這條連線若第一次是在 Swift concurrency 的背景執行緒被觸發（例如 SCContentFilter(desktopIndependentWindow:)
@@ -70,7 +77,7 @@ case "quick-start":
     Task { await cmdQuickStart(args) }
 case "menubar":
     runMenuBar(args)
-case "", "-h", "--help", "help":
+case "-h", "--help", "help":
     print(helpText)
     exit(0)
 default:

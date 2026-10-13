@@ -163,11 +163,15 @@ func testSystemAudioWarnOnlyResult() throws {
     mrtEqual(disk.warnOnly, false, "其他 item（disk）warnOnly 應存成 false")
     mrtEqual(disk.severity, .hard)
     mrtEqual(disk.code, Int32(4))
+    // t7（§6 第 102 條）：第 6 項（mic_rms）失敗也可降為 warn——照常開錄，錄製中 15 秒靜音告警兜底
     let mic = PreflightResult(item: .mic_rms, ok: false, message: "", warnOnly: true)
-    mrtEqual(mic.warnOnly, false, "第 6 項（mic_rms）不受 D19 影響，warnOnly 應存成 false")
-    mrtEqual(mic.severity, .hard)
-    mrtEqual(mic.code, Int32(4))
-    mrtEqual(exitCode(for: [mic]), Int32(4))
+    mrtEqual(mic.warnOnly, true, "第 6 項（mic_rms）ok 為 false 時 warnOnly 應存成 true")
+    mrtEqual(mic.severity, .warn)
+    mrtEqual(mic.code, Int32(0))
+    mrtEqual(exitCode(for: [mic]), Int32(0))
+    let micHard = PreflightResult(item: .mic_rms, ok: false, message: "")
+    mrtEqual(micHard.severity, .hard, "沒帶 warnOnly 的 mic_rms 失敗仍為 hard（例：螢幕錄製權限沒生效、量不到）")
+    mrtEqual(micHard.code, Int32(4))
     let power = PreflightResult(item: .power, ok: false, message: "", warnOnly: true)
     mrtEqual(power.warnOnly, false, "其他 item（power）warnOnly 應存成 false")
     mrtEqual(power.severity, .warn, "power 本來就是 warn，照 severity(of:)")
@@ -217,12 +221,17 @@ func testSystemAudioWarnOnlyResult() throws {
     mrtEqual(d4.warnOnly, false)
     mrtEqual(d4.severity, .hard)
     mrtEqual(d4.code, Int32(4))
-    // 其他 item 帶 "warn" 仍以 item 重算（§4.2.2 既有預期的延伸）
+    // mic_rms 帶 "warn" 還原為 warnOnly（t7，§6 第 102 條）；其他 item 帶 "warn" 仍以 item 重算
     let micJSON = #"{"item":"mic_rms","ok":false,"severity":"warn","code":0,"message":""}"#
     let d5 = try JSONDecoder().decode(PreflightResult.self, from: Data(micJSON.utf8))
-    mrtEqual(d5.warnOnly, false)
-    mrtEqual(d5.severity, .hard)
-    mrtEqual(d5.code, Int32(4))
+    mrtEqual(d5.warnOnly, true)
+    mrtEqual(d5.severity, .warn)
+    mrtEqual(d5.code, Int32(0))
+    let diskJSON = #"{"item":"disk","ok":false,"severity":"warn","code":0,"message":""}"#
+    let d6 = try JSONDecoder().decode(PreflightResult.self, from: Data(diskJSON.utf8))
+    mrtEqual(d6.warnOnly, false)
+    mrtEqual(d6.severity, .hard)
+    mrtEqual(d6.code, Int32(4))
 }
 
 // §3.4、§4.2.12：stageManagerNotice(globallyEnabled:)——

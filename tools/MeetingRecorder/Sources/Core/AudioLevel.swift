@@ -110,3 +110,68 @@ struct PeakWindow {
         return out
     }
 }
+
+// ===== R2 增補（spec §3.14、§4.17.1）=====
+
+/// 麥克風靜音：深拷貝資料緩衝並全部清 0；frame 數、PTS、duration、format description 與原緩衝相同；
+/// 不改原緩衝。拿不到資料緩衝（或不是可展開成 AudioBufferList 的音訊）→ nil。
+func zeroedAudioSample(_ sb: CMSampleBuffer) -> CMSampleBuffer? {
+    guard CMSampleBufferGetDataBuffer(sb) != nil, let fmt = CMSampleBufferGetFormatDescription(sb) else { return nil }
+
+    // 原緩衝各個 AudioBuffer 的聲道數與位元組數（只讀，不碰資料）
+    let layout: [(channels: UInt32, bytes: UInt32)]
+    do {
+        layout = try sb.withAudioBufferList { abl, _ in abl.map { ($0.mNumberChannels, $0.mDataByteSize) } }
+    } catch {
+        return nil
+    }
+    guard !layout.isEmpty else { return nil }
+
+    // 時間資訊原樣帶過去
+    var timingCount: CMItemCount = 0
+    guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: 0, arrayToFill: nil,
+                                                 entriesNeededOut: &timingCount) == noErr else { return nil }
+    var timing = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: Int(timingCount))
+    if timingCount > 0 {
+        guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: timingCount, arrayToFill: &timing,
+                                                     entriesNeededOut: &timingCount) == noErr else { return nil }
+    }
+    var sizeCount: CMItemCount = 0
+    if CMSampleBufferGetSampleSizeArray(sb, entryCount: 0, arrayToFill: nil, entriesNeededOut: &sizeCount) != noErr {
+        sizeCount = 0
+    }
+    var sizes = [Int](repeating: 0, count: Int(sizeCount))
+    if sizeCount > 0 {
+        guard CMSampleBufferGetSampleSizeArray(sb, entryCount: sizeCount, arrayToFill: &sizes,
+                                               entriesNeededOut: &sizeCount) == noErr else { return nil }
+    }
+
+    var out: CMSampleBuffer?
+    let created = timing.withUnsafeBufferPointer { tp in
+        sizes.withUnsafeBufferPointer { sp in
+            CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false,
+                                 makeDataReadyCallback: nil, refcon: nil, formatDescription: fmt,
+                                 sampleCount: CMSampleBufferGetNumSamples(sb),
+                                 sampleTimingEntryCount: timingCount, sampleTimingArray: tp.baseAddress,
+                                 sampleSizeEntryCount: sizeCount, sampleSizeArray: sp.baseAddress,
+                                 sampleBufferOut: &out)
+        }
+    }
+    guard created == noErr, let out else { return nil }
+
+    // 全 0 的 AudioBufferList（calloc），由 CoreMedia 複製進新的 block buffer
+    let abl = AudioBufferList.allocate(maximumBuffers: layout.count)
+    defer {
+        for b in abl { free(b.mData) }
+        free(abl.unsafeMutablePointer)
+    }
+    for (i, l) in layout.enumerated() {
+        guard let mem = calloc(max(Int(l.bytes), 1), 1) else { return nil }
+        abl[i] = AudioBuffer(mNumberChannels: l.channels, mDataByteSize: l.bytes, mData: mem)
+    }
+    guard CMSampleBufferSetDataBufferFromAudioBufferList(out, blockBufferAllocator: kCFAllocatorDefault,
+                                                         blockBufferMemoryAllocator: kCFAllocatorDefault,
+                                                         flags: 0, bufferList: abl.unsafePointer) == noErr
+    else { return nil }
+    return out
+}

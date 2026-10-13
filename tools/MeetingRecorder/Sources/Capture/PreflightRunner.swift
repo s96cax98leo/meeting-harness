@@ -185,7 +185,11 @@ enum PreflightRunner {
             if m.mic > -60 {
                 set(.mic_rms, true, "麥克風峰值 \(peakText(m.mic))")
             } else {
-                set(.mic_rms, false, "3 秒內麥克風的峰值都低於 -60 dBFS（\(peakText(m.mic))）：檢查時請對麥克風說一句話；確認麥克風沒被拔掉或靜音")
+                // t7（§6 第 102 條）：開會時按下開錄的那 3 秒不一定有人說話——只提醒、照常開錄，錄製中 15 秒靜音告警兜底
+                r[.mic_rms] = PreflightResult(
+                    item: .mic_rms, ok: false,
+                    message: "麥克風目前很安靜（3 秒內峰值 \(peakText(m.mic))，低於 -60 dBFS）：照常開錄；開錄後若持續 15 秒沒有聲音會告警。確認麥克風沒被拔掉或靜音",
+                    warnOnly: true)
             }
             if window == nil {
                 set(.window_minimized, true, "（目標視窗不存在，略過）")
