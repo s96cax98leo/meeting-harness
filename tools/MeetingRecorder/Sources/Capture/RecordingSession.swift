@@ -84,6 +84,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private var stopPoint: CMTime?                     // 停止點 E；PTS ≥ E 的 sample 一律不寫
     private var writersDrained = false                 // 已對目前與舊 writer 呼叫收尾
     private var finalizeStarted = false
+    private var finalizeRunner: FinalizeRunner?         // 收尾執行器（spec §4.28.6）；beginFinalize 建立，只在 q 上讀寫
     private var hadError = false
     private var forced: (code: Int32, message: String)?
     private var timers: [DispatchSourceTimer] = []
@@ -268,8 +269,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             signal(sig, SIG_IGN)
             let s = DispatchSource.makeSignalSource(signal: sig, queue: q)
             s.setEventHandler { [weak self] in
-                self?.log.line("● 收到停止訊號（\(sig == SIGTERM ? "SIGTERM" : "SIGINT")），開始優雅停止")
-                self?.requestStop()
+                self?.log.line("● 收到停止訊號（\(sig == SIGTERM ? "SIGTERM" : "SIGINT")）")
+                self?.requestStop(fromSignal: true)
             }
             s.resume()
             signals.append(s)
@@ -829,8 +830,19 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     /// SIGTERM、磁碟不足、串流中斷、段落連續寫檔失敗都走這裡（只在 q 上呼叫）。
     /// 1. 記停止點 E；2. stopCapture（最多 10 秒）並排空三個 sample 佇列；
     /// 3. 收尾目前與所有舊 writer（各最多 10 秒）；4. finalize。
-    private func requestStop() {
-        guard !stopping else { return }
+    /// 已在停止中時：收尾中（phase=finalizing）再收到停止訊號＝取消收尾（spec §4.28.6、§4.41.6）；
+    /// 收尾前的停止階段與內部來源（磁碟、串流、寫檔失敗）的重複呼叫則略過。
+    private func requestStop(fromSignal: Bool = false) {
+        if stopping {
+            if fromSignal, let runner = finalizeRunner {
+                log.line("● 收尾中再收到停止訊號：取消收尾")
+                runner.cancel()
+            } else if fromSignal {
+                log.line("● 停止中（還沒進收尾），略過這次停止訊號")
+            }
+            return
+        }
+        log.line("● 開始優雅停止")
         stopping = true
         for t in timers { t.cancel() }
         timers.removeAll()
@@ -931,57 +943,53 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             $0.message = "收尾中"
         }
         log.line("● 收尾中（\(n) 段）")
+        let runner = FinalizeRunner(recordedSeconds: recordedSecondsAtStop(), log: log)
+        finalizeRunner = runner
         DispatchQueue.global(qos: .userInitiated).async {
-            let rc = self.runFinalize()
-            self.q.async { self.complete(finalizeCode: rc) }
+            let result = self.runFinalize(runner)
+            self.q.async {
+                switch result {
+                case .exited(let rc): self.complete(finalizeCode: rc)
+                case .aborted(let reason): self.complete(finalizeCode: 5, aborted: reason)
+                }
+            }
         }
     }
 
-    /// spawn "<python3>" "<harness>/bin/_record_finalize.py" "<場次>"；輸出逐行寫進 record.log。
-    private func runFinalize() -> Int32 {
+    /// 錄製長度（扣暫停）＝停止點 E 的錄製時鐘秒數 − 暫停總長（沒配對的暫停算到 E）；給 finalizeDeadline 用。
+    private func recordedSecondsAtStop() -> Double {
+        let end = (stopPoint ?? maxEnd).isValid ? (stopPoint ?? maxEnd).seconds - t0 : now()
+        let events = meta.pauseEvents ?? []
+        var paused = pausedTotal(events)
+        if let last = events.last, last.kind == .pause { paused += max(0, end - last.t) }
+        return max(0, end - paused)
+    }
+
+    /// 以 FinalizeRunner spawn "<python3>" "<harness>/bin/_record_finalize.py" "<場次>"；輸出逐行寫進 record.log；
+    /// 超過 finalizeDeadline 或被取消時由 FinalizeRunner 中止（spec §4.28.6）。
+    private func runFinalize(_ runner: FinalizeRunner) -> FinalizeRunResult {
         guard let harness = ctx.harness ?? defaults?.harness, !harness.isEmpty else {
             log.line("✗ 不知道 meeting-harness 的路徑（--harness 與 record.defaults.json 都沒有），無法收尾")
-            return 127
+            return .exited(127)
         }
         let script = URL(fileURLWithPath: harness).appendingPathComponent("bin/_record_finalize.py")
         guard FileManager.default.fileExists(atPath: script.path) else {
             log.line("✗ 找不到 \(script.path)，無法收尾")
-            return 127
+            return .exited(127)
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: defaults?.python3 ?? "/usr/bin/python3")
-        p.arguments = [script.path, ctx.session.path]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let ff = defaults?.ffmpeg, !ff.isEmpty { env["MH_FFMPEG"] = ff }
-        p.environment = env
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        do { try p.run() } catch {
-            log.line("✗ 啟動收尾失敗：\(error.localizedDescription)")
-            return 126
-        }
-        let reader = pipe.fileHandleForReading
-        var buffer = Data()
-        while true {
-            let chunk = reader.availableData
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                log.line("  " + String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self))
-                buffer.removeSubrange(buffer.startIndex...nl)
-            }
-        }
-        if !buffer.isEmpty { log.line("  " + String(decoding: buffer, as: UTF8.self)) }
-        p.waitUntilExit()
-        return p.terminationStatus
+        return runner.run(executable: URL(fileURLWithPath: defaults?.python3 ?? "/usr/bin/python3"),
+                          arguments: [script.path, ctx.session.path], environment: env)
     }
 
     /// 最終結果一律由 Core completionOutcome 決定：停止原因（forced）在開頭，收尾失敗附在其後（spec §4.4.7、§4.4.9）。
-    private func complete(finalizeCode rc: Int32) {
-        let outcome = completionOutcome(finalizeCode: rc, forcedCode: forced?.code, forcedMessage: forced?.message,
-                                        hadError: hadError, sessionPath: ctx.session.path)
+    /// 收尾被 FinalizeRunner 中止（逾時、取消）時改用 finalizeAbortOutcome：phase=failed、code=5（spec §4.28.6）。
+    private func complete(finalizeCode rc: Int32, aborted: FinalizeAbort? = nil) {
+        let outcome = aborted.map { finalizeAbortOutcome($0, forcedMessage: forced?.message, sessionPath: ctx.session.path) }
+            ?? completionOutcome(finalizeCode: rc, forcedCode: forced?.code, forcedMessage: forced?.message,
+                                 hadError: hadError, sessionPath: ctx.session.path)
         status.update {
             $0.phase = outcome.phase
             $0.code = outcome.code
