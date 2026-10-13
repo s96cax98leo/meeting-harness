@@ -188,19 +188,19 @@
 
 | 層 | 子任務 | 狀態 | 合併 commit |
 |---|---|---|---|
-| Red | `r3-red-py` | 未開始 | |
-| Red | `r3-red-swift` | 未開始 | |
+| Red | `r3-red-py` | 已合併 | `b4c8ae1` |
+| Red | `r3-red-swift` | 已合併 | `9b347c5` |
 | 1 | `r3-core` | 已合併 | `1d89f0b` |
 | 1 | `r3-vtt-raw` | 已合併 | `0154b59` |
 | 1 | `r3-record-lib` | 已合併 | `a2cb1e8` |
 | 1 | `r3-finalize-guard` | 已合併 | `2751571` |
 | 1 | `r3-sync-measure` | 已合併 | `cb6f933` |
 | 1 | `r3-docs` | 已合併 | `6fd631a` |
-| 2 | `r3-lock` | 未開始（併入原 r3-latency-log） | |
-| 2 | `r3-menubar-states` | 未開始（併入原 r3-notify） | |
-| 2 | `r3-search` | 未開始 | |
-| 2 | `r3-transcript-vad` | 未開始 | |
-| 2 | `r3-annotations` | 未開始 | |
+| 2 | `r3-lock` | 已合併（併入原 r3-latency-log） | `db49336` |
+| 2 | `r3-menubar-states` | 已合併（併入原 r3-notify；entitlements 3 項的驗收待第 3 層 r3-reminders 合併後確認） | `8f0ccc4` |
+| 2 | `r3-search` | 已合併 | `34f6766` |
+| 2 | `r3-transcript-vad` | 已合併 | `004c83d` |
+| 2 | `r3-annotations` | 已合併 | `79d5b0c` |
 | 3 | `r3-finalize-runner` | 未開始 | |
 | 3 | `r3-hud` | 未開始 | |
 | 3 | `r3-reminders` | 未開始（entitlement 依疑慮 57） | |
