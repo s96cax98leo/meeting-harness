@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>U5 設定視窗</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@500;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<style>
+body{margin:0}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 56px 64px; background: #0F1115; color: #ECEEF2; font-family: 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: baseline; gap: 20px">
+<h1 style="margin: 0; font-size: 40px; font-weight: 700">U5 設定視窗</h1>
+<span style="font-size: 16px; color: #9AA3B2">工具列分頁，標題跟著分頁變；記住上次開的頁。快捷鍵唯讀。</span>
+</div>
+<div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 28px; flex-grow: 1">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">A ★ <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">7 個分頁（回饋與通知）</span></div>
+<div style="flex-grow: 1; border-radius: 18px; background: #171A21; border: 1px solid #2A2F3A; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; justify-content: center; padding: 10px 0 0; font-size: 13px; color: #9AA3B2">回饋與通知</div>
+<div style="display: flex; justify-content: center; gap: 4px; padding: 10px 16px 14px; border-bottom: 1px solid #2A2F3A">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="7">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 4px; width: 76px; padding: 8px 0; border-radius: 10px; background: {{t.bg}}; color: {{t.fg}}">
+<span style="width: 20px; height: 20px; border-radius: 6px; border: 1.6px solid {{t.fg}}"></span>
+<span style="font-size: 12px">{{t.label}}</span>
+</div>
+</sc-for>
+</div>
+<div style="padding: 24px 40px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: grid; grid-template-columns: 200px 1fr; gap: 14px 20px; align-items: center; font-size: 14px">
+<span style="color: #C3C9D4; text-align: right">選單列計時</span>
+<label style="display: flex; align-items: center; gap: 10px"><input type="checkbox" checked="checked" style="width: 18px; height: 18px; accent-color: #FF4D4F"><span>錄製中顯示 12:34</span></label>
+<span style="color: #C3C9D4; text-align: right">錄製小窗</span>
+<div style="display: flex; gap: 6px">
+<button type="button" style="height: 36px; padding: 0 14px; border-radius: 10px; border: none; background: #ECEEF2; color: #0F1115; font-size: 13px; font-weight: 700">自動</button>
+<button type="button" style="height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid #3A404D; background: transparent; color: #ECEEF2; font-size: 13px">一律顯示</button>
+<button type="button" style="height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid #3A404D; background: transparent; color: #ECEEF2; font-size: 13px">不要</button>
+</div>
+<span></span>
+<span style="font-size: 12px; color: #9AA3B2">自動：選單列圖示被瀏海擋住時才出現</span>
+<span style="color: #C3C9D4; text-align: right">錄製中告警</span>
+<label style="display: flex; align-items: center; gap: 10px"><input type="checkbox" checked="checked" style="width: 18px; height: 18px; accent-color: #FF4D4F"><span>用時效性通知（可穿過專注模式）</span></label>
+<span style="color: #C3C9D4; text-align: right">通知授權</span>
+<span style="display: flex; align-items: center; gap: 10px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2DD4BF"></span>已允許<a href="#" style="margin-left: 8px; color: #FF8A8C; font-size: 13px">打開通知設定</a></span>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">B <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">合併成 4 頁</span></div>
+<div style="flex-grow: 1; border-radius: 18px; background: #171A21; border: 1px solid #2A2F3A; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; justify-content: center; gap: 4px; padding: 14px 10px; border-bottom: 1px solid #2A2F3A">
+<sc-for list="{{tabs4}}" as="t" hint-placeholder-count="4">
+<div style="padding: 8px 10px; border-radius: 10px; background: {{t.bg}}; color: {{t.fg}}; font-size: 12px">{{t.label}}</div>
+</sc-for>
+</div>
+<div style="padding: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: #C3C9D4">
+<span>選單列計時</span><span>錄製小窗</span><span>開錄前檢查提示</span><span>預設會議類型</span><span style="color: #8E96A5">快捷鍵（唯讀）⌃⌥⌘R／M／P／B</span>
+<span style="margin-top: 8px; font-size: 12px; color: #9AA3B2">每頁比較飽滿，但快捷鍵藏得比較深</span>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">C <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">側邊欄</span></div>
+<div style="flex-grow: 1; border-radius: 18px; background: #171A21; border: 1px solid #2A2F3A; display: flex; overflow: hidden">
+<div style="width: 120px; padding: 14px 8px; background: #13161C; border-right: 1px solid #2A2F3A; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="7">
+<div style="padding: 8px 10px; border-radius: 8px; background: {{t.bg}}; color: {{t.fg}}; font-size: 12px">{{t.label}}</div>
+</sc-for>
+</div>
+<div style="flex-grow: 1; padding: 18px; font-size: 13px; color: #9AA3B2; line-height: 1.7">之後加項目不怕放不下；工程量最大，和 macOS 15 外觀差異也最大</div>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const tab = (label, on) => ({ label, bg: on ? '#2A2F3A' : 'transparent', fg: on ? '#ECEEF2' : '#8E96A5' });
+return {
+tabs: [tab('一般'), tab('錄製'), tab('回饋與通知', true), tab('快捷鍵'), tab('錄完之後'), tab('權限'), tab('進階')],
+tabs4: [tab('一般'), tab('錄製與回饋', true), tab('通知'), tab('權限與進階')]
+};
+}
+}
+</script>
+</body>
+</html>

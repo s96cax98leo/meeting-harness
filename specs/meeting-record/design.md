@@ -710,7 +710,7 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 - 範例名稱一律用「[Stand-up] 範例專案」；不寫任何真實客戶、組織、會議或視窗標題。
 - 架構取捨（ADR，本輪新增四則）：`adr/adr-r3-sync-compensation.md`（S-C 補償的量與開關）、`adr/adr-r3-concat-then-mix.md`（D20「逐段混音、串接一次編 AAC」在補償開啟時的改寫）、`adr/adr-r3-defaults-writers.md`（`record.defaults.json` 改成兩個寫者）、`adr/adr-r3-menu-stages.md`（推翻 §4.20.6「灰掉不隱藏」）。本節只摘結論。
 - **Swift `Core/` 的 R3 新名稱只以 `spec.md` R3-§3.20 為準**（沿用第一輪 `design.md §9` 的規則）。
-- **UI 外觀**：U1、U2、U4、U5、U6、U7、F2 的確認框、F3 的通知，外觀一律「依 design 段使用者選定的設計稿 <待定>」（R3-D16）；本節與 spec 寫完整的是行為、狀態機、無障礙與結束碼。
+- **UI 外觀**：U1、U2、U4、U5、U6、U7、F2 的確認框、F3 的通知，外觀依使用者選定的設計稿（2026-10-13 定案，R3-D21、R3-D22；稿與規則存在 `design-r3/`）。
 
 ### R3-D1 元件與資料流（增補）
 
@@ -806,9 +806,9 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 
 ### R3-D11 選單列圖示、通知、HUD（U1、U3、U2、D4）
 
-- **U1**：保留 `MenuBarState` 與 `symbolName`（既有測試與相容），新增 `MenuBarAppearance` 8 種：`idle`、`preparing`、`recording`、`recordingMuted`、`recordingAlert`、`paused`、`finalizing`、`failed`；由 `menuBarModel` 的列決定（M1／M5→idle；M8→preparing；M9→recording，`micMuted` 時 recordingMuted；M7→recordingAlert；M6b→paused，有告警時 `alertBadge=true`；M6a／M10→finalizing；M2／M3／M4／M6→failed）。準備中與收尾中不再用紅點。8 種只看形狀就分得出來（不靠顏色）；每種的 SF Symbol 與色彩依設計稿。`MenuBarModel` 加 `appearance`、`alertBadge`、`spokenDuration`（VoiceOver 讀的「已錄 1 小時 2 分」，不讀「01:02:00」）。status item 設 `autosaveName`（intent R3-9 衍生工作併入）。
+- **U1**：保留 `MenuBarState` 與 `symbolName`（既有測試與相容），新增 `MenuBarAppearance` 8 種：`idle`、`preparing`、`recording`、`recordingMuted`、`recordingAlert`、`paused`、`finalizing`、`failed`；由 `menuBarModel` 的列決定（M1／M5→idle；M8→preparing；M9→recording，`micMuted` 時 recordingMuted；M7→recordingAlert；M6b→paused，有告警時 `alertBadge=true`；M6a／M10→finalizing；M2／M3／M4／M6→failed）。準備中與收尾中不再用紅點。8 種只看形狀就分得出來（不靠顏色）；外觀定案為 U1-C 錄製膠囊（R3-D21），形狀與色彩由 Core 的 `menuBarCapsuleStyle` 決定。`MenuBarModel` 加 `appearance`、`alertBadge`、`spokenDuration`（VoiceOver 讀的「已錄 1 小時 2 分」，不讀「01:02:00」）。status item 設 `autosaveName`（intent R3-9 衍生工作併入）。
 - **U3**：新的 Core 純函式 `notificationPolicy(kind:runId:)` 回 `(interruptionLevel, threadIdentifier)`：錄製中告警（`WarningKind.isAlert` 的新告警）＝`timeSensitive`、其餘＝`active`；`threadIdentifier`＝`runId`（沒有 runId 的 app 層通知用 `"mh.app"`）。`newAlertWarnings(previous:current:)` 只回新增的告警，同一則告警不重複發。**不加 Time Sensitive entitlement**：`UNUserNotificationCenter.h:31` 註明要 entitlement，但 §4.2.8 規定 entitlements 恰為 2 項、自簽下加 entitlement 可能讓 app 啟動失敗；本輪只設 `interruptionLevel`，系統不給時退回一般通知，由實機驗收場確認（§7 疑慮 44）。通知內容預設不露出場次名或視窗標題（intent R3-4 第 8 點）。
-- **U2（HUD）**：`HUDMode` ∈ `auto`（預設，D4-A）、`always`、`never`。`hudVisible(mode:obscured:phase:)`：只在錄製中或暫停中顯示；auto 時 `obscured` 為 true 才顯示。HUD 內容：紅點（或暫停／靜音狀態）、計時、系統聲音與麥克風兩格音量條；滑鼠移上去出現暫停／靜音／標記／停止四個按鈕（走與選單相同的控制路徑）。`NSPanel` 非啟用、所有桌面可見、`sharingType = .none`（能否擋住其他 app 的分享由實機驗收場確認，intent R3-5 第 5 點）。
+- **U2（HUD）**：`HUDMode` ∈ `auto`（預設，D4-A）、`always`、`never`。`hudVisible(mode:obscured:phase:)`：只在錄製中或暫停中顯示；auto 時 `obscured` 為 true 才顯示。HUD 內容：紅點（或暫停／靜音狀態）、計時、系統聲音與麥克風兩格音量條；滑鼠移上去出現暫停／靜音／標記／停止四個按鈕（走與選單相同的控制路徑）。外觀定案為 U2-C 收在螢幕邊緣，告警時標籤變注意色並自動展開 8 秒（R3-D21）。`NSPanel` 非啟用、所有桌面可見、`sharingType = .none`（能否擋住其他 app 的分享由實機驗收場確認，intent R3-5 第 5 點）。
 - **快捷鍵回饋改走 HUD**（推翻 §6 第 105 條）：`feedbackRoute(hudVisible:iconVisible:)`＝HUD 看得到→`hud`；HUD 看不到但圖示看得到→`none`（圖示本身會變）；兩者都看不到→`notification`。**圖示被擋住的偵測改成持續進行**（推翻 §6 第 106 條「只發一次」）：每 5 秒檢查一次 `statusItemObscured`，結果決定 auto 模式的 HUD 與上面的回饋路徑；`obscuredAction(previous:current:mode:)` 只在狀態改變時動作。
 
 ### R3-D12 選單依階段顯示（U6；ADR `adr-r3-menu-stages.md`）
@@ -821,29 +821,29 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 ### R3-D13 捨棄這次錄製（F2；R3-Q2 定案）
 
 - 只在選單的錄製階段提供「捨棄這次錄製…」；**不加 CLI 對等子指令**（R3-Q2：避免其他 session 刪資料；沒有 tty 的路徑一律不存在）。
-- 流程：確認對話框（預設按鈕是「取消」，破壞性按鈕要明確點；文字說明「會停止錄製、不收尾，場次的錄音資料夾移到垃圾桶，可從垃圾桶復原」）→ 使用者確認後 menu bar 寫 `<home>/record.discard.json` `{schemaVersion:1, runId, requestedAt}`（tmp＋rename）→ 照 R3-D2 的 pid 確認送 SIGTERM。
+- 流程：確認對話框（F2-A：系統 `NSAlert`，預設按鈕是「繼續錄製」，破壞性按鈕「捨棄並移到垃圾桶」要明確點、沒有快捷鍵；文字說明「會停止錄製、不收尾，這場的錄音資料夾會移到垃圾桶，可從垃圾桶復原」；字面見 `spec.md` §4.42.2）→ 使用者確認後 menu bar 寫 `<home>/record.discard.json` `{schemaVersion:1, runId, requestedAt}`（tmp＋rename）→ 照 R3-D2 的 pid 確認送 SIGTERM。
 - 錄製實例收到 SIGTERM 時讀 `record.discard.json`：`runId` 相符且 `requestedAt` 在 30 秒內 → 停止擷取、取消 writer、**跳過收尾**，用 `FileManager.trashItem(at:resultingItemURL:)` 把 `<場次>/錄音/` 移到垃圾桶；之後 `<場次>` 若只剩 `meeting.json`（與 `.DS_Store`），把 `<場次>` 也移到垃圾桶。**從不硬刪**。狀態 `phase=done`、`code=0`、message「已捨棄，錄音已移到垃圾桶」，新選用欄位 `discarded: true`（nil 省略鍵）。移到垃圾桶失敗 → `phase=failed`、`code=5`、檔案原地保留。`runId` 不符或過期的 `record.discard.json` 當作沒有，照一般停止收尾；開錄時（`resetControl` 同一處）刪掉殘留的 `record.discard.json`。
 - `shouldAutoPrep` 對 `discarded` 為 true 的結果不觸發前處理。
 
 ### R3-D14 首次引導、設定分頁、app 圖示（U4、U5、U7、D7；ADR `adr-r3-defaults-writers.md`）
 
 - **新設定檔** `<home>/menubar.settings.json`（app 唯一寫者）：`showTimer`、`hudMode`、`hudPosition`、`timeSensitiveAlerts`、`lastSettingsTab`、`onboardingCompletedAt`、`meetingDetect`。R2 的 `menubar.prefs.json`（6 鍵，`MenuBarR2Tests.swift:258` 斷言）不動，避免改既有鍵集合測試。
-- **U4 首次引導**：`onboardingCompletedAt` 為 nil 時，menu bar 啟動後顯示引導視窗，步驟：權限（螢幕錄製、麥克風；只顯示狀態與「打開系統設定」，不由引導觸發 TCC 框以外的動作）→ 存檔位置與 harness → 選單列空間（提示圖示可能被瀏海擋住、HUD 的作用）→ 快捷鍵與試錄（試錄走既有 quick-start，錄 5 秒後自動停止並捨棄——用 R3-D13 的路徑，移到垃圾桶）。每一步可略過；完成或略過全部時寫 `onboardingCompletedAt`。
+- **U4 首次引導**（U4-A 分步精靈 5 步，R3-D21）：`onboardingCompletedAt` 為 nil 時，menu bar 啟動後顯示引導視窗，步驟：歡迎 → 權限（螢幕錄製、麥克風、通知、自動化〔選用〕；按鈕只觸發 TCC 授權框或打開系統設定，不做其他系統設定變更）→ 存檔位置（含 harness）→ 選單列空間（提示圖示可能被瀏海擋住、HUD 的作用，可一鍵改成一律顯示 HUD）→ 試錄（含四組快捷鍵說明；試錄走既有 quick-start，錄 5 秒後自動停止並捨棄——用 R3-D13 的路徑，移到垃圾桶）。每一步可略過；完成或略過全部時寫 `onboardingCompletedAt`。
 - **app 寫 `record.defaults.json`**（推翻 R2-Q3）：只在引導的「存檔位置與 harness」一步，以 `writeOnboardingDefaults(home:harness:root:)` 寫 `harness` 與 `root` 兩個鍵：取 `<home>/record.defaults.lock` 的 flock → 讀現有內容 → 只改這兩鍵、其他鍵原樣保留 → `mkstemp`＋rename。`record.sh` 的 `write_defaults`（`bin/record.sh:329-341`）改成拿同一把鎖、讀後合併（保留 app 與 `record sync` 寫的鍵），由 `r3-lock` 先做。
-- **U5 設定視窗**改成工具列分頁（一般、選單列與 HUD、通知、快捷鍵、進階）；快捷鍵分頁只顯示、不能改（D7-A）；通知分頁含 F3 的開關與 Time Sensitive 說明；進階分頁顯示 `syncCompensation` 目前值（唯讀，改要用 CLI）。視窗標題沿用「MeetingRecorder 設定」，分頁名稱與版面依設計稿。
-- **U7 app 圖示**：`Resources/AppIcon.icns`（由設計稿輸出），`Info.plist` 加 `CFBundleIconFile`，`build.sh` 把它複製進 bundle。
+- **U5 設定視窗**改成 7 個工具列分頁（U5-A：一般、錄製、回饋與通知、快捷鍵、錄完之後、權限、進階；R3-D21）；快捷鍵分頁只顯示、不能改（D7-A）；回饋與通知分頁含 HUD 模式與位置、F3 的開關與 Time Sensitive 說明；進階分頁顯示 `syncCompensation` 目前值（唯讀，改要用 CLI）。視窗標題跟著分頁變（HIG；推翻「MeetingRecorder 設定」，`spec.md` §6 第 130 條）。
+- **U7 app 圖示**：`Resources/AppIcon.icns`（U7-A 錄製點＋聲波，幾何比例見 `design-r3/README.md` §6.4），`Info.plist` 加 `CFBundleIconFile`，`build.sh` 把它複製進 bundle。
 - 引導與設定的文字不得含真實名稱；範例用「[Stand-up] 範例專案」。
 
 ### R3-D15 會議偵測提示（F3；R3-Q4 定案）
 
 - 條件全部成立才提示：(1) `menubar.settings.json.meetingDetect` 為 true（預設 true）；(2) 預設輸入裝置的 `kAudioDevicePropertyDeviceIsRunningSomewhere` 為 true（只讀屬性，不開麥克風，不會讓藍牙切到 HFP）；(3) 前景 app 的 bundle ID 在 ★ 清單（沿用 `Core/WindowList.swift` 的會議 app 清單）；(4) `record.lock` 沒被持有（排除本工具自己的 preflight 與錄製）；(5) 同一個 episode 還沒提示過。episode＝輸入裝置從「沒在用」變成「在用」到變回「沒在用」為止；每 3 秒輪詢一次。
-- 通知「錄這個會議？」兩個動作：「開始錄製」→ 走既有 quick-start（用上次的設定）；「這次不要」→ 本 episode 不再提示。**不自動開錄**。通知內容不放視窗標題。
+- 通知「錄這個會議？」（F3-A 一般通知，內文只放 app 名稱：「<app 名稱> 正在使用麥克風。要開始錄製嗎？」）兩個動作：「開始錄製」→ 走既有 quick-start（用上次的設定）；「這場不用」→ 本 episode 不再提示。**不自動開錄**。通知內容不放視窗標題。
 - 決策抽成 Core 純函式 `meetingPromptDecision`，episode 狀態也是純值。
 
 ### R3-D16 UI 設計稿流程（R3-Q7；R3-Q8＝B）
 
 - design 段先用 Claude Design 依 `ui` §4 與 `brief` 的設計 token 出稿：D1（U1 圖示 8 種）、D2–D6（U6 選單各階段、音量條、失敗詳情）、D7（U2 HUD）、D8（U5 設定分頁）、D9（U6）、D10（U4 引導）、D11（U3 通知，系統原生外觀，只定文字）、D12（U7 圖示）；F2 的確認對話框與 F3 的通知也一併出稿。`brief` 的建議方向：U1-B、U2-A、U6-A、F2-A、F3-A、U4-A、U5-A、U7-A。
-- 使用者挑定後存到 `specs/meeting-record/design-r3/`（存之前照 intent R3-4 第 8 點掃名稱），再把 spec 裡「依 design 段使用者選定的設計稿 <待定>」換成稿的路徑與要點（SF Symbol 名、顏色 token、尺寸、文字）。**這一步是 UI 子任務開工的前提**：`r3-menubar-states`、`r3-hud`、`r3-menu-stages`、`r3-onboarding-settings`、`r3-discard`（確認框）、`r3-meeting-detect`（通知）的外觀相關靜態測試，要等稿挑定才寫得出字面。行為、狀態機、無障礙與結束碼不等稿。
+- 使用者挑定後存到 `specs/meeting-record/design-r3/`（存之前照 intent R3-4 第 8 點掃名稱），再把 spec 的外觀佔位換成稿的路徑與要點（SF Symbol 名、顏色 token、尺寸、文字）。**2026-10-13 已完成**（R3-D21）。**這一步是 UI 子任務開工的前提**：`r3-menubar-states`、`r3-hud`、`r3-menu-stages`、`r3-onboarding-settings`、`r3-discard`（確認框）、`r3-meeting-detect`（通知）的外觀相關靜態測試，要等稿挑定才寫得出字面。行為、狀態機、無障礙與結束碼不等稿。
 
 ### R3-D17 Swift 原始碼切分（增補 `design.md §9`、R2-D13）
 
@@ -855,6 +855,7 @@ Sources/Core/Settings.swift        新增：MenuBarSettings（menubar.settings.j
 Sources/Core/SegmentScheduler.swift 新增：SegmentScheduler 狀態機（事件 → 動作）
 Sources/Core/SyncLatency.swift     新增：OutputLatency、reportedLatencySeconds、outputTime 的 lOut 版本（共用向量）
 Sources/Core/MeetingDetect.swift   新增：MeetingEpisode、meetingPromptDecision
+Sources/Core/DesignTokens.swift    新增：DarkroomColor／DarkroomType／DarkroomMetric、contrastRatio、CapsuleStyle、menuBarCapsuleStyle（R3-D21）
 Sources/Core/Records.swift         RecordMeta.outputLatencies、RecordStatus.discarded（Optional，nil 省略鍵）
 Sources/Core/Segments.swift        SwitchReason.outputDeviceChange
 Sources/Core/Trigger.swift         MenuBarModel 加 appearance、alertBadge、spokenDuration（有預設值）
@@ -885,6 +886,8 @@ Resources/                         Info.plist（提醒事項權限說明、CFBun
 | R3-Q6 | `syncCompensation` 鍵＋`meeting record sync`；`calibrated` 讀 `sync-calibration.json` | R3-D9、ADR |
 | R3-Q7 | 設計稿存 `design-r3/`，挑定後才補 spec 的外觀字面；UI 子任務等稿 | R3-D16 |
 | R3-Q8 | （閘門 1 使用者決定 B）U1、U2 也走設計稿 | R3-D16 |
+| 設計稿 | （design 段使用者選定）U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A；設計語言「暗房」 | R3-D21 |
+| 字型 | 預設不打包，退回系統字；打包待決（`spec.md` §7 疑慮 54） | R3-D22 |
 | D3 | A：補償型播放端按時段中位數 \|d\| < 45 ms；ffplay 的 `--sync` 保留為迴歸 | R3-D8 |
 | D4 | A：HUD 預設 auto | R3-D11 |
 | D7 | A：快捷鍵不開放自訂 | R3-D14 |
@@ -894,6 +897,23 @@ Resources/                         Info.plist（提醒事項權限說明、CFBun
 | D13 | A：一場實機驗收（使用者在場） | `spec.md` §4.47 |
 | D14a | A：錄製長度 × 3 ＋ 600 秒 | R3-D3 |
 | D14b | A：錄製中 preflight 回 2 | R3-D2 |
+
+### R3-D21 設計稿定案：設計語言「暗房」（2026-10-13，使用者選定）
+
+- 依據：run 目錄 `r3-design-choices.md`（使用者選定）與設計稿原始檔；稿與實作規則存在 `specs/meeting-record/design-r3/`（`README.md`＋9 個 `*.dc.html`，存前後都掃過名稱）。設計稿的私人連結不寫進 repo。
+- 使用者指定：不用 macOS 原生風格、不用既有設計系統，採自訂的「暗房」：深石墨底（墨 `#0F1115`／面 `#171A21`／浮 `#1F232C`；淺色 `#F6F5F2`），單一訊號色（錄製 `#FF4D4F`、注意 `#F5A524`、處理 `#8B7CF6`、完成 `#2DD4BF`，亮度也拉開，灰階可分）。
+- 各畫面：U1＝C 錄製膠囊（含麥克風靜音分段膠囊）；U2＝C 收在螢幕邊緣；U4＝A 分步精靈 5 步；U5＝A 7 個工具列分頁；U6＝A 依階段整份換掉；U7＝A 錄製點＋聲波；F2＝A 確認對話框、錄製照常、預設鍵「繼續錄製」；F3＝A 一般通知、內文只放 app 名稱。
+- **token 放 Core**：色、字級、間距與選單列膠囊的樣式表都是 `Core/DesignTokens.swift` 的常數與純函式（`spec.md` §3.20），用 Swift 單元測試驗值、驗 WCAG 對比、驗 8 種外觀灰階可分（§4.38.5–§4.38.8）；AppKit 端只負責把 token 畫出來。理由：自訂外觀代表大量自訂 `NSView`，外觀規則若散在 AppKit 檔裡，只能靠截圖審查；放在 Core 才能機械判定。
+- **自訂與標準的界線**：自訂＝選單列膠囊（自繪圖）、HUD 整個面板、選單的音量條、引導的步驟條／權限列／主按鈕；標準＝`NSMenu` 本身、設定視窗的控制項、失敗詳情視窗、F2 的 `NSAlert`、F3 的系統通知。界線的理由：選單與 alert 用自訂 view 會失去系統的鍵盤導覽、高亮、VoiceOver 朗讀順序（`spec.md` §7 疑慮 53、56）。
+- **深淺色與無障礙規則**：選單列膠囊跟選單列的深淺（`effectiveAppearance`），淺色與「增加對比」用深一階的訊號色（對比補正，稿上沒有；`design-r3/README.md` §1.1）；HUD 一律深色；引導、設定、失敗詳情跟系統深淺色。「增加對比」：膠囊換深一階底、HUD 外框 2pt；「減少透明度」：HUD 不透明；「減少動態效果」：HUD 不做動畫、選單列本來就沒有動畫。VoiceOver 字面見 `spec.md` §4.38.7、§4.40.8、§4.41.4、§4.43.5。
+- **與稿不同的地方**（都為了可及性或既有定案）：膠囊字 13→14pt bold（白字對紅 3.27:1，只過大字門檻；§7 疑慮 52）、有告警加角標（稿只換框色，灰階分不出）、F2 用 `NSAlert`、選單不做紅底列、不採用 ⌃⌥⌘R 停止、F2 說明照實際只移 `錄音/`；清單在 `design-r3/README.md` §7。
+- **U2-C 的告警加強**（使用者要求「告警時要加強」）：新告警時標籤外框改注意色並維持到本場結束、HUD 自動展開一次 8 秒並顯示告警膠囊（`spec.md` §4.40.7）；8 秒取「讀完一行 20 字左右的告警」與「不長時間遮住內容」的折衷。HUD 不在畫面上時不強制顯示，告警仍走通知（U3）與選單列的告警膠囊。被擋住偵測照 D4＝A：auto 模式下圖示被擋住才自動顯示 HUD（`spec.md` §4.40.1、§4.40.3）。
+
+### R3-D22 字型：預設不打包，退回系統字
+
+- 稿用 Noto Sans TC（介面）、Space Grotesk＋Noto Sans TC 粗體（標題）、JetBrains Mono（計時）。**決定：預設不打包任何字型**，對應到系統字：介面與標題＝`NSFont.systemFont(ofSize:weight:)`（中文落到 PingFang TC、西文 SF Pro）；計時＝`monospacedDigitSystemFont`（SF Pro 等寬數字，R2 已在用）；指令與路徑＝`monospacedSystemFont`（SF Mono）。字級與字重照稿（`DarkroomType`）。`spec.md` §4.43.9 以靜態測試確保沒有偷偷打包。
+- 理由：(1) 現況 app 沒有任何字型資源，打包要改 `build.sh`、`Info.plist`（`ATSApplicationFontsPath`）並附授權全文；(2) Noto Sans TC 的中文字集讓 app 明顯變大（實際大小未量）；(3) 選單列與系統通知本來就只能用系統字，打包後 app 內會出現兩套中文字形；(4) 三套字的授權都是 SIL OFL 1.1（可散布，但本輪未從發行頁逐一查證版本與授權）。
+- 待決（`spec.md` §7 疑慮 54）：(A) 不打包（預設）；(B) 只打包 JetBrains Mono 給計時（檔小、計時最像稿；代價是仍要改 `build.sh`、`Info.plist` 與附授權，系統通知裡的時間仍是系統字）；(C) 三套都打包（最像稿，代價是 app 變大與授權附檔）。
 
 ### R3-D20 不在 R3 範圍、衍生工作（不編號）
 

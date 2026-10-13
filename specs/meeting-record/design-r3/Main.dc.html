@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>設計語言 暗房</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#FF6B6E}a:hover{color:#FF8A8C}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 72px 80px; background: #0F1115; color: #ECEEF2; font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 48px">
+<div style="display: flex; justify-content: space-between; align-items: flex-end">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="font-size: 14px; letter-spacing: 0.2em; color: #9AA3B2">MEETINGRECORDER · R3</div>
+<h1 style="margin: 0; font-size: 88px; font-weight: 700; line-height: 1; font-family: 'Noto Sans TC', sans-serif; letter-spacing: -0.02em">暗房</h1>
+<div style="font-size: 20px; color: #C3C9D4; font-family: 'Noto Sans TC', sans-serif; max-width: 640px; line-height: 1.6">深色石墨底，只留一個訊號色。錄製中的紅點是畫面上唯一會發光的東西，其他一律安靜。</div>
+</div>
+<div style="display: flex; align-items: center; gap: 14px; padding: 14px 22px; border-radius: 999px; background: #171A21; border: 1px solid #2A2F3A">
+<span style="width: 14px; height: 14px; border-radius: 50%; background: {{signal}}; box-shadow: 0 0 0 6px rgba(255,77,79,0.18)"></span>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums">42:07</span>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px">
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 28px; border-radius: 20px; background: #171A21; border: 1px solid #2A2F3A">
+<div style="font-size: 13px; letter-spacing: 0.16em; color: #9AA3B2">底色</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #0F1115; border: 1px solid #2A2F3A"></div><div style="font-size: 12px; color: #C3C9D4">墨 #0F1115</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #171A21; border: 1px solid #2A2F3A"></div><div style="font-size: 12px; color: #C3C9D4">面 #171A21</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #1F232C; border: 1px solid #2A2F3A"></div><div style="font-size: 12px; color: #C3C9D4">浮 #1F232C</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #F6F5F2"></div><div style="font-size: 12px; color: #C3C9D4">淺色 #F6F5F2</div></div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 28px; border-radius: 20px; background: #171A21; border: 1px solid #2A2F3A">
+<div style="font-size: 13px; letter-spacing: 0.16em; color: #9AA3B2">訊號色（亮度也不同，灰階可分）</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: {{signal}}"></div><div style="font-size: 12px; color: #C3C9D4">錄製 #FF4D4F</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #F5A524"></div><div style="font-size: 12px; color: #C3C9D4">注意 #F5A524</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #8B7CF6"></div><div style="font-size: 12px; color: #C3C9D4">處理 #8B7CF6</div></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><div style="height: 64px; border-radius: 12px; background: #2DD4BF"></div><div style="font-size: 12px; color: #C3C9D4">完成 #2DD4BF</div></div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px; padding: 28px; border-radius: 20px; background: #171A21; border: 1px solid #2A2F3A">
+<div style="font-size: 13px; letter-spacing: 0.16em; color: #9AA3B2">字</div>
+<div style="font-family: 'Noto Sans TC', sans-serif; font-size: 28px; font-weight: 700">錄製中・麥克風靜音</div>
+<div style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; color: #C3C9D4; line-height: 1.6">內文 Noto Sans TC 15／標題 Space Grotesk＋Noto Sans TC 粗體</div>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 22px; font-variant-numeric: tabular-nums; color: #ECEEF2">9:59　59:59　1:00:00</div>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px">
+<div style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px; background: #171A21; border: 1px solid #2A2F3A">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="{{signal}}"></circle></svg>
+<span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px">錄製中</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px; background: #171A21; border: 1px solid #2A2F3A">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="6" y="5" width="3.5" height="12" rx="1.2" fill="#F5A524"></rect><rect x="12.5" y="5" width="3.5" height="12" rx="1.2" fill="#F5A524"></rect></svg>
+<span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px">已暫停</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px; background: #171A21; border: 1px solid #2A2F3A">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7.5" fill="none" stroke="#8B7CF6" stroke-width="2.2" stroke-dasharray="3 3.2"></circle></svg>
+<span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px">準備／收尾</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px; background: #171A21; border: 1px solid #2A2F3A">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="{{signal}}"></circle><circle cx="17.5" cy="5" r="4" fill="#F5A524" stroke="#171A21" stroke-width="1.6"></circle></svg>
+<span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px">錄製中有告警</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px; background: #171A21; border: 1px solid #2A2F3A">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M11 3 L20 18.5 H2 Z" fill="none" stroke="{{signal}}" stroke-width="2" stroke-linejoin="round"></path><path d="M11 9 V13" stroke="{{signal}}" stroke-width="2" stroke-linecap="round"></path><circle cx="11" cy="15.8" r="1.1" fill="{{signal}}"></circle></svg>
+<span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px">需要處理</span>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"signal":{"editor":"color","default":"#FF4D4F","options":["#FF4D4F","#FF6A3D","#E5484D"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return { signal: this.props.signal ?? '#FF4D4F' };
+}
+}
+</script>
+</body>
+</html>

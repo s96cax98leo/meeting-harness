@@ -1386,7 +1386,8 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 - 上游：`intent.md`〈R3 第三輪〉（閘門 1 已核准：R3-Q1＝A、R3-Q8＝B，D3／D4／D7／D9／D11／D12／D13／D14a／D14b 照預設）；設計：`design.md`〈R3 第三輪設計〉R3-D1–R3-D20；ADR：`adr/adr-r3-sync-compensation.md`、`adr/adr-r3-concat-then-mix.md`、`adr/adr-r3-defaults-writers.md`、`adr/adr-r3-menu-stages.md`。
 - 本節以上的第一輪與 R2 條文不改，唯一的就地修改是 §2.4（加 `meeting record sync`，§6 第 117 條）；R3 取代既有條文的地方逐條列在 R3-§6。
 - 編號接續：資料契約 §3.15–§3.20、驗收 §4.26–§4.47、整合修訂第 117 條起、疑慮第 43 條起。
-- **UI 外觀的佔位**：凡寫「外觀：依 design 段使用者選定的設計稿 <待定>」的地方，build 不得自行決定外觀（SF Symbol、顏色、尺寸、字面版面）；設計稿挑定並存到 `specs/meeting-record/design-r3/` 之後，由 design 段把 `<待定>` 換成稿的路徑與要點，才派對應子任務（`design.md` R3-D16）。行為、狀態機、無障礙與結束碼不等稿，照本節寫的做。
+- **UI 外觀（2026-10-13 定案）**：使用者選定的設計稿與設計語言「暗房」存在 `specs/meeting-record/design-r3/`（`README.md`＋原始稿 `*.dc.html`；`design.md` R3-D21、R3-D22）。U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A。本節的外觀條文（§4.38.3、§4.38.5–§4.38.7、§4.40.4、§4.40.7–§4.40.8、§4.41.2–§4.41.5、§4.41.7、§4.42.2、§4.43.5–§4.43.7、§4.43.9、§4.44.3）照該稿寫成可測的字面；稿與本 spec 不一致時以本 spec 為準。build 不得自行決定本節沒寫的色值、字級、尺寸與字面；要改就回報。
+- **設計 token 是 Core 常數**：色值、字級、間距一律來自 `Core/DesignTokens.swift`（§3.20），AppKit 端不得自己寫色值或用 `systemRed` 等系統色取代。標「自訂」的是自訂 `NSView`／自繪圖，其餘用標準 AppKit 控制項。
 - 範例名稱一律用「[Stand-up] 範例專案」；測試、fixture、log 範例不得含真實名稱（§4.14 照舊適用）。
 - 測試欄的寫法：`test_r3_<slug>.py::<函式>` 在 `tests/record/`；`swift:<檔>::<函式>` 在 `tools/MeetingRecorder/Tests/`；`test_r3_app_static.py::<類別>.<函式>` 是只能靜態檢查的 app 端（類別名對應子任務）；「實機」＝R3 實機驗收場（§4.47，使用者在場）。
 
@@ -1421,10 +1422,10 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 - `<home>/menubar.settings.json`（新，app 唯一寫者；R2 的 `menubar.prefs.json` 6 鍵不動）：
 
   ```json
-  { "schemaVersion": 1, "showTimer": true, "hudMode": "auto", "hudPosition": "topRight",
+  { "schemaVersion": 1, "showTimer": true, "hudMode": "auto", "hudPosition": "right",
     "timeSensitiveAlerts": true, "lastSettingsTab": "general", "onboardingCompletedAt": null, "meetingDetect": true }
   ```
-  缺檔、壞檔、缺鍵 → 該鍵用上面的預設值；不認得的值（例 `hudMode: "x"`）→ 預設值。`hudPosition` ∈ `topLeft`、`topRight`、`bottomLeft`、`bottomRight`。
+  缺檔、壞檔、缺鍵 → 該鍵用上面的預設值；不認得的值（例 `hudMode: "x"`、`hudPosition: "topRight"`）→ 預設值。`hudPosition` ∈ `right`、`left`（U2＝C：HUD 收在螢幕右緣或左緣）；`lastSettingsTab` ∈ `SettingsTab` 的 7 個 rawValue（§3.20）。
 - `<home>/sync-calibration.json`（新，使用者或實機驗收場手寫，不進 repo）：`{"schemaVersion": 1, "devices": {"<輸出裝置 uid>": <秒數>}}`。
 
 #### 3.17 場次檔的新欄位
@@ -1476,9 +1477,17 @@ enum MenuBarAppearance: String, CaseIterable, Equatable { case idle, preparing, 
 func spokenDuration(seconds: Int) -> String
 enum MenuStage: String, Equatable { case idle, recording, finalizing, failed }
 func menuStage(_ m: MenuBarModel) -> MenuStage
-enum MenuItemID: String, CaseIterable { case status, levels, copyDiagnostics, failureDetail, start, recordWindow, saveTo,
-                                        pauseResume, mute, mark, stop, discard, cancelFinalize, openSession, showLast, preferences, quit }
-func menuItems(stage: MenuStage) -> [MenuItemID]
+enum MenuItemID: String, CaseIterable { case status, levels, alert, copyDiagnostics, failureDetail, start, recordWindow, saveTo,
+                                        pauseResume, mute, mark, stop, discard, cancelFinalize, showHUD, openSession, showLast, preferences, quit }
+func menuItems(stage: MenuStage) -> [MenuItemID]            // ＝ menuGroups(stage:) 攤平
+func menuGroups(stage: MenuStage) -> [[MenuItemID]]         // 組與組之間一條分隔線（§4.41.7）
+func levelFraction(dBFS: Double?) -> Double                 // 音量條長度：clamp((dBFS + 60) / 60, 0, 1)；nil → 0
+func menuBarAccessibilityLabel(appearance: MenuBarAppearance, alertBadge: Bool, spoken: String,
+                               alertText: String?, status: String) -> String   // §4.38.7
+let hudAlertExpandSeconds: Double = 8        // 新告警時 HUD 自動展開的秒數（§4.40.7）
+let hudCollapseDelaySeconds: Double = 0.6    // 滑鼠離開後收合的延遲
+let hudAnimationSeconds: Double = 0.2        // 展開／收合動畫；「減少動態效果」時不做動畫
+let levelMeterRefreshSeconds: Double = 0.5
 enum HUDMode: String, Codable, CaseIterable { case auto, always, never }
 func hudVisible(mode: HUDMode, obscured: Bool, appearance: MenuBarAppearance) -> Bool
 enum FeedbackRoute: String, Equatable { case hud, none, notification }
@@ -1493,13 +1502,56 @@ func notificationPolicy(kind: NotificationKind, runId: String?, timeSensitiveAll
 func newAlertWarnings(previous: [RecordWarning], current: [RecordWarning]) -> [RecordWarning]
 
 // Core/Settings.swift
-struct MenuBarSettings: Codable, Equatable { var showTimer = true; var hudMode = HUDMode.auto; var hudPosition = "topRight"
+struct MenuBarSettings: Codable, Equatable { var showTimer = true; var hudMode = HUDMode.auto; var hudPosition = "right"
     var timeSensitiveAlerts = true; var lastSettingsTab = "general"; var onboardingCompletedAt: String? = nil; var meetingDetect = true }
+enum SettingsTab: String, CaseIterable { case general, recording, feedback, hotkeys, afterRecording, permissions, advanced
+    var title: String { get }; var symbolName: String { get } }   // 值見 §4.43.6
+func settingsTab(_ raw: String) -> SettingsTab                    // 不認得 → .general
 func loadMenuBarSettings(home: URL) -> MenuBarSettings
 func saveMenuBarSettings(_ s: MenuBarSettings, home: URL) throws
 enum DefaultsMergeError: Error, Equatable { case notObject, lockTimeout }
 func mergedDefaultsJSON(existing: Data?, harness: String, root: String) throws -> Data
 func writeOnboardingDefaults(home: URL, harness: String, root: String) throws
+
+// Core/DesignTokens.swift（設計語言「暗房」；值的出處見 design-r3/README.md §1；色值一律 "#RRGGBB" 大寫字串）
+enum DarkroomColor {
+    static let ink = "#0F1115", surface = "#171A21", raised = "#1F232C", light = "#F6F5F2", line = "#2A2F3A", lineStrong = "#3A404D"
+    static let text = "#ECEEF2", textSecondary = "#C3C9D4", textTertiary = "#9AA3B2", textDisabled = "#5B6372"
+    static let recording = "#FF4D4F", attention = "#F5A524", processing = "#8B7CF6", done = "#2DD4BF"
+    static let recordingText = "#FF6B6E", attentionText = "#F7C46C", processingText = "#B9AEFF", doneText = "#5EE6D2"
+    static let onAttention = "#1A1206", mutedSegment = "#1A0B0C", onSignal = "#FFFFFF", iconStroke = "#2E333E"
+    static let menuBarDark = "#1E2129", menuBarLight = "#E9E7E2", textOnLight = "#1A1C21", lineOnLight = "#C9C6BF"
+    static let recordingOnLight = "#D92D30", processingOnLight = "#6D5BD0", processingTextOnLight = "#5E4BC4"
+    static let failedTextOnLight = "#B42318", attentionTextOnLight = "#8A5A00", doneOnLight = "#0F766E"
+    static let recordingHighContrast = "#CC2F32", recordingHighContrastOnLight = "#C42B2E"
+    static var all: [String: String] { get } }   // 以上 34 個 token：名稱 → 值
+struct TypeToken: Equatable { var size: Double; var weight: String }   // weight ∈ "regular"、"semibold"、"bold"
+enum DarkroomType {
+    static let capsule = TypeToken(size: 14, weight: "bold"), hudTabTimer = TypeToken(size: 13, weight: "semibold")
+    static let hudTimer = TypeToken(size: 18, weight: "semibold"), hudLabel = TypeToken(size: 13, weight: "regular")
+    static let hudButton = TypeToken(size: 12, weight: "regular"), hudAlert = TypeToken(size: 12, weight: "bold")
+    static let menuMeterLabel = TypeToken(size: 12, weight: "regular"), onboardingTitle = TypeToken(size: 26, weight: "bold")
+    static let onboardingBody = TypeToken(size: 15, weight: "regular"), rowTitle = TypeToken(size: 15, weight: "bold")
+    static let rowDetail = TypeToken(size: 13, weight: "regular"), button = TypeToken(size: 14, weight: "bold")
+    static let stepLabel = TypeToken(size: 12, weight: "regular"), settingsTabLabel = TypeToken(size: 12, weight: "regular")
+    static let settingsRowLabel = TypeToken(size: 14, weight: "regular"), caption = TypeToken(size: 12, weight: "regular") }
+enum DarkroomMetric {
+    static let spacing: [Double] = [4, 8, 12, 16, 24]
+    static let capsuleHeight: Double = 20, capsulePaddingH: Double = 10, capsuleGap: Double = 6, capsuleDot: Double = 8, capsuleBorder: Double = 1.5
+    static let muteSegmentPaddingLeading: Double = 9, muteSegmentPaddingTrailing: Double = 7, badgeDiameter: Double = 7, badgeStroke: Double = 1.5
+    static let hudTabWidth: Double = 34, hudTabHeight: Double = 120, hudTabCornerRadius: Double = 14, hudTabDot: Double = 10, hudTabTopFraction: Double = 0.25
+    static let hudPanelWidth: Double = 230, hudPanelPadding: Double = 16, hudPanelCornerRadius: Double = 16
+    static let hudButtonHeight: Double = 44, hudButtonCornerRadius: Double = 10, hudButtonGap: Double = 6
+    static let meterBarHeight: Double = 5, meterLabelWidth: Double = 40, menuMeterWidth: Double = 240
+    static let onboardingWidth: Double = 620, onboardingHeight: Double = 560, onboardingPaddingH: Double = 32, onboardingPaddingV: Double = 28
+    static let rowPaddingH: Double = 16, rowPaddingV: Double = 14, rowCornerRadius: Double = 14, rowGap: Double = 10
+    static let buttonHeight: Double = 44, buttonCornerRadius: Double = 12, settingsWidth: Double = 600, settingsTabWidth: Double = 76 }
+func contrastRatio(_ a: String, _ b: String) -> Double   // WCAG 2.x（design-r3/README.md §1.4）；任一不是 #RRGGBB → 0
+enum CapsuleShape: String, Equatable { case templateSymbol, outline, filled, split }
+enum CapsuleGlyph: String, Equatable { case none, dot, pause, micSlash }
+struct CapsuleStyle: Equatable { var shape: CapsuleShape; var glyph: CapsuleGlyph; var label: String; var showsTimer: Bool
+    var fill: String?; var border: String?; var borderWidth: Double; var text: String?; var badge: Bool; var largeText: Bool }
+func menuBarCapsuleStyle(_ a: MenuBarAppearance, alertBadge: Bool, dark: Bool, increaseContrast: Bool) -> CapsuleStyle   // §4.38.5
 
 // Core/SegmentScheduler.swift
 enum SchedulerTrack: String, CaseIterable, Equatable { case video, system, mic }
@@ -1680,8 +1732,12 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.38.1 | `menuBarModel` 的 `appearance` 應：M1、M5 → `.idle`；M8 → `.preparing`；M9 → `.recording`（`micMuted` 時 `.recordingMuted`）；M7 → `.recordingAlert`；M6b → `.paused`（有告警類 warning 時 `alertBadge` true）；M6a、M10 → `.finalizing`；M2、M3、M4、M6 → `.failed`。`state` 與 `symbolName` 與 R2 相同（`TriggerTests` 與 `MenuBarR2Tests` 不改）。 | U1 | `swift:R3MenuBarTests.swift::testAppearanceMapping` |
 | 4.38.2 | `spokenDuration`：0 → "已錄 0 秒"；59 → "已錄 59 秒"；60 → "已錄 1 分"；125 → "已錄 2 分 5 秒"；3600 → "已錄 1 小時"；3725 → "已錄 1 小時 2 分"；-3 → "已錄 0 秒"。錄製中與暫停中的 `accessibilityLabel` 應含 `spokenDuration`，不含 `timerText` 的「01:02」寫法。 | U1；無障礙 | `swift:R3MenuBarTests.swift::testSpokenDuration` |
-| 4.38.3 | 8 種外觀只看形狀就應分得出來（灰階截圖兩兩不同），準備中與收尾中不得用紅色圓點；一律 template image 或依設計稿的色彩規則。外觀：依 design 段使用者選定的設計稿 <待定>（D1）。 | U1；R3-Q8＝B | 設計審查（實機截圖，淺色／深色）；外觀字面的靜態測試在稿挑定後補（§6 第 129 條） |
+| 4.38.3 | **外觀＝U1-C 錄製膠囊**（`design-r3/README.md` §2、`design-r3/U1-MenuBar.dc.html` 的 C 列）：待機用 SF Symbol `record.circle`（template）；其他 7 種是**自訂**繪製的非 template 圖（`NSImage(size:flipped:drawingHandler:)`，`isTemplate = false`），形狀、符號、字與顏色一律取自 `menuBarCapsuleStyle(…)`（§4.38.5），`dark` 取自 status item 按鈕的 `effectiveAppearance`、`increaseContrast` 取自 `NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast`。靜音分段膠囊左段的麥克風斜線用 SF Symbol `mic.slash`（`paletteColors` 白、非 template）。計時用 `monospacedDigitSystemFont`、字級 `DarkroomType.capsule`；設定 `showTimer` 為 false 時不畫計時、膠囊照畫。準備中與收尾中不得畫紅色。`MenuBar.swift` 不得出現 `systemRed`、`contentTintColor`。 | U1；R3-Q8＝B；使用者選定 U1＝C | `test_r3_app_static.py::MenuBarStatesStatic.test_capsule_drawing`；`test_r2_static.py::test_trigger_status_item_variable_length`（§6 第 129 條改預期）；設計審查（實機截圖：深色／淺色選單列、增加對比、灰階） |
 | 4.38.4 | status item 應設 `autosaveName`（使用者拖動後重開仍保留位置）。 | intent R3-9 | `test_r3_app_static.py::MenuBarStatesStatic.test_autosave_name`；實機 |
+| 4.38.5 | `menuBarCapsuleStyle(a, alertBadge:, dark:, increaseContrast:)` 應回下表（「深／淺」＝`dark` true／false；「增對比」＝`increaseContrast` true，未寫的欄與一般相同）。共同：`idle` → `shape .templateSymbol`、`glyph .none`、`label ""`、`showsTimer false`、`fill/border/text nil`、`borderWidth 0`、`badge false`、`largeText false`（四種組合都一樣）。`preparing` → `.outline`、`.none`、`"檢查中"`、無計時、`fill nil`、`borderWidth 1.5`；深：`border processing`、`text processingText`；淺：`border` 與 `text` 都是 `processingTextOnLight`。`recording` → `.filled`、`.dot`、`""`、有計時、`border nil`、`borderWidth 0`、`text onSignal`；`fill`：深 `recording`、淺 `recordingOnLight`、深增對比 `recordingHighContrast`、淺增對比 `recordingHighContrastOnLight`；`largeText`＝深且非增對比。`recordingMuted` → `.split`、`.micSlash`，其餘同 `recording`，另 `border`＝同 `fill`、`borderWidth 1`。`recordingAlert` → 同 `recording`，另 `border attention`、`borderWidth 1.5`、`badge true`。`paused` → `.filled`、`.pause`、`""`、有計時、`fill attention`、`text onAttention`、`badge`＝`alertBadge`、`largeText false`；深：`border nil`、`borderWidth 0`；淺：`border attentionTextOnLight`、`borderWidth 1`。`finalizing` → `.filled`、`.none`、`"收尾中"`、無計時、`text onSignal`；`fill`：深 `processing`、淺 `processingOnLight`、深增對比 `processingOnLight`、淺增對比 `processingTextOnLight`；`largeText`＝深且非增對比。`failed` → `.outline`、`.none`、`"需處理"`、無計時、`fill nil`、`borderWidth 1.5`；深：`border recording`、`text recordingText`；淺：`border` 與 `text` 都是 `failedTextOnLight`。（以上 token 名都是 `DarkroomColor.` 的成員。） | U1；`design-r3/README.md` §2 | `swift:R3DesignTokenTests.swift::testCapsuleStyleTable` |
+| 4.38.6 | 對 7 種非待機外觀 × 深淺 × 增對比與否（`alertBadge` 取 false 與 true）：(a) 文字對比 `contrastRatio(text, fill ?? 選單列底)` ≥ 4.5，`largeText` 為 true 時 ≥ 3.0；增對比時 `largeText` 必為 false；(b) 外形對比 max(`contrastRatio(fill, 選單列底)`, `contrastRatio(border, 選單列底)`)（nil 當 0）≥ 3.0；(c) 角標（`attention` 底、`onAttention` 描邊）對選單列底的 max 對比 ≥ 3.0。選單列底＝深 `menuBarDark`、淺 `menuBarLight`。(d) 8 種外觀（`alertBadge` false）的（`shape`, `glyph`, `label`, `showsTimer`, `badge`）兩兩不同，`paused` 帶 `alertBadge` true 時也和其他 7 種不同（灰階可分，WCAG 1.4.1）。(e) `contrastRatio("#FFFFFF", "#000000")` 與 21 的差 < 0.01；`contrastRatio("#FFFFFF", "#FF4D4F")` 與 3.27 的差 < 0.01；`contrastRatio("x", "#000000")` = 0。 | U1；WCAG 1.4.1、1.4.3、1.4.11 | `swift:R3DesignTokenTests.swift::testCapsuleContrast`、`::testCapsuleShapesDistinct`、`::testContrastRatio` |
+| 4.38.7 | `menuBarAccessibilityLabel`（`spoken` 例「已錄 12 分 34 秒」、`alertText` 例「麥克風已連續 15 秒幾乎沒有聲音」）：`idle` → 「MeetingRecorder：待機中」；`preparing` → 「MeetingRecorder：開錄前檢查中」；`recording` → 「MeetingRecorder：錄製中，已錄 12 分 34 秒」；`recordingMuted` → 「MeetingRecorder：錄製中，已錄 12 分 34 秒，麥克風靜音」；`recordingAlert` → 「MeetingRecorder：錄製中，已錄 12 分 34 秒，有告警：麥克風已連續 15 秒幾乎沒有聲音」（`alertText` nil 時結尾只到「，有告警」）；`paused` → 「MeetingRecorder：已暫停，已錄 12 分 34 秒」，`alertBadge` 時再加「，有告警」；`finalizing` → 「MeetingRecorder：收尾中」；`failed`（`status`「開錄前檢查沒過」）→ 「MeetingRecorder：需要處理：開錄前檢查沒過」。status item 按鈕的 `accessibilityLabel` 與 `toolTip` 都用它（取代 R2 的 `accessibilityText`，§6 第 135 條）。 | U1；無障礙 | `swift:R3DesignTokenTests.swift::testMenuBarAccessibilityLabel`；`test_r3_app_static.py::MenuBarStatesStatic.test_capsule_drawing`（含 `menuBarAccessibilityLabel(`） |
+| 4.38.8 | `DarkroomColor.all` 恰為 34 項、每個值符合 `^#[0-9A-F]{6}$`，且與 §3.20 列的值逐一相等；`DarkroomType`、`DarkroomMetric` 的每個成員等於 §3.20 的值；`DarkroomMetric.spacing` 每項都是 4 的倍數。 | `design-r3/README.md` §1 | `swift:R3DesignTokenTests.swift::testColorTokens`、`::testTypeAndMetricTokens` |
 
 #### 4.39 通知分級（U3）
 
@@ -1699,27 +1755,30 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.40.1 | `hudVisible`：appearance ∈ {recording, recordingMuted, recordingAlert, paused} 才可能 true；`always` → true；`auto` → 等於 `obscured`；`never` → false；其他 appearance 一律 false。 | U2；D4-A | `swift:R3MenuBarTests.swift::testHudVisible` |
 | 4.40.2 | `feedbackRoute`：(true, _) → `.hud`；(false, true) → `.none`；(false, false) → `.notification`。 | §6 第 120 條 | `swift:R3MenuBarTests.swift::testFeedbackRoute` |
 | 4.40.3 | `obscuredAction`：只在 `mode == .auto` 且 `recording` 時動作；(nil, true) → `.showHUD`；(false, true) → `.showHUD`；(true, false) → `.hideHUD`；(true, true)、(false, false)、(nil, false) → `.none`；`always`／`never` 或非錄製中一律 `.none`。圖示被擋住的檢查每 `obscuredCheckSeconds`（5 秒）做一次，不再只做一次。 | §6 第 121 條 | `swift:R3MenuBarTests.swift::testObscuredAction` |
-| 4.40.4 | HUD 應為非啟用的 `NSPanel`（`.nonactivatingPanel`）、所有桌面可見、`sharingType = .none`；顯示紅點或狀態、計時、兩格音量條；滑鼠移上去出現暫停／靜音／標記／停止四個按鈕，各自走與選單相同的控制路徑（`controlAvailability(`、`stopTargetDecision(`）；每個按鈕有 `accessibilityLabel`；HUD 預設不顯示場次名。外觀：依 design 段使用者選定的設計稿 <待定>（D7）。實作形狀：`Trigger/HUD.swift` 含 `nonactivatingPanel`、`sharingType = .none`、`canJoinAllSpaces`、`setAccessibilityLabel`。 | U2；intent R3-4 第 8 點 | `test_r3_app_static.py::HudStatic.test_panel_shape`；設計審查；實機（`sharingType` 對其他 app 的分享是否有效，intent R3-5 第 5 點） |
+| 4.40.4 | HUD 應為非啟用的 `NSPanel`（`.nonactivatingPanel`）、所有桌面可見、`sharingType = .none`；**外觀＝U2-C 收在螢幕邊緣**（`design-r3/README.md` §3、`design-r3/U2-HUD.dc.html` 的 C 欄），整個 HUD 是**自訂** view、一律深色（`NSAppearance(named: .darkAqua)`，不跟系統淺色）。收合：貼在 `hudPosition`（`right`／`left`）那一側螢幕邊緣的直立標籤 `hudTabWidth`×`hudTabHeight`、內側圓角 `hudTabCornerRadius`、底 `DarkroomColor.surface` 不透明度 0.94、1pt `lineStrong` 外框（貼邊側無框），內容為直徑 `hudTabDot` 的 `recording` 點與直排計時（`hudTabTimer`）；標籤頂端＝所在螢幕 `visibleFrame` 頂端往下 `hudTabTopFraction` × 高度；所在螢幕＝status item 按鈕視窗的 `screen`，取不到用 `NSScreen.main`。展開（滑鼠移入標籤）：同一側長出寬 `hudPanelWidth` 的面板（內距 `hudPanelPadding`、圓角 `hudPanelCornerRadius`、底 `surface` 0.96），依序為狀態字「錄製中」／「已暫停」＋計時（`hudTimer`）、系統與麥克風兩條音量條（`levelFraction(dBFS:)`；靜音時麥克風那行改「已靜音」）、2×2 四顆按鈕「暫停」（暫停中「繼續」）、「靜音」（靜音中「取消靜音」）、「標記」、「停止」（高 `hudButtonHeight`、圓角 `hudButtonCornerRadius`、間距 `hudButtonGap`；停止鈕底 `recording`）；滑鼠離開 `hudCollapseDelaySeconds` 後收合，點標籤可固定展開。四顆按鈕各自走與選單相同的控制路徑（`controlAvailability(`、`stopTargetDecision(`），`canControl` 為 false 時前三顆停用。HUD 不顯示場次名與視窗標題；收尾中與之後不顯示（§4.40.1，不做稿下方的完成卡片）。實作形狀：`Trigger/HUD.swift` 含 `nonactivatingPanel`、`sharingType = .none`、`canJoinAllSpaces`、`setAccessibilityLabel`、`hudPosition`、`hudTabTopFraction`、`levelFraction(`、`darkAqua`，且不得出現 `systemRed`、`場次`。 | U2；intent R3-4 第 8 點；使用者選定 U2＝C | `test_r3_app_static.py::HudStatic.test_panel_shape`、`::test_edge_tab`；設計審查；實機（`sharingType` 對其他 app 的分享是否有效，intent R3-5 第 5 點） |
 | 4.40.5 | 快捷鍵回饋應依 `feedbackRoute` 決定：只有 `.notification` 時才發通知（`hotkeyFeedback`，`.passive`）。`controlFeedback` 的文字不變。 | §6 第 120 條 | `test_r3_app_static.py::HudStatic.test_feedback_route_used` |
 | 4.40.6 | 設定中的 `hudMode`、`hudPosition` 應存在 `menubar.settings.json`（§3.16）。 | U2、U5 | `swift:R3LockTests.swift::testMenuBarSettingsDefaults` |
+| 4.40.7 | **告警加強**（U2-C 容易被忽略的補償）：HUD 顯示中、`newAlertWarnings(previous:current:)` 非空時，(1) 收合標籤的外框改 2pt `attention`，維持到本場結束；(2) HUD 自動展開一次、維持 `hudAlertExpandSeconds`（8 秒），展開區狀態列下方顯示告警膠囊（底 `attention`、字 `onAttention`、`hudAlert`，內容＝該則告警的 message，40 字截斷），8 秒到時滑鼠不在面板內就收合；同一則告警不再自動展開。HUD 不顯示時（auto 且圖示沒被擋住）不強制顯示，告警照 §4.39.3 發通知、選單列換成有告警的膠囊。實作形狀：`HUD.swift` 含 `hudAlertExpandSeconds`、`newAlertWarnings(` 或由 `MenuBar.swift` 傳入新告警、`attention`。 | U2；使用者要求「告警時要加強」 | `test_r3_app_static.py::HudStatic.test_alert_emphasis`；實機（拔麥克風觸發告警，§4.47.4 同場） |
+| 4.40.8 | 無障礙：標籤的 `accessibilityLabel`＝「錄製小窗：」接 `menuBarAccessibilityLabel` 去掉「MeetingRecorder：」的部分；四顆按鈕的 `accessibilityLabel` 與 `toolTip` 為「暫停錄製（⌃⌥⌘P）」／「繼續錄製（⌃⌥⌘P）」、「麥克風靜音（⌃⌥⌘M）」／「取消麥克風靜音（⌃⌥⌘M）」、「加標記（⌃⌥⌘B）」、「停止錄製並收尾」；音量條的 `accessibilityValue` 同 §4.41.4。`accessibilityDisplayShouldReduceTransparency` 為 true 時底色不透明度 1.0；`accessibilityDisplayShouldIncreaseContrast` 為 true 時外框改 2pt `text`（告警時仍為 `attention`）；`accessibilityDisplayShouldReduceMotion` 為 true 時展開、收合、自動展開都不做動畫（否則 `hudAnimationSeconds`）。 | U2；brief §2〈VoiceOver／鍵盤〉 | `test_r3_app_static.py::HudStatic.test_accessibility_modes`；設計審查 |
 
 #### 4.41 選單依階段（U6；推翻 §4.20.6 的「灰掉不隱藏」）
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
 | 4.41.1 | `menuStage`：appearance `.idle` → `.idle`；`.preparing`、`.recording`、`.recordingMuted`、`.recordingAlert`、`.paused` → `.recording`；`.finalizing` → `.finalizing`；`.failed` → `.failed`。 | U6 | `swift:R3MenuBarTests.swift::testMenuStage` |
-| 4.41.2 | `menuItems(stage:)` 應恰為：`.idle` → [status, start, recordWindow, saveTo, openSession, showLast, preferences, quit]；`.recording` → [status, levels, pauseResume, mute, mark, stop, discard, openSession, preferences, quit]；`.finalizing` → [status, cancelFinalize, openSession, preferences, quit]；`.failed` → [status, failureDetail, copyDiagnostics, start, recordWindow, saveTo, openSession, showLast, preferences, quit]。 | U6；ADR `adr-r3-menu-stages.md` | `swift:R3MenuBarTests.swift::testMenuItemsPerStage` |
-| 4.41.3 | menu bar 應只顯示 `menuItems(stage:)` 的項目（其他項目隱藏）；階段內的可用性規則沿用 §4.20.6（例：錄製中 `canControl` false 時暫停、靜音、標記灰掉）；快捷鍵 ⌃⌥⌘R／P／M／B 與 ⌘,、⌘Q 不變（R2-§4.20.5、D7-A）。項目標題沿用 R2 字面，新增「捨棄這次錄製…」「取消收尾」「錯誤詳情…」；標題字面與分隔線位置若設計稿改動，依 design 段使用者選定的設計稿 <待定>（D2–D6、D9）。實作形狀：`MenuBar.swift` 呼叫 `menuItems(stage:` 並對每個 `MenuItemID` 設 `isHidden`。 | U6；§6 第 118 條 | `test_r3_app_static.py::MenuStagesStatic.test_menu_built_from_stage`；`test_r2_static.py::test_trigger_menu_items_r2`（§6 第 118 條改預期） |
-| 4.41.4 | 收音改為即時音量條：兩條（系統聲音、麥克風），每 0.5 秒更新；`accessibilityValue` 讀「系統聲音 有聲／無聲；麥克風 有聲／無聲／已靜音」（判斷沿用 `levelIndicatorLine` 的門檻 -60 dBFS 嚴格大於）。外觀：依 design 段使用者選定的設計稿 <待定>。實作形狀：`Trigger/LevelMeterView.swift` 存在且含 `setAccessibilityValue`。 | U6；intent R3-5 第 9 點 | `test_r3_app_static.py::MenuStagesStatic.test_level_meter_accessibility`；實機（鍵盤導覽與 VoiceOver） |
-| 4.41.5 | 失敗詳情小視窗應顯示 message、補救指令、`record.log` 路徑，並有「複製完整訊息與補救指令」按鈕（複製內容同 §6 第 73 條）；不得顯示視窗標題。外觀：依 design 段使用者選定的設計稿 <待定>。實作形狀：`Trigger/FailureDetail.swift` 存在。 | U6 | `test_r3_app_static.py::MenuStagesStatic.test_failure_detail` |
+| 4.41.2 | `menuItems(stage:)` 應恰為：`.idle` → [status, start, recordWindow, saveTo, openSession, showLast, preferences, quit]；`.recording` → [status, levels, alert, pauseResume, mute, mark, stop, discard, showHUD, openSession, preferences, quit]；`.finalizing` → [status, cancelFinalize, openSession, preferences, quit]；`.failed` → [status, failureDetail, copyDiagnostics, start, recordWindow, saveTo, openSession, showLast, preferences, quit]。（U6-A 稿新增 `alert` 告警列與 `showHUD`「顯示錄製小窗」。） | U6；ADR `adr-r3-menu-stages.md`；使用者選定 U6＝A | `swift:R3MenuBarTests.swift::testMenuItemsPerStage` |
+| 4.41.3 | menu bar 應只顯示 `menuItems(stage:)` 的項目（其他項目隱藏）；階段內的可用性規則沿用 §4.20.6（例：錄製中 `canControl` false 時暫停、靜音、標記灰掉）；`levels` 與 `alert` 是資訊列，各自只在有值時顯示（`alert`＝有告警類 warning）。快捷鍵 ⌃⌥⌘R／P／M／B 與 ⌘,、⌘Q 不變（R2-§4.20.5、D7-A；稿把「停止錄製並收尾」標成 ⌃⌥⌘R，不採用）。**標題字面**（`design-r3/README.md` §4）：「開始錄製（用上次的設定）」建立時字面不變，最近一次載入的視窗清單恰有一個 ★ 時改成「開始錄製：<app 名稱>」；「錄這個視窗」→「錄其他視窗」；「停止錄製」→「停止錄製並收尾」；「偏好設定…」→「設定…」；新增「捨棄這次錄製…」「取消收尾」「錯誤詳情…」「顯示錄製小窗」；其餘（「存到」「暫停錄製」／「繼續錄製」「麥克風靜音」「加標記」「打開場次資料夾」「顯示上一場成品」「複製完整訊息與補救指令」「結束 MeetingRecorder 選單」）不變；「加標記」在 `markers` > 0 時改「加標記（已有 N 個）」。「顯示錄製小窗」：本場強制顯示 HUD（不寫設定；只在 `hudVisible` 的 mode 為 `always` 時會為 true 的外觀，即錄製中、靜音、告警、暫停才有效），HUD 已顯示時灰掉。標題列（`status`）：`attributedTitle` 用 `menuFont` 的 bold、`labelColor`，`image` 為 10pt 圓點（待機 `textDisabled`、錄製與準備中 `recording`、暫停 `attention`、收尾中 `processing`、失敗 `recording` 空心環）。告警列：`image` 為 `exclamationmark.triangle.fill`（`paletteColors` `attention`），字為最新告警訊息（`truncatedStatusTitle(…, limit: 40)`，完整放 `toolTip`），字色深色外觀 `attentionText`、淺色 `attentionTextOnLight`。選單本身是系統 `NSMenu`，不做稿上的紅底醒目列。實作形狀：`MenuBar.swift` 呼叫 `menuItems(stage:` 或 `menuGroups(stage:` 並對每個 `MenuItemID` 設 `isHidden`；含上列新字面。 | U6；§6 第 118、134 條 | `test_r3_app_static.py::MenuStagesStatic.test_menu_built_from_stage`、`::test_titles_r3`；`test_r2_static.py::test_trigger_menu_items_r2`（§6 第 118、134 條改預期）；`test_static_rules.py::test_start_item_shows_hotkey`（不改） |
+| 4.41.4 | 收音改為即時音量條（**自訂** `LevelMeterView`，`menuMeterWidth`×44）：兩行「系統」「麥克風」（標籤寬 `meterLabelWidth`、`menuMeterLabel`），條高 `meterBarHeight`、長度 `levelFraction(dBFS:)`；深色外觀：軌道 `line`、系統 `text`、麥克風 `done`；淺色：軌道 `lineOnLight`、系統 `textOnLight`、麥克風 `doneOnLight`；靜音時麥克風那行改「已靜音」字。每 `levelMeterRefreshSeconds`（0.5 秒）更新；不可聚焦；`accessibilityValue` 讀「系統聲音 有聲／無聲；麥克風 有聲／無聲／已靜音」（判斷沿用 `levelIndicatorLine` 的門檻 -60 dBFS 嚴格大於）。`levelFraction`：nil → 0；-90 → 0；-60 → 0；-30 → 0.5；0 → 1；6 → 1。實作形狀：`Trigger/LevelMeterView.swift` 存在且含 `setAccessibilityValue`、`levelFraction(`。 | U6；intent R3-5 第 9 點 | `test_r3_app_static.py::MenuStagesStatic.test_level_meter_accessibility`；`swift:R3DesignTokenTests.swift::testLevelFraction`；實機（鍵盤導覽與 VoiceOver） |
+| 4.41.5 | 失敗詳情小視窗（標準 `NSWindow`，`.titled`、`.closable`，寬 480、不可縮放，跟系統深淺色）：標題「錯誤詳情」；依序顯示 message（`rowTitle`）、補救指令（`monospacedSystemFont` 12pt、可選取）、`record.log` 路徑（中間截斷），以及「複製完整訊息與補救指令」按鈕（複製內容同 §6 第 73 條）；⌘W 與 Esc 關閉（沿用設定視窗的做法）；不得顯示視窗標題與場次名。稿未畫此畫面，以上依暗房 token 與既有設定視窗的慣例訂。實作形狀：`Trigger/FailureDetail.swift` 存在、含「錯誤詳情」「複製完整訊息與補救指令」、`monospacedSystemFont`、`cancelOperation`。 | U6 | `test_r3_app_static.py::MenuStagesStatic.test_failure_detail` |
 | 4.41.6 | 「取消收尾」應對錄製實例送 SIGTERM（經 `stopTargetDecision`），觸發 4.28.6 的取消。 | Q3、R3-D12 | `test_r3_app_static.py::MenuStagesStatic.test_cancel_finalize` |
+| 4.41.7 | `menuGroups(stage:)` 應恰為（組與組之間一條分隔線）：`.idle` → [[status], [start, recordWindow, saveTo], [openSession, showLast], [preferences, quit]]；`.recording` → [[status, levels, alert], [pauseResume, mute, mark], [stop, discard], [showHUD, openSession], [preferences, quit]]；`.finalizing` → [[status], [cancelFinalize], [openSession], [preferences, quit]]；`.failed` → [[status], [failureDetail, copyDiagnostics], [start, recordWindow, saveTo], [openSession, showLast], [preferences, quit]]；四個階段的攤平結果都等於 `menuItems(stage:)`。 | U6-A 稿的分隔線位置 | `swift:R3MenuBarTests.swift::testMenuGroups` |
 
 #### 4.42 捨棄這次錄製（F2）
 
 | 節 | 驗收（EARS） | 依據 | 測試 |
 |---|---|---|---|
 | 4.42.1 | `discardRequestValid`：nil → false；`runId` 不同 → false；`requestedAt` 是 now − 31 秒 → false；now − 5 秒 → true；now + 5 秒（未來）→ false；`requestedAt` 解析失敗 → false。 | F2 | `swift:R3LockTests.swift::testDiscardRequestValid` |
-| 4.42.2 | 「捨棄這次錄製…」應先顯示確認對話框：預設按鈕（Return）是「取消」，破壞性按鈕標為 destructive；說明含「不收尾」「移到垃圾桶」「可從垃圾桶復原」。使用者確認後才寫 `record.discard.json` 並送 SIGTERM。外觀：依 design 段使用者選定的設計稿 <待定>（brief 建議 F2-A）。實作形狀：`Trigger/Discard.swift` 含 `NSAlert`、`hasDestructiveAction`、`record.discard.json`。 | F2；`CLAUDE.md`〈不可逆節點〉 | `test_r3_app_static.py::DiscardStatic.test_confirm_then_request` |
+| 4.42.2 | **外觀＝F2-A 確認對話框，錄製照常進行**（`design-r3/README.md` §5）。「捨棄這次錄製…」應先 `NSApp.activate` 再顯示系統 `NSAlert`：`messageText`「捨棄這次錄製？」；`informativeText`「<spokenDuration>。會停止錄製、不收尾、不產生成品；這場的錄音資料夾會移到垃圾桶，可從垃圾桶復原。」；第一顆按鈕「繼續錄製」（預設鍵，Return）；第二顆「捨棄並移到垃圾桶」，`hasDestructiveAction = true`、`keyEquivalent = ""`（Return、Esc 都按不到）；不顯示場次名稱與路徑；圖示用 app 圖示。對話框打開期間錄製照常；按「繼續錄製」沒有任何副作用。使用者按「捨棄並移到垃圾桶」後才寫 `record.discard.json` 並送 SIGTERM。實作形狀：`Trigger/Discard.swift` 含 `NSAlert`、`hasDestructiveAction`、`record.discard.json`、上列四段字面、`spokenDuration`；「繼續錄製」的 `addButton` 出現在「捨棄並移到垃圾桶」之前。 | F2；`CLAUDE.md`〈不可逆節點〉；使用者選定 F2＝A（預設鍵「繼續錄製」） | `test_r3_app_static.py::DiscardStatic.test_confirm_then_request` |
 | 4.42.3 | 錄製實例收到 SIGTERM 且 `discardRequestValid` 為 true 時：不得啟動收尾子程序；以 `trashItem(at:resultingItemURL:)` 移動 `<場次>/錄音/`，`<場次>` 只剩 `meeting.json`（與 `.DS_Store`）時再移動 `<場次>`；原始碼不得對場次路徑呼叫 `removeItem(`；成功 → `phase=done`、`code=0`、`discarded=true`；失敗 → `phase=failed`、`code=5`、檔案原地保留。 | F2；intent R3-4 第 3 點 | `test_r3_app_static.py::DiscardStatic.test_trash_not_delete`；實機（垃圾桶中可「放回原處」） |
 | 4.42.4 | `record.discard.json` 無效或不存在時，SIGTERM 照一般停止收尾；開錄時殘留的 `record.discard.json` 會被刪除。 | F2 | `test_r3_app_static.py::DiscardStatic.test_stale_request_ignored` |
 | 4.42.5 | `shouldAutoPrep` 對 `discarded=true` 的結果應回 false；`RecordStatus.discarded` 為 nil 時編碼沒有該鍵（`testStatusJSONKeys` 不改）。 | F2；R2-Q10 | `swift:R3LockTests.swift::testDiscardedNoAutoPrep` |
@@ -1732,11 +1791,12 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.43.1 | `mergedDefaultsJSON`：existing nil → 只有 `harness`、`root` 兩鍵；existing 有 7 鍵＋`syncCompensation`＋不認得的 `x` → 只改 `harness`、`root`，其他鍵與值原樣；existing 不是 JSON 物件 → 丟 `.notObject`。 | U4；ADR | `swift:R3LockTests.swift::testMergedDefaults` |
 | 4.43.2 | `record.sh` 的 `write_defaults` 應取 `record.defaults.lock`、讀後合併：事先放 `syncCompensation`、`x` 兩個鍵，開錄寫 defaults 後兩鍵仍在、其他 7 鍵為新值；檔案不是 JSON 物件時不寫、stderr 報錯、開錄照常進行（defaults 只是記憶）。 | R3-Q5；`bin/record.sh:329-341` | `test_r3_lock.py::test_write_defaults_merges`、`::test_write_defaults_refuses_broken_file` |
 | 4.43.3 | 兩個寫者同時寫（Python 程序持鎖 2 秒時，另一個合併寫入要等到鎖放開，結果兩邊的鍵都在）。 | ADR | `test_r3_lock.py::test_defaults_lock_serializes` |
-| 4.43.4 | `loadMenuBarSettings`：缺檔、壞檔 → 全部預設值（§3.16）；`hudMode: "x"` → `.auto`；`saveMenuBarSettings` 後 `load` 等於原值；`menubar.prefs.json` 的讀寫不變（`MenuBarR2Tests.swift:258` 的 6 鍵不改）。 | U5 | `swift:R3LockTests.swift::testMenuBarSettingsDefaults`、`::testMenuBarSettingsRoundTrip` |
-| 4.43.5 | `onboardingCompletedAt` 為 nil 時，menu bar 啟動後應顯示首次引導；步驟依序為權限、存檔位置與 harness、選單列空間、快捷鍵與試錄，每步可略過；完成或全部略過時寫 `onboardingCompletedAt`。引導不得自行觸發 TCC 授權框以外的系統設定變更；試錄錄 5 秒後走 F2 的捨棄路徑（移到垃圾桶）。只有「存檔位置與 harness」一步會呼叫 `writeOnboardingDefaults`。外觀：依 design 段使用者選定的設計稿 <待定>（D10）。實作形狀：`Trigger/Onboarding.swift` 存在、含 `writeOnboardingDefaults(`；Trigger 原始碼中寫 `record.defaults.json` 的只有這一處。 | U4；R3-D14 | `test_r3_app_static.py::OnboardingSettingsStatic.test_onboarding_flow_shape`；`test_r2_static.py::test_defaults_single_writer`（§6 第 123 條改預期）；實機 |
-| 4.43.6 | 設定視窗應為工具列分頁（一般、選單列與 HUD、通知、快捷鍵、進階），記住上次分頁（`lastSettingsTab`）；快捷鍵分頁只顯示四組 `r2HotKeys` 的 `display`、不可編輯（D7-A）；進階分頁唯讀顯示 `syncCompensation` 與「用 meeting record sync 修改」。視窗標題「MeetingRecorder 設定」不變。外觀：依 design 段使用者選定的設計稿 <待定>（D8）。實作形狀：`Preferences.swift` 含 `NSToolbar` 或 `NSTabViewController`、`lastSettingsTab`。 | U5；D7 | `test_r3_app_static.py::OnboardingSettingsStatic.test_settings_tabs`；`test_r2_static.py::test_trigger_preferences_window`（§6 第 130 條，稿挑定後才可能改） |
-| 4.43.7 | app 圖示：`Resources/AppIcon.icns` 存在；`Info.plist` 的 `CFBundleIconFile` 為 `AppIcon`；`build.sh` 把它複製進 bundle 的 `Contents/Resources/`。entitlements 仍恰為 2 項。外觀：依 design 段使用者選定的設計稿 <待定>（D12）。 | U7 | `test_r3_app_static.py::OnboardingSettingsStatic.test_app_icon_bundled` |
+| 4.43.4 | `loadMenuBarSettings`：缺檔、壞檔 → 全部預設值（§3.16）；`hudMode: "x"` → `.auto`；`hudPosition: "topRight"` → `"right"`；`saveMenuBarSettings` 後 `load` 等於原值；`menubar.prefs.json` 的讀寫不變（`MenuBarR2Tests.swift:258` 的 6 鍵不改）。 | U5 | `swift:R3LockTests.swift::testMenuBarSettingsDefaults`、`::testMenuBarSettingsRoundTrip` |
+| 4.43.5 | `onboardingCompletedAt` 為 nil 時，menu bar 啟動後應顯示首次引導。**外觀＝U4-A 分步精靈 5 步**（`design-r3/README.md` §6.2、`design-r3/U4-Onboarding.dc.html` 的 A）：固定 `onboardingWidth`×`onboardingHeight` 視窗（不可縮放，跟系統深淺色）；上方 5 段步驟條＋標籤「歡迎」「權限」「存檔位置」「選單列空間」「試錄」；步驟依序為歡迎、權限、存檔位置（含 harness）、選單列空間、試錄（含四組快捷鍵說明），每步有「略過」「上一步」（第 1 步停用）「下一步」（最後一步為「完成」）；完成、全部略過或關閉視窗（Esc、⌘W，沿用設定視窗的實體鍵碼判斷）時寫 `onboardingCompletedAt`。權限步標題「先給三個權限」，四列「螢幕錄製」「麥克風」「通知」「自動化（Chrome）」（最後一列標「選用」），每列有狀態字（「已允許」「需要重新開啟」「尚未允許」「被拒，要到系統設定打開」「選用」之一）與按鈕（「已完成」停用／「重新開啟」／「允許」／「打開系統設定」）——狀態不只靠顏色。引導不得自行觸發 TCC 授權框以外的系統設定變更；選單列空間步被擋住時提供「改成一律顯示錄製小窗」（寫 `hudMode = always`）；試錄錄 5 秒後走 F2 的捨棄路徑（移到垃圾桶）。只有「存檔位置」一步會呼叫 `writeOnboardingDefaults`。步驟條的 `accessibilityLabel` 為「第 N 步，共 5 步：<步驟名>」。**自訂**：步驟條、權限列、主按鈕。實作形狀：`Trigger/Onboarding.swift` 存在、含 `writeOnboardingDefaults(`、上列 5 個步驟名、「先給三個權限」「共 5 步」、`DarkroomMetric.onboardingWidth`；Trigger 原始碼中寫 `record.defaults.json` 的只有這一處。 | U4；R3-D14；使用者選定 U4＝A | `test_r3_app_static.py::OnboardingSettingsStatic.test_onboarding_flow_shape`；`test_r2_static.py::test_defaults_single_writer`（§6 第 123 條改預期）；實機 |
+| 4.43.6 | **外觀＝U5-A 7 個工具列分頁**（`design-r3/README.md` §6.3、`design-r3/U5-Settings.dc.html` 的 A）：`SettingsTab` 依序為 `general`「一般」`gearshape`、`recording`「錄製」`record.circle`、`feedback`「回饋與通知」`bell.badge`、`hotkeys`「快捷鍵」`command`、`afterRecording`「錄完之後」`checkmark.circle`、`permissions`「權限」`lock.shield`、`advanced`「進階」`slider.horizontal.3`（`title`、`symbolName` 依此）；`settingsTab("x")` → `.general`。設定視窗用 `NSToolbar` 分頁，寬 `settingsWidth` 固定、高跟內容、不可縮放；**視窗標題跟著分頁變成該分頁的 `title`**（HIG；取代「MeetingRecorder 設定」，§6 第 130 條）；記住上次分頁（`lastSettingsTab`）。各分頁內容照 `design-r3/README.md` §6.3：一般（存檔位置＋「更改…」、登入時自動開啟＋「打開系統設定的登入項目」、harness 唯讀）、錄製（預設會議類型與與會者唯讀、★ 規則說明）、回饋與通知（選單列計時、錄製小窗「自動／一律顯示／不要」、錄製小窗位置「右邊緣／左邊緣」、「用時效性通知（可穿過專注模式）」、會議偵測、通知授權狀態＋「打開通知設定」）、快捷鍵（四組 `r2HotKeys` 的 `display`、不可編輯，D7-A；註冊失敗就地顯示）、錄完之後（停止後自動跑前處理）、權限（四項狀態＋「打開系統設定」、「重新執行首次設定…」）、進階（`syncCompensation` 唯讀與「用 meeting record sync 修改」、log 位置）。控制項用標準 AppKit，只有視窗底色用 token。實作形狀：`Preferences.swift` 含 `NSToolbar`、`lastSettingsTab`、`settingsTab(`、`SettingsTab`、「自動」「一律顯示」「不要」「右邊緣」「左邊緣」「用時效性通知（可穿過專注模式）」。 | U5；D7；使用者選定 U5＝A | `test_r3_app_static.py::OnboardingSettingsStatic.test_settings_tabs`；`swift:R3DesignTokenTests.swift::testSettingsTabs`；`test_r2_static.py::test_trigger_preferences_window`（§6 第 130 條改預期） |
+| 4.43.7 | app 圖示：**外觀＝U7-A 錄製點＋聲波**（`design-r3/README.md` §6.4 的幾何比例；> 32 px 三條聲波、≤ 32 px 兩條）。`Resources/AppIcon.icns` 存在，`iconutil --convert iconset` 展開後恰有 `icon_16x16.png`、`icon_16x16@2x.png`、`icon_32x32.png`、`icon_32x32@2x.png`、`icon_128x128.png`、`icon_128x128@2x.png`、`icon_256x256.png`、`icon_256x256@2x.png`、`icon_512x512.png`、`icon_512x512@2x.png` 10 張；`Info.plist` 的 `CFBundleIconFile` 為 `AppIcon`；`build.sh` 把它複製進 bundle 的 `Contents/Resources/`。entitlements 仍恰為 2 項。深色、tinted 變體不在本輪。 | U7；使用者選定 U7＝A | `test_r3_app_static.py::OnboardingSettingsStatic.test_app_icon_bundled`；設計審查（16、32、128 px 截圖） |
 | 4.43.8 | 引導、設定、HUD、確認框、通知的所有字面不得含 `client-names.txt` 的任何名稱（以 `MH_CLIENT_NAMES_FILE` 指定清單；沒有清單時 skip）。 | §4.14 | `test_r3_app_static.py::OnboardingSettingsStatic.test_no_client_names` |
+| 4.43.9 | **字型不打包**（`design.md` R3-D22）：`tools/MeetingRecorder/Sources/` 去掉註解後不得出現 `JetBrains`、`Space Grotesk`、`Noto Sans`、`NSFont(name:`；`tools/MeetingRecorder/Resources/` 底下不得有 `.ttf`、`.otf`、`.ttc`；`Info.plist` 不得有 `ATSApplicationFontsPath`。計時一律 `monospacedDigitSystemFont`，指令與路徑用 `monospacedSystemFont`，其餘用 `systemFont(ofSize:weight:)`。 | 設計稿字型的退回規則 | `test_r3_app_static.py::OnboardingSettingsStatic.test_no_bundled_fonts` |
 
 #### 4.44 會議偵測提示（F3；推翻 R2「會議自動偵測在範圍外」）
 
@@ -1744,8 +1804,8 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.44.1 | `meetingPromptDecision`：`enabled` false → `.none`；`recordLockHeld` true → `.none`；`inputRunning` false → `.none` 且 episode 重設（`prompted`、`dismissed` 回 false）；`inputRunning` true、前景 bundle ID 不在 ★ 清單 → `.none`；在清單、`prompted` false → `.prompt` 且 `prompted` 變 true；同一 episode 第二次 → `.none`；episode 結束（`inputRunning` false）後再開始 → 可再 `.prompt`。 | F3；R3-Q4 | `swift:R3MenuBarTests.swift::testMeetingPromptDecision` |
 | 4.44.2 | 偵測只讀 `kAudioDevicePropertyDeviceIsRunningSomewhere`（預設輸入裝置），每 3 秒輪詢；不得開啟麥克風（`Trigger/MeetingDetect.swift` 不得出現 `AVCaptureDevice`、`AVAudioEngine`、`SCStream`）；`record.lock` 以試鎖判斷。 | intent R3-4 第 4 點 | `test_r3_app_static.py::MeetingDetectStatic.test_read_only_detection` |
-| 4.44.3 | 通知標題「錄這個會議？」，兩個動作「開始錄製」（走既有 quick-start，用上次的設定）與「這次不要」（本 episode 不再提示）；不得自動開錄；內文不含視窗標題。外觀：系統原生；文字依 design 段使用者選定的設計稿 <待定>（brief 建議 F3-A）。 | F3 | `test_r3_app_static.py::MeetingDetectStatic.test_prompt_actions`；實機 |
-| 4.44.4 | 設定的通知分頁可以關閉偵測（`meetingDetect`）。 | F3、U5 | `test_r3_app_static.py::MeetingDetectStatic.test_toggle_in_settings` |
+| 4.44.3 | **外觀＝F3-A 一般通知**（系統原生外觀；`design-r3/README.md` §6.1）：標題「錄這個會議？」；內文「<app 名稱> 正在使用麥克風。要開始錄製嗎？」——app 名稱＝前景 app 的 `localizedName`，取不到用「會議 app」，**只放 app 名稱、不放視窗標題**；兩個動作「開始錄製」（走既有 quick-start，用上次的設定）與「這場不用」（本 episode 不再提示）；`interruptionLevel` 與 `threadIdentifier` 依 §4.39.1（`meetingDetected`）；不得自動開錄。實作形狀：`Trigger/MeetingDetect.swift` 含上列字面（標題、內文的「正在使用麥克風。要開始錄製嗎？」、兩個動作、「會議 app」）與 `localizedName`；該檔不含 `kCGWindowName`、`SCWindow`、`CGWindowListCopyWindowInfo`（取視窗標題的寫法）。 | F3；使用者選定 F3＝A | `test_r3_app_static.py::MeetingDetectStatic.test_prompt_actions`；實機 |
+| 4.44.4 | 設定的「回饋與通知」分頁可以關閉偵測（`meetingDetect`；字面「偵測到會議 app 使用麥克風時問我要不要錄」）。 | F3、U5 | `test_r3_app_static.py::MeetingDetectStatic.test_toggle_in_settings` |
 
 #### 4.45 文件與 CLI 表面
 
@@ -1777,10 +1837,10 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 4.47.5 | `.ics` 匯入提醒事項與 `meeting reminders`：權限框、寫入、重跑去重 | 第二次 `created=0`；缺負責人／期限的項目照實留空 |
 | 4.47.6 | F3：開一個 ★ 清單的會議 app 並使用麥克風 | 只提示一次、「開始錄製」走 quick-start、「這次不要」後同 episode 不再提示 |
 | 4.47.7 | F2：錄 30 秒後捨棄 | 錄音資料夾在垃圾桶、可放回原處、沒有跑收尾 |
-| 4.47.8 | 首次引導：刪 `menubar.settings.json` 的 `onboardingCompletedAt` 後重開 | 四步都能走完或略過；`record.defaults.json` 其他鍵保留 |
+| 4.47.8 | 首次引導：刪 `menubar.settings.json` 的 `onboardingCompletedAt` 後重開 | 五步都能走完或略過；`record.defaults.json` 其他鍵保留 |
 | 4.47.9 | `keep-segments` 錄一場真實多人會議（使用者決定 3） | 用來調 T4 門檻與雙軌實驗素材；結果只寫數字 |
 | 4.47.10 | 全套 e2e 迴歸（含 §4.25.1 劇本與 `--segment-writer --pause-mute`） | 全部 PASS；`SegmentScheduler` 重構後的段落行為與 R2 一致 |
-| 4.47.11 | 設計審查（`has_ui=true`）：8 種圖示、HUD、選單三階段、失敗詳情、確認框、引導、設定分頁、app 圖示，淺色／深色截圖 | 照挑定的設計稿與 HIG |
+| 4.47.11 | 設計審查（`has_ui=true`）：8 種選單列膠囊（深色與淺色桌布＋半透明選單列各一張、「增加對比」一張、灰階一張）、HUD（收合、展開、暫停、靜音、告警自動展開、「減少透明度」）、選單四階段、失敗詳情、確認框、引導 5 步、設定 7 分頁、app 圖示 16／32／128 px | 照 `design-r3/README.md` 與 HIG；README §7 第 6 點的實際選單列對比在此記錄 |
 
 ### R3-§5 影響系統（接續 §5、R2-§5）
 
@@ -1793,7 +1853,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | `bin/_record_finalize.py` | 收尾鎖、mkstemp、逐步逾時、unreadable；S-C 混音 | `r3-finalize-guard`、`r3-sync-compensate` |
 | `bin/_record_lib.py`、`bin/_search.py`、`bin/_reminders.py`（新） | §3.19 | `r3-record-lib`、`r3-search`、`r3-reminders` |
 | `schema/meeting-record.v1.json` | 選用 `markers[]` | `r3-annotations` |
-| `tools/MeetingRecorder/Sources/Core/` | §3.20 全部 | `r3-core` |
+| `tools/MeetingRecorder/Sources/Core/` | §3.20 全部（含新檔 `DesignTokens.swift`：暗房的色、字、間距 token 與膠囊樣式、對比計算） | `r3-core` |
 | `Capture/Commands.swift`、`PreflightRunner.swift` | 先取鎖 | `r3-lock` |
 | `Capture/RecordingSession.swift` | 心跳 → 取消收尾 → S-B → 捨棄 → Scheduler 接線 → 提前換段 | `r3-lock` → `r3-finalize-runner` → `r3-latency-log` → `r3-discard` → `r3-segment-scheduler` → `r3-sync-compensate` |
 | `Capture/AudioDeviceMonitor.swift` | 延遲讀取 | `r3-latency-log` |
@@ -1801,11 +1861,12 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | `Capture/Notifier.swift` | 分級、thread | `r3-notify`、`r3-meeting-detect` |
 | `Trigger/MenuBar.swift` | 外觀與 stop 確認 → 通知 → HUD → 捨棄 → 階段選單 → 引導入口 → 偵測 | 序列鏈（`plan.md §10`） |
 | `Trigger/` 新檔 | `HUD.swift`、`Discard.swift`、`FailureDetail.swift`、`LevelMeterView.swift`、`Onboarding.swift`、`MeetingDetect.swift` | 各 UI 子任務 |
+| `specs/meeting-record/design-r3/` | 選定設計稿（`README.md`＋原始稿 `*.dc.html`），UI 子任務與設計審查的依據；不進 app | design 段 |
 | `Trigger/Preferences.swift`、`Trigger/Completion.swift` | 分頁；`discarded` 不自動前處理 | `r3-onboarding-settings`、`r3-notify` |
 | `Sources/main.swift`、`Resources/Info.plist`、`Resources/AppIcon.icns`、`build.sh` | `reminders` 子指令；權限說明；圖示 | `r3-reminders`、`r3-onboarding-settings` |
 | `tests/record/e2e_check.py` | `--sync-acoustic`、`--sync-player`、`--print-sync-file`；補償資訊 | `r3-sync-measure`、`r3-sync-compensate` |
 | SKILL.md（meeting-record／-transcribe／-notes）、README | §4.45.3 | `r3-docs`、`r3-transcript-vad`、`r3-annotations` |
-| 測試 | `tests/record/test_r3_*.py`、`vectors/`、`fakes/`（只加不改既有替身的行為）、§6 核准的既有測試修改；`Tests/R3*Tests.swift`、`Tests/main.swift` 登記、`ControlTests.swift`（§6 第 127 條） | `r3-red-py`、`r3-red-swift` |
+| 測試 | `tests/record/test_r3_*.py`、`vectors/`、`fakes/`（只加不改既有替身的行為）、§6 核准的既有測試修改；`Tests/R3*Tests.swift`（含 `R3DesignTokenTests.swift`）、`Tests/main.swift` 登記、`ControlTests.swift`（§6 第 127 條） | `r3-red-py`、`r3-red-swift` |
 | 下游知識庫專案 | 只讀驗相容（§4.31.8），不改 | — |
 
 ### R3-§6 整合修訂與例外（續，第 117 條起）
@@ -1826,11 +1887,13 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 | 126 | §6 第 111 條：收尾成功後刪段落（含讀不到的） | 讀不到的段落搬到 `tracks/unreadable/`、記 `movedTo`；已併入成品的照刪（§4.28.7）。既有 `test_finalize.py` 不改（`test_segments_removed_after_success` 只看 `tracks/seg-*.mov`，不遞迴） | D12-A |
 | 127 | `ControlTests.swift::testPauseGateAndSwitchReason`：`SwitchReason` 恰為五個 | 恰為六個（加 `.outputDeviceChange`，放在最後）。**既有測試修改**：`expectedReasons` 加一項、訊息「恰為五個」改「恰為六個」 | S-C「輸出裝置變更提前換段」；R3-Q1＝A |
 | 128 | §3.4.1／§4.11.5、§4.20.4 的圖示外觀（`symbolName` 四態、錄製中與告警加系統紅色） | 外觀改由 `MenuBarAppearance` 8 種決定（§4.38）；`MenuBarState`、`symbolName` 的值保留供相容與既有測試。§4.20.4 的計時、等寬數字、`mic.slash`、variableLength 不變 | U1；intent R3-3 第 7 點 |
-| 129 | `test_r2_static.py::test_trigger_status_item_variable_length` 要求 `symbolName`、`paletteColors`、`systemRed`、`mic.slash`、不得有 `contentTintColor`；`test_static_rules.py::test_menubar_uses_template_image` 要求三個 symbol 與 `isTemplate = true` | **待設計稿**：稿挑定後由 design 段把要求的 token 改成稿的 SF Symbol 與色彩規則，並在此列出新舊字面；挑定前 `r3-menubar-states` 不得開工 | R3-Q8＝B；`design.md` R3-D16 |
-| 130 | `test_static_rules.py::test_start_item_shows_hotkey`（`START_ITEM_TITLE`＝「開始錄製（用上次的設定）」）、`test_r2_static.py::test_trigger_preferences_window`（「MeetingRecorder 設定」等字串） | **待設計稿**：稿若沿用字面則不改；若改字面，稿挑定時在此列出新舊字面並經使用者核准 | U5、U6；R3-Q8＝B |
+| 129 | `test_r2_static.py::test_trigger_status_item_variable_length` 要求 `symbolName`、`paletteColors`、`systemRed`、`mic.slash`、不得有 `contentTintColor`；`test_static_rules.py::test_menubar_uses_template_image` 要求三個 symbol 與 `isTemplate = true` | 選單列改成 U1-C 錄製膠囊（§4.38.3、§4.38.5）：顏色只來自 `DarkroomColor`，`MenuBar.swift` 不得再出現 `systemRed`。**既有測試修改**（只改 `test_r2_static.py:191` 那一行的 tuple）：`test_trigger_status_item_variable_length` 要求的字串 `"systemRed"` 換成 `"menuBarCapsuleStyle("`；`monospacedDigitSystemFont`、`"mic.slash"`（靜音分段膠囊左段）、`paletteColors`、`symbolName`（待機的 `record.circle`）、`timerText`、`variableLength`、不得有 `squareLength`、不得有 `contentTintColor` 都不改。`test_static_rules.py::test_menubar_uses_template_image` **不改**：三個 symbol 名仍在 `Core/Trigger.swift` 的 `symbolName`（`MenuBarState` 保留，§6 第 128 條），待機仍是 template（`isTemplate = true`） | 使用者選定 U1＝C；R3-Q8＝B；`design.md` R3-D21 |
+| 130 | `test_static_rules.py::test_start_item_shows_hotkey`（`START_ITEM_TITLE`＝「開始錄製（用上次的設定）」）、`test_r2_static.py::test_trigger_preferences_window`（「MeetingRecorder 設定」等字串） | `test_start_item_shows_hotkey` **不改**：開始錄製項建立時的字面仍是「開始錄製（用上次的設定）」、⌃⌥⌘R 不變；只在快取的視窗清單恰有一個 ★ 時於執行期改標題為「開始錄製：<app 名稱>」（§4.41.3）。設定視窗改成 7 個工具列分頁、**視窗標題跟著分頁變**（§4.43.6），不再固定「MeetingRecorder 設定」。**既有測試修改**（只改 `test_r2_static.py:275` 那一行的 tuple）：`test_trigger_preferences_window` 要求的字串 `"MeetingRecorder 設定"` 換成 `"settingsTab("`；其餘 10 個字串（「預設存檔位置」「更改…」「登入時自動開啟」「停止後自動跑前處理」「打開系統設定的登入項目」`openSystemSettingsLoginItems`、`loginItemDisplay(`、`r2HotKeys`、「註冊失敗」、`autoPrep`）與「不得有 `.resizable`」不改 | 使用者選定 U5＝A、U6＝A；HIG settings「Update the window's title to reflect the currently visible pane」 |
 | 131 | intent R2「明確在範圍外」的「會議自動偵測」「捨棄這次錄製」（`intent.md:295`） | 改做 F3（只提示）與 F2（移到垃圾桶）；行事曆提醒仍在範圍外 | 使用者決定 1 |
 | 132 | `_record_finalize.py` 的結束碼 5 只表示「收尾失敗」 | 另含「該場次正在收尾（收尾鎖被持有）」與「步驟逾時」（R3-§2.2；`finish` 的寫法結束碼仍是 `0 2 3 5`，數字集合不變） | Q4、Q3 |
 | 133 | `RecordMeta`、`RecordStatus` 的鍵集合（`RecordsTests.swift:58`、`:112-113`） | 新增 `outputLatencies`、`discarded` 兩個頂層 Optional，nil 省略鍵；`RecordsTests` 不改（R2 第 79 條先例）。心跳不加鍵 | S-B、F2；intent R3-3 第 8 點 |
+| 134 | §4.20.6 的選單字面「錄這個視窗」「停止錄製」「偏好設定…」；`test_r2_static.py::test_trigger_menu_items_r2` 的 `MENU_TITLES`（`:26-27`）與 `assert_key(self, src, "偏好設定…", ",", {".command"})`（`:214`） | U6-A 稿的字面（§4.41.3）：「錄其他視窗」「停止錄製並收尾」「設定…」（設計審查 R2 N-4）；新增「捨棄這次錄製…」「取消收尾」「錯誤詳情…」「顯示錄製小窗」；其餘字面不變（含「結束 MeetingRecorder 選單」「顯示上一場成品」）。**既有測試修改**（接在第 118 條之後，同一個 commit）：`MENU_TITLES` 的「錄這個視窗」→「錄其他視窗」、「停止錄製」→「停止錄製並收尾」、「偏好設定…」→「設定…」，其他 9 項不改；`:214` 的「偏好設定…」→「設定…」（`,`、`{".command"}` 不改）。`test_r2_docs.py` **不改**：`r3-docs` 寫 SKILL.md 時新名稱與 R2 舊稱並列（例「錄其他視窗（R2 稱「錄這個視窗」）」「設定…（R2 稱「偏好設定…」）」），`R2_MENUBAR` 仍找得到 | 使用者選定 U6＝A；ADR `adr-r3-menu-stages.md` |
+| 135 | §4.11.8、§3.4.1：status item 的 `accessibilityLabel` 與 `toolTip`＝`MenuBarModel.accessibilityText` | 改用 `menuBarAccessibilityLabel(…)`（§4.38.7；計時讀成「已錄 12 分 34 秒」、有告警時帶告警內容；錄製中**不再含場次名**，因為 toolTip 會出現在螢幕上、使用者可能正在分享整個螢幕）；`MenuBarModel.accessibilityText` 保留供相容，`TriggerTests` 不改；`test_static_rules.py::test_menubar_sets_accessibility_label` 不改（只要求 `toolTip` 與 `setAccessibilityLabel` 存在） | U1；無障礙 |
 
 ### R3-§7 疑慮（續，第 43 條起）
 
@@ -1840,6 +1903,11 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 46. **`search`、`reminders` 成為 `meeting` 頂層保留字**：名為 `search`／`reminders` 的根目錄要寫 `./search`；`meeting <根>` 的預設分支（`bin/meeting.sh:468`）原本會把它們當根目錄。SKILL.md 與 README 要寫明。
 47. **S-C 的方向與大小未實測**：`reported` 依 Core Audio 回報值，A2DP 與 HFP 的實測與回報方向可能相反（intent R3-5 第 1 點）；預設 off，實機驗收場 E2／E4 之後才決定（§4.37.8）。
 48. **`SegmentScheduler` 重構的回歸面**：熱路徑改動只有 Core 行為測試＋實機 e2e 保護；`RecordingSession` 的 AVFoundation 呼叫本身沒有自動測試。實機驗收場的全套 e2e（§4.47.10）是唯一的端到端證據。
-49. **UI 外觀等稿**：本 spec 的 UI 外觀全是 `<待定>`；設計稿挑定前，`r3-menubar-states`、`r3-hud`、`r3-menu-stages`、`r3-discard`、`r3-onboarding-settings`、`r3-meeting-detect` 的外觀相關部分不能開工（行為部分可以）。§6 第 129、130 條要等稿。
+49. **UI 外觀等稿**（2026-10-13 已解除）：使用者已選定設計稿，存在 `design-r3/`；外觀條文與 §6 第 129、130、134、135 條已補完。UI 子任務的外觀部分改以這些條文為準，不再等稿。
 50. **VAD 預設門檻只是起點**：-60 dBFS／0.75 秒／2.0 秒來自 0141 單場實驗（`tr` §2.2）；真實多人會議（遠端聲音小、背景噪音）可能切掉輕聲。實機驗收場用 `keep-segments` 的場次調，`MH_VAD=0` 可以隨時退回。
 51. **F2 只移動 `錄音/`**：場次資料夾若還有使用者自己放的檔，只有 `錄音/` 會進垃圾桶，`<場次>` 與其他檔留著；這是刻意的保守做法（不可逆節點只碰本次錄製產生的東西）。
+52. **選單列膠囊的白字對比**（`design-r3/README.md` §7 第 1 點）：稿的白字對錄製紅 `#FF4D4F` 是 3.27:1、對處理紫 `#8B7CF6` 3.33:1，13pt 不到 WCAG 一般文字的 4.5:1。本 spec 採 (a)：字放大到 14pt bold（WCAG 大字門檻 3:1），淺色選單列與「增加對比」換深一階的底色（§4.38.5）；代價是膠囊每字寬約多 1pt、字比稿重。其他選項：(b) 深色列也改深一階底 `#CC2F32`／`#6D5BD0`（白字 5.22／5.18），選單列上的紅變暗、和稿的「唯一發光的紅點」語氣不同；(c) 保留底色、字改深色 `#1A0B0C`（5.86），膠囊看起來像警示標籤。要改選項時只改 §4.38.5 的表與 `DesignTokens.swift`，不影響其他子任務。
+53. **F2 用系統 `NSAlert`，不做稿 A 的深色卡片**：系統 alert 免費帶來置中、模態、Esc／⌘.、VoiceOver 朗讀順序與 accessory app 的前景處理；稿的卡片要另做自訂 `NSPanel` 並自己處理這些。若使用者要稿上的深色卡片，改 §4.42.2 與 `r3-discard` 的擁有檔（新增自訂面板），代價是多一個要自行處理鍵盤與 VoiceOver 的自訂視窗。
+54. **字型不打包是預設、要不要打包待使用者決定**（`design.md` R3-D22）：稿用 Noto Sans TC、Space Grotesk、JetBrains Mono；三者公開發行的授權都是 SIL Open Font License 1.1（可隨 app 散布，要附授權全文；打包前要再從各專案的發行頁確認版本與授權，本輪未查證）。打包的代價：app 變大（Noto Sans TC 的中文字集遠大於另外兩套，實際大小未量）、`build.sh` 要複製字型並在 `Info.plist` 加 `ATSApplicationFontsPath`、§4.43.9 要改、中文字的渲染與系統的 PingFang TC 不同。
+55. **選單列的實際底色量不到**：macOS 26 的選單列是半透明，膠囊的對比（§4.38.6）以稿上的選單列色 `#1E2129`／`#E9E7E2` 計算；實際桌布不同時對比會變，由實機設計審查（§4.47.11）在深色與淺色桌布各截一張確認，不夠就改 §4.38.5 的色。
+56. **稿上沒採用的部分**：選單的紅底醒目列（`NSMenu` 要每列換自訂 view，會失去系統的鍵盤導覽與高亮）、「停止錄製並收尾 ⌃⌥⌘R」（⌃⌥⌘R 只做開始，D7-A）、「上一場：10/13 14:05・42 分鐘」（要新的上一場資料來源，衍生工作）、HUD 完成卡片（§4.40.1 規定收尾後不顯示）、HUD 收合時的音量條（稿 C 沒畫，依稿不放）、錄製中選單沒有「結束」（依 ADR 保留）。

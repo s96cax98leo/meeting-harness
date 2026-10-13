@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>F2 捨棄錄製確認</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@500;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<style>
+body{margin:0}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 760px; box-sizing: border-box; padding: 56px 64px; background: #0F1115; color: #ECEEF2; font-family: 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: baseline; gap: 20px">
+<h1 style="margin: 0; font-size: 40px; font-weight: 700">F2 捨棄這次錄製</h1>
+<span style="font-size: 16px; color: #9AA3B2">停止後不收尾，場次資料夾移到垃圾桶。預設按鍵永遠是「繼續錄製」。</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; flex-grow: 1">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">A ★ <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">確認對話框，錄製照常進行</span></div>
+<div style="flex-grow: 1; border-radius: 18px; background: #2B3140; border: 1px solid #2A2F3A; display: flex; align-items: center; justify-content: center">
+<div style="width: 340px; box-sizing: border-box; padding: 26px; border-radius: 22px; background: #1C1F27; border: 1px solid #3A404D; box-shadow: 0 24px 60px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 16px">
+<svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="21" fill="rgba(255,77,79,0.14)"></circle><path d="M15 16 H29 M19 16 V13.5 H25 V16 M17 16 L18 31 H26 L27 16" fill="none" stroke="#FF6B6E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<div style="font-size: 18px; font-weight: 700">捨棄這次錄製？</div>
+<div style="font-size: 14px; line-height: 1.7; color: #C3C9D4">已錄 42 分鐘。會停止錄製，不產生成品，整個場次資料夾移到垃圾桶，可以從垃圾桶救回。</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<button type="button" style="height: 44px; border-radius: 12px; border: 2px solid #ECEEF2; background: #ECEEF2; color: #0F1115; font-size: 15px; font-weight: 700">繼續錄製</button>
+<button type="button" style="height: 44px; border-radius: 12px; border: 1px solid rgba(255,77,79,0.6); background: transparent; color: #FF6B6E; font-size: 15px; font-weight: 700">捨棄並移到垃圾桶</button>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">B <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">先暫停再確認</span></div>
+<div style="flex-grow: 1; border-radius: 18px; background: #2B3140; border: 1px solid #2A2F3A; display: flex; align-items: center; justify-content: center">
+<div style="width: 340px; box-sizing: border-box; padding: 26px; border-radius: 22px; background: #1C1F27; border: 1px solid #3A404D; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 999px; background: rgba(245,165,36,0.14); color: #F7C46C; font-size: 13px; align-self: flex-start">
+<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="1" fill="#F5A524"></rect><rect x="7" y="1.5" width="3" height="9" rx="1" fill="#F5A524"></rect></svg>
+已先暫停 42:07
+</div>
+<div style="font-size: 18px; font-weight: 700">捨棄這次錄製？</div>
+<div style="font-size: 14px; line-height: 1.7; color: #C3C9D4">選「繼續錄製」會解除暫停；成品會多一段被剪掉的暫停。</div>
+<div style="display: flex; gap: 8px">
+<button type="button" style="flex: 1 1 0; height: 44px; border-radius: 12px; border: none; background: #ECEEF2; color: #0F1115; font-size: 15px; font-weight: 700">繼續錄製</button>
+<button type="button" style="flex: 1 1 0; height: 44px; border-radius: 12px; border: none; background: #FF4D4F; color: #FFFFFF; font-size: 15px; font-weight: 700">捨棄</button>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">C <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">在小窗上再按一次</span></div>
+<div style="position: relative; flex-grow: 1; border-radius: 18px; background: #2B3140; border: 1px solid #2A2F3A">
+<div style="position: absolute; top: 40px; right: 20px; width: 300px; box-sizing: border-box; padding: 18px; border-radius: 20px; background: rgba(23,26,33,0.96); border: 1px solid #3A404D; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: center; gap: 10px"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#FF4D4F"></circle></svg><span style="font-weight: 700">錄製中</span><span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600">42:07</span></div>
+<button type="button" style="height: 48px; border-radius: 12px; border: none; background: #FF4D4F; color: #FFFFFF; font-size: 15px; font-weight: 700">再按一次確認捨棄（3）</button>
+<div style="font-size: 12px; color: #9AA3B2">3 秒內沒按就自動取消</div>
+</div>
+<div style="position: absolute; left: 20px; bottom: 20px; right: 20px; padding: 12px 14px; border-radius: 12px; background: rgba(245,165,36,0.14); border: 1px solid rgba(245,165,36,0.5); font-size: 13px; color: #F7C46C">開會中手忙腳亂時容易誤觸</div>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

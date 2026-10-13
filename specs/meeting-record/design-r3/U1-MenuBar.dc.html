@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>U1 選單列圖示</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@500;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1100px; box-sizing: border-box; padding: 56px 64px; background: #0F1115; color: #ECEEF2; font-family: 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: baseline; gap: 20px">
+<h1 style="margin: 0; font-size: 40px; font-weight: 700">U1 選單列圖示</h1>
+<span style="font-size: 16px; color: #9AA3B2">8 種狀態 × 3 個方向，各畫在深色與淺色選單列上</span>
+</div>
+<div style="display: grid; grid-template-columns: 120px repeat(8, minmax(0, 1fr)); gap: 10px; font-size: 14px; color: #C3C9D4">
+<div></div>
+<sc-for list="{{labels}}" as="l" hint-placeholder-count="8"><div style="text-align: center">{{l}}</div></sc-for>
+</div>
+<sc-for list="{{rows}}" as="row" hint-placeholder-count="6">
+<div style="display: grid; grid-template-columns: 120px repeat(8, minmax(0, 1fr)); gap: 10px; align-items: center">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">{{row.dir}}</span>
+<span style="font-size: 12px; color: #9AA3B2">{{row.sub}}</span>
+</div>
+<sc-for list="{{row.cells}}" as="c" hint-placeholder-count="8">
+<div style="height: 64px; border-radius: 12px; background: {{row.bar}}; display: flex; align-items: center; justify-content: center; gap: 8px; color: {{row.fg}}; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums">
+<sc-if value="{{c.capsule}}" hint-placeholder-val="{{false}}">
+<span style="display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: {{c.capBg}}; border: 1.5px solid {{c.capLine}}; color: {{c.capFg}}; font-size: 13px; font-family: 'JetBrains Mono', 'Noto Sans TC', monospace">
+<sc-if value="{{c.dot}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="{{c.dotColor}}"></circle></svg></sc-if>
+<sc-if value="{{c.slash}}" hint-placeholder-val="{{false}}"><svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true"><rect x="3.5" y="1" width="5" height="8" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"></rect><path d="M1 1 L11 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+<span>{{c.text}}</span>
+</span>
+</sc-if>
+<sc-if value="{{c.muteCap}}" hint-placeholder-val="{{false}}">
+<span style="display: flex; align-items: stretch; border-radius: 999px; overflow: hidden; background: #FF4D4F; color: #FFFFFF; font-size: 13px; font-family: 'JetBrains Mono', monospace">
+<span style="display: flex; align-items: center; padding: 4px 7px 4px 9px; background: #1A0B0C">
+<svg width="14" height="16" viewBox="0 0 14 16" aria-hidden="true"><rect x="4.5" y="1.2" width="5" height="8.2" rx="2.5" fill="#FFFFFF"></rect><path d="M2.4 7.4 A4.6 4.6 0 0 0 11.6 7.4 M7 12 V14.6 M4.6 14.6 H9.4" fill="none" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round"></path><path d="M1.6 1.6 L12.4 14.4" stroke="#1A0B0C" stroke-width="3.4" stroke-linecap="round"></path><path d="M1.6 1.6 L12.4 14.4" stroke="#FF4D4F" stroke-width="1.6" stroke-linecap="round"></path></svg>
+</span>
+<span style="display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px">
+<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="#FFFFFF"></circle></svg>
+<span>{{c.text}}</span>
+</span>
+</span>
+</sc-if>
+<sc-if value="{{c.icon}}" hint-placeholder-val="{{true}}">
+<span style="position: relative; width: 20px; height: 20px; display: inline-flex">
+<sc-if value="{{c.isHollow}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="{{row.fg}}" stroke-width="1.8"></circle><circle cx="10" cy="10" r="3.2" fill="{{row.fg}}"></circle></svg></sc-if>
+<sc-if value="{{c.isDotted}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="#8B7CF6" stroke-width="2" stroke-dasharray="2.6 2.8"></circle></svg></sc-if>
+<sc-if value="{{c.isDot}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="#FF4D4F"></circle></svg></sc-if>
+<sc-if value="{{c.isPause}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="4" width="3.4" height="12" rx="1.2" fill="#F5A524"></rect><rect x="11.6" y="4" width="3.4" height="12" rx="1.2" fill="#F5A524"></rect></svg></sc-if>
+<sc-if value="{{c.isRing}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="{{row.track}}" stroke-width="2.2"></circle><path d="M10 3 A7 7 0 1 1 3.4 12.4" fill="none" stroke="#8B7CF6" stroke-width="2.2" stroke-linecap="round"></path></svg></sc-if>
+<sc-if value="{{c.isGlass}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3 H15 M5 17 H15 M6 3 C6 8 14 8 14 10 C14 12 6 12 6 17 M14 3 C14 8 6 8 6 10" fill="none" stroke="#8B7CF6" stroke-width="1.7" stroke-linecap="round"></path></svg></sc-if>
+<sc-if value="{{c.isWarnCircle}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="#F5A524"></circle><path d="M10 5.8 V10.6" stroke="#0F1115" stroke-width="2" stroke-linecap="round"></path><circle cx="10" cy="13.6" r="1.1" fill="#0F1115"></circle></svg></sc-if>
+<sc-if value="{{c.isTri}}" hint-placeholder-val="{{false}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 L18.5 17 H1.5 Z" fill="#FF4D4F" stroke-linejoin="round"></path><path d="M10 7.5 V11.5" stroke="#FFFFFF" stroke-width="1.9" stroke-linecap="round"></path><circle cx="10" cy="14.2" r="1.05" fill="#FFFFFF"></circle></svg></sc-if>
+<sc-if value="{{c.badge}}" hint-placeholder-val="{{false}}"><svg style="position: absolute; right: -5px; top: -4px" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4.3" fill="#F5A524" stroke="{{row.bar}}" stroke-width="1.6"></circle></svg></sc-if>
+<sc-if value="{{c.muteBadge}}" hint-placeholder-val="{{false}}"><svg style="position: absolute; right: -7px; bottom: -5px" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5.6" fill="{{row.bar}}"></circle><rect x="4.2" y="2.4" width="3.6" height="5.6" rx="1.8" fill="none" stroke="{{row.fg}}" stroke-width="1.1"></rect><path d="M2.6 2.2 L9.4 9.8" stroke="{{row.fg}}" stroke-width="1.2" stroke-linecap="round"></path></svg></sc-if>
+</span>
+<sc-if value="{{c.slashInline}}" hint-placeholder-val="{{false}}"><svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true"><rect x="3.5" y="1" width="5" height="8" rx="2.5" fill="none" stroke="{{row.fg}}" stroke-width="1.4"></rect><path d="M1 1 L11 13" stroke="{{row.fg}}" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+<span style="font-size: 14px">{{c.text}}</span>
+</sc-if>
+</div>
+</sc-for>
+</div>
+</sc-for>
+<div style="display: flex; gap: 32px; font-size: 14px; color: #9AA3B2; margin-top: 8px">
+<span>計時一律等寬數字：9:59／59:59／1:00:00</span>
+<span>紅色全部是固定色，不用 template 染色</span>
+<span>暫停＋告警：暫停外觀，仍帶黃色角標</span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+renderVals() {
+const I = (o) => Object.assign({ icon: true, capsule: false, text: '' }, o);
+const C = (o) => Object.assign({ icon: false, capsule: true, dot: false, slash: false, capBg: 'transparent', capLine: 'transparent', capFg: 'inherit', dotColor: '#FFFFFF' }, o);
+const A = [
+I({ isHollow: true }), I({ isDotted: true }), I({ isDot: true, text: '12:34' }), I({ isDot: true, slashInline: true, text: '12:34' }),
+I({ isWarnCircle: true, text: '12:34' }), I({ isPause: true, text: '12:34' }), I({ isGlass: true }), I({ isTri: true })
+];
+const B = [
+I({ isHollow: true }), I({ isDotted: true }), I({ isDot: true, text: '12:34' }), I({ isDot: true, muteBadge: true, text: '12:34' }),
+I({ isDot: true, badge: true, text: '12:34' }), I({ isPause: true, badge: false, text: '12:34' }), I({ isRing: true }), I({ isTri: true })
+];
+const Cc = [
+I({ isHollow: true }),
+C({ text: '檢查中', capLine: '#8B7CF6', capFg: '#B9AEFF' }),
+C({ dot: true, text: '12:34', capBg: '#FF4D4F', capFg: '#FFFFFF' }),
+{ icon: false, capsule: false, muteCap: true, text: '12:34' },
+C({ dot: true, text: '12:34', capBg: '#FF4D4F', capLine: '#F5A524', capFg: '#FFFFFF' }),
+C({ text: '‖ 12:34', capBg: '#F5A524', capFg: '#1A1206' }),
+C({ text: '收尾中', capBg: '#8B7CF6', capFg: '#FFFFFF' }),
+C({ text: '需處理', capLine: '#FF4D4F', capFg: '#FF6B6E' })
+];
+const dark = { bar: '#1E2129', fg: '#ECEEF2', track: '#3A404D' };
+const light = { bar: '#E9E7E2', fg: '#1A1C21', track: '#C9C6BF' };
+const mk = (dir, sub, cells, t) => ({ dir, sub, cells, bar: t.bar, fg: t.fg, track: t.track });
+return {
+labels: ['待機', '準備中', '錄製中', '麥克風靜音', '有告警', '已暫停', '收尾中', '需要處理'],
+rows: [
+mk('A', '形狀分家・深', A, dark), mk('A', '形狀分家・淺', A, light),
+mk('B ★', '一顆點＋角標・深', B, dark), mk('B ★', '一顆點＋角標・淺', B, light),
+mk('C ✓', '錄製膠囊・深（已選）', Cc, dark), mk('C ✓', '錄製膠囊・淺（已選）', Cc, light)
+]
+};
+}
+}
+</script>
+</body>
+</html>

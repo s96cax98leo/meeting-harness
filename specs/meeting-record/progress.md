@@ -176,11 +176,12 @@
 ### R3 Plan／Design
 - [x] intent〈R3 第三輪〉與閘門 1（`56aacca`；`run.json` 的 `r3-plan` 已核准；R3-Q1＝A、R3-Q8＝B，其餘預設）
 - [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md §2.4 就地更新（`record sync`）＋檔尾〈R3 第三輪〉（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
-- [ ] Claude Design 出稿（D1–D12、F2 確認框、F3 通知）→ 使用者挑稿 → 存 `design-r3/`（存前掃名稱）
-- [ ] 補 spec 的 UI 外觀 `<待定>` 與 §6 第 129、130 條的新舊字面
+- [x] Claude Design 出稿 → 使用者挑稿（U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A；設計語言「暗房」）→ 存 `design-r3/`（`README.md`＋9 個原始稿；存前後掃名稱：沒有）
+- [x] 補 spec 的 UI 外觀條文（§3.20 `DesignTokens.swift`、§4.38.3／5–8、§4.40.4／7–8、§4.41.2–5／7、§4.42.2、§4.43.5–7／9、§4.44.3–4）、§6 第 129、130 條的新舊字面、新增第 134、135 條、§7 疑慮 52–56；design.md R3-D21（設計稿定案）、R3-D22（字型不打包）
+- [ ] 使用者決定 §7 疑慮 52（膠囊白字對比）、53（F2 用 `NSAlert`）、54（字型要不要打包）；預設照 spec
 - [ ] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45）
 - [ ] skeptic 一致性檢查
-- [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–133 條的既有測試修改）
+- [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–135 條的既有測試修改）
 
 ### R3 Build（plan §10.1、§10.3）
 
@@ -195,7 +196,7 @@
 | 1 | `r3-sync-measure` | 未開始 | |
 | 1 | `r3-docs` | 未開始 | |
 | 2 | `r3-lock` | 未開始 | |
-| 2 | `r3-menubar-states` | 未開始（外觀等稿） | |
+| 2 | `r3-menubar-states` | 未開始 | |
 | 2 | `r3-search` | 未開始 | |
 | 2 | `r3-transcript-vad` | 未開始 | |
 | 2 | `r3-annotations` | 未開始 | |
@@ -203,13 +204,13 @@
 | 3 | `r3-notify` | 未開始 | |
 | 3 | `r3-reminders` | 未開始 | |
 | 4 | `r3-latency-log` | 未開始 | |
-| 4 | `r3-hud` | 未開始（外觀等稿） | |
-| 5 | `r3-discard` | 未開始（確認框等稿） | |
-| 6 | `r3-menu-stages` | 未開始（外觀等稿） | |
+| 4 | `r3-hud` | 未開始 | |
+| 5 | `r3-discard` | 未開始 | |
+| 6 | `r3-menu-stages` | 未開始 | |
 | 6 | `r3-segment-scheduler` | 未開始 | |
-| 7 | `r3-onboarding-settings` | 未開始（外觀等稿） | |
+| 7 | `r3-onboarding-settings` | 未開始 | |
 | 7 | `r3-sync-compensate` | 未開始 | |
-| 8 | `r3-meeting-detect` | 未開始（通知文字等稿） | |
+| 8 | `r3-meeting-detect` | 未開始 | |
 
 - [ ] 每層整合＋plan §10.3 的測試指令
 - [ ] 第 8 層：全量 Python、Swift、建置（暫存目錄）、entitlements 兩項、`check_rules.py --git`、verify、名稱掃描
