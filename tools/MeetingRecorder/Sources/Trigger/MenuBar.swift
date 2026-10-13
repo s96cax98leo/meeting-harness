@@ -31,6 +31,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     private let muteItem = NSMenuItem(title: "麥克風靜音", action: #selector(toggleMute), keyEquivalent: "m")
     private let markItem = NSMenuItem(title: "加標記", action: #selector(addMarker), keyEquivalent: "b")
     private let stopItem = NSMenuItem(title: "停止錄製", action: #selector(stopRecording), keyEquivalent: "")
+    /// F2 捨棄這次錄製（spec §4.42.2）：沒有快捷鍵；確認對話框在 Trigger/Discard.swift
+    private let discardItem = NSMenuItem(title: "捨棄這次錄製…", action: #selector(discardRecording), keyEquivalent: "")
     private let openItem = NSMenuItem(title: "打開場次資料夾", action: #selector(openSession), keyEquivalent: "")
     private let lastItem = NSMenuItem(title: "顯示上一場成品", action: #selector(showLastSession), keyEquivalent: "")
     private let prefsItem = NSMenuItem(title: "偏好設定…", action: #selector(openPreferences), keyEquivalent: ",")
@@ -97,7 +99,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         prefsItem.keyEquivalentModifierMask = [.command]
         quitItem.keyEquivalentModifierMask = [.command]
         quitItem.toolTip = "只結束 menu bar，不會停止正在進行的錄製"
-        for i in [detailItem, startItem, pauseItem, muteItem, markItem, stopItem, openItem, lastItem, prefsItem, quitItem] {
+        for i in [detailItem, startItem, pauseItem, muteItem, markItem, stopItem, discardItem, openItem, lastItem, prefsItem, quitItem] {
             i.target = self
         }
         windowsItem.submenu = windowsMenu
@@ -116,6 +118,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         menu.addItem(muteItem)
         menu.addItem(markItem)
         menu.addItem(stopItem)
+        menu.addItem(discardItem)
         menu.addItem(.separator())
         menu.addItem(openItem)
         menu.addItem(lastItem)
@@ -227,6 +230,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         muteItem.isEnabled = m.canControl
         markItem.isEnabled = m.canControl
         stopItem.isEnabled = m.canStop
+        discardItem.isEnabled = canDiscard(st)
         openItem.isEnabled = m.canOpenSession
         lastItem.isEnabled = lastSessionPath() != nil
     }
@@ -635,6 +639,47 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         guard kill(pid, SIGTERM) == 0 else { return }
         stopRequestedRunId = current?.runId
         refresh()
+    }
+
+    // MARK: - 捨棄這次錄製（F2；spec §4.42.2）
+
+    /// 只在錄製中（含暫停）可捨棄；已點過停止、收尾中與之後都不行
+    private func canDiscard(_ st: RecordStatus?) -> Bool {
+        guard model.canStop, let st, st.phase == .recording else { return false }
+        return st.runId != stopRequestedRunId
+    }
+
+    /// 先顯示確認對話框（打開期間錄製照常）；使用者按「捨棄並移到垃圾桶」後，再確認一次停止目標
+    /// （stopTargetDecision，與「停止錄製」同一套），才寫 record.discard.json 並送 SIGTERM。
+    /// 跳過收尾與移到垃圾桶由錄製實例做（§4.42.3）。按「繼續錄製」沒有任何副作用。
+    @objc private func discardRecording() {
+        guard let st = status, canDiscard(st) else { return }
+        let runId = st.runId
+        guard confirmDiscard(spokenDuration: model.spokenDuration) else { return }
+        // 對話框開著的期間錄製可能已經結束或換了一場：只對同一場、仍在錄製中的實例捨棄
+        let current = readStatus(statusURL)
+        guard let current, current.runId == runId, current.phase == .recording else {
+            notify(title: "MeetingRecorder 沒有捨棄錄製", body: "這次錄製已經停止或在收尾，沒有捨棄", kind: .failure,
+                   runId: runId)
+            return
+        }
+        let recordPid = readPid(pidURL)
+        let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
+                                          pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current.pid,
+                                          command: recordPid.flatMap(executablePath))
+        guard case .signal = decision else {
+            performStop(decision, current: current)   // 拒絕：說明原因、不送任何訊號
+            return
+        }
+        do {
+            try writeDiscardRequest(home: home, runId: runId)
+        } catch {
+            notify(title: "MeetingRecorder 沒有捨棄錄製", body: "寫 \(discardRequestFileName) 失敗：\(error.localizedDescription)",
+                   kind: .failure, runId: runId)
+            return
+        }
+        Logger(path: logURL.path, append: true).line("\(isoNow()) 使用者確認捨棄這次錄製：送 SIGTERM")
+        performStop(decision, current: current)
     }
 
     /// record.lock 是否被別的程序持有：試鎖一次（不重試、不阻塞），拿到就立刻放掉。
