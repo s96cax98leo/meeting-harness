@@ -2,14 +2,22 @@
   "vaultPath": "./vault",
   "transcribe": {
     "engine": "mlx-whisper",
-    "model": "mlx-community/whisper-large-v3-mlx",
+    "models": {
+      "zh": "Kenji8000/Breeze-ASR-25-mlx",
+      "default": "mlx-community/whisper-large-v3-mlx",
+      "fallback": "mlx-community/whisper-large-v3-mlx"
+    },
     "language": "zh",
     "fallbackEngine": "openai-whisper",
-    "fallbackModel": "medium"
+    "fallbackModel": "medium",
+    "note": "zh 場次用 Breeze-ASR-25（MediaTek，台灣華語＋中英混雜，原生繁體輸出）；其他語言或 Breeze 載入失敗時退回 whisper-large-v3。MH_ASR_MODEL 可覆寫。"
   },
   "ocr": {
     "engine": "ocrmac",
-    "languages": ["zh-Hant", "en-US"],
+    "languages": [
+      "zh-Hant",
+      "en-US"
+    ],
     "visionModel": "claude"
   },
   "publish": {
@@ -17,10 +25,13 @@
     "docxFallback": "officecli"
   },
   "diarize": {
-    "enabled": false,
-    "engine": "senko",
-    "venv": "~/.meeting-harness/senko-venv",
-    "note": "可選、預設關閉；只對標記為多講者的場次開（在該場 錄音/ 放一個 .diarize 空檔，或用 meeting.sh --diarize）。輸出 錄音/transcript.speakers.md。可放 錄音/speakers.map.json 把 SPEAKER_00 改成真名。"
+    "enabled": true,
+    "engine": "pyannote",
+    "model": "pyannote/speaker-diarization-community-1",
+    "venv": "~/.meeting-harness/diarize-venv",
+    "device": "auto",
+    "minOverlapRatio": 0.3,
+    "note": "pyannote.audio 4 跑 Apple Silicon GPU（MPS），不碰 ANE。講者數由 bin/_profile.py 依型態給（有 attendees/expectedSpeakers 就鎖 num_speakers，否則 min/max）。首次需在 HuggingFace 接受 gated 條款並有 token（HF_TOKEN 或 ~/.meeting-harness/hf-token）。輸出 錄音/diarization.json + embeddings.json；逐字段與講者段重疊低於 minOverlapRatio 標 SPEAKER_?。MH_DIARIZE_DEVICE 可覆寫裝置。"
   },
   "llm": {
     "engine": "claude",
@@ -31,18 +42,63 @@
     "note": "總結後端。預設 claude（品質最好）。設環境變數 MH_LLM=local 走地端混合：總結用本機 localModel（內容不出電腦），resolver 仍可上網。全離線用 meeting.sh local <根>。"
   },
   "sourceLayout": {
-    "audioGlob": "錄音/*.m4a",
+    "audioGlob": "錄音/*.{m4a,mp3,wav,mov,mp4,m4v}",
     "liveTranscript": "錄音/轉文字.txt",
     "photosDir": "照片",
     "transcriptOut": "錄音/transcript.md",
     "slidesOut": "照片/slides.md",
     "summaryOut": "summary.md",
     "docxDir": "exports",
-    "stateFile": ".pipeline-state.json"
+    "stateFile": ".pipeline-state.json",
+    "meetingConfig": "錄音/meeting.json",
+    "rawTranscript": "錄音/transcript.raw.md",
+    "speakersTranscript": "錄音/transcript.speakers.md",
+    "speakersMap": "錄音/speakers.map.json",
+    "vtt": "錄音/transcript.vtt",
+    "record": "meeting.record.json",
+    "actions": [
+      "actions.csv",
+      "actions.ics"
+    ],
+    "embeddings": "錄音/embeddings.json",
+    "videoDir": "影片",
+    "recordTracks": "錄音/tracks",
+    "recordStatus": "~/.meeting-harness/record.status.json"
   },
   "guardrails": {
     "localFirst": true,
     "cloudVisionOnlyForFlaggedSlides": true,
     "requireVerifierPassBeforePublish": true
+  },
+  "meetingTypes": {
+    "default": "seminar",
+    "available": [
+      "seminar",
+      "internal",
+      "client",
+      "1on1",
+      "workshop",
+      "interview"
+    ],
+    "configFile": "錄音/meeting.json",
+    "note": "type 決定講者分離參數與總結模板；attendees/expectedSpeakers 會用來鎖定講者數與講者命名。舊的 .meeting（=internal）/.diarize 標記仍相容。"
+  },
+  "render": {
+    "schema": "schema/meeting-record.v1.json",
+    "record": "meeting.record.json",
+    "outputs": [
+      "summary.md",
+      "actions.csv",
+      "actions.ics",
+      "錄音/transcript.vtt"
+    ],
+    "note": "總結階段只寫 record，其餘由 bin/_render.py 渲染。summary.md 固定含「一句話：」與 決議/依賴/風險與未決/交辦/存疑 五段，供 下游知識庫專案 /ingest-meeting 直接取用。"
+  },
+  "voiceprint": {
+    "enabled": true,
+    "dir": "vault/voiceprints",
+    "renameThreshold": 0.75,
+    "hintThreshold": 0.6,
+    "note": "跨會議聲紋庫。只有人工確認過的對應才用 meeting voiceprint add 建檔；比對 cos ≥ renameThreshold 才改名，hintThreshold~rename 之間只當線索（信心 <0.7，_merge_speakers.py 不會採用）。屬生物特徵資料：只存本機 vault/（不進版控），可隨時 remove。"
   }
 }

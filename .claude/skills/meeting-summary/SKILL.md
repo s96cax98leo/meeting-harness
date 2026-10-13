@@ -1,68 +1,76 @@
 ---
 name: meeting-summary
-description: 會議總結 orchestrator。給一個會議根目錄（內含多個場次，每場有 錄音/*.m4a + 轉文字.txt + 照片/*.HEIC），自動跑：轉錄→投影片OCR→架構圖視覺補讀→結構化繁中總結→驗證→發佈到 Obsidian wiki + 轉 Word。具短期/長期記憶、可觀測性、驗證與失敗恢復。當用戶要「總結會議/研討會/課程錄音+投影片」時使用。
-metadata:
-  reusable: true
-  entrypoint: "/meeting-summary <會議根目錄>"
+description: 會議錄音/錄影 → 逐字稿 → 講者識別 → 結構化繁中會議紀錄（決議/依賴/風險/交辦）→ Word/wiki。全程本機（轉錄、OCR、講者分離都不出電腦）。給一個會議資料夾就能跑。當使用者要「整理會議/做會議紀錄/總結錄音/逐字稿+摘要」時使用。
 ---
 
-# meeting-summary（orchestrator 劇本 / SOP）
+# meeting-summary（會議紀錄總流程）
 
-一套**可沿用**的會議總結流水線。指向任一會議根目錄即可執行；未來每場會議重複套用。
+把一場會議的錄音／螢幕錄影（＋投影片截圖）變成可用的會議紀錄。
+工具在 **`/Users/yuktang/Documents/Agent/meeting-harness`**（以下用 `$MH`），**任何工作目錄都能呼叫**。
 
-## 核心能力（本劇本落地）
-編排=本 SOP + `meeting-pipeline.js`；多代理=7 個 subagent；溝通=JSON schema + `.pipeline-state.json`；記憶=`vault/術語表.md`(長期)+state(短期)；驗證=verifier 閘門；恢復=stage 冪等 + resume；可觀測性=`.pipeline-state.json`+`run.log`+`/workflows`；技能發現=`npx skills find`。
-
-## 輸入
-- `會議根目錄`：其下每個子資料夾是一個**場次**，含 `錄音/<場>.m4a`、選配 `錄音/轉文字.txt`、`照片/*.HEIC`。
-- harness 根：本專案（含 `bin/`、`config.json`、`vault/`）。
-
-## 前置（preflight）
-1. 讀 `config.json`（vaultPath、模型、來源檔命名）。
-2. 確認工具：`python3 -c "import mlx_whisper"`、`python3 -c "from ocrmac import ocrmac"`、`command -v pandoc`、`npx skills --help`。缺則先裝（見 README）。
-3. **技能路由（find-skill）**：對每個子任務用 `npx skills find <關鍵字>`（transcription / image ocr / obsidian / docx）確認/挑選最適 skill；本專案已內建對應 skill，找不到外部更適者就用內建。
-4. 建 `vault/`（若無）與各場 `exports/`；初始化每場 `.pipeline-state.json`。
-
-## 逐場流水線（可用 Workflow 工具跑 `meeting-pipeline.js`，或由主 Claude 依序驅動 subagent）
-每場獨立 context，兩路並行後匯流：
-
-```
-preflight
-├─(A) transcribe-agent         # 錄音 → transcript.md
-│      └─(選用) diarize         # 多講者場（錄音/.diarize 或 MH_DIARIZE=1）→ transcript.speakers.md（senko）
-└─(B) slide-ocr-agent          # 照片 → .ocr/*.txt, slides.ocr.md, needsVision[]
-      └─ slide-vision-agent    # needsVision → slides.md
-                    ↓ (A、B 匯流)
-        summarizer-agent        # transcript(+speakers) + slides + 術語表 → summary.md
-        │  ★ 若場次有 錄音/.meeting 標記（開會/討論）→ 改用 meeting-notes-agent
-        │    產「會議紀錄」：結論/決議・行動項表格(負責人/期限/狀態)・未決・風險
-                    ↓
-        verifier-agent          # pass/fail（fail → 回退 recoverStage 重跑）
-                    ↓ pass
-        resolver-agent          # 存疑補足：上網查證 + 前後文，能補則補、有佐證才升級
-                    ↓
-        publisher-agent         # wiki 頁 + 術語表/會議索引 + docx
+```bash
+MH=/Users/yuktang/Documents/Agent/meeting-harness
 ```
 
-## 可觀測性
-- 每場 `.pipeline-state.json` 記錄各 stage：`pending|running|done|failed`、產物路徑、時間戳、重試次數。
-- `run.log` 累積每步 stdout 摘要。
-- 用 Workflow 工具時，`/workflows` 有即時樹、`journal.jsonl` 記每個 agent 回傳。
+## 0. 先確認環境
+```bash
+bash "$MH/bin/meeting.sh" doctor
+```
+缺東西時它會直接告訴你裝什麼（轉錄模型、講者分離環境、HuggingFace 授權都在這裡檢查）。
+完整指令表：`bash "$MH/bin/meeting.sh" help`
 
-## 總結後端（雲端 / 地端）
-- **預設 claude**：orchestrator 派 summarizer-agent（Claude）產 summary.md，品質最佳。
-- **地端混合（`MH_LLM=local`）**：改呼叫 `bin/summarize-local.sh <場次>`（本機 ollama Qwen 產總結，**逐字稿/投影片不出電腦**）；**resolver 仍走線上**（只把「存疑關鍵詞」送上網查證）。
-- **全離線**：`bin/meeting.sh local <根>`＝prep＋本機總結＋發佈，全程無雲端（不跑 resolver）。
-- 機密/內部會議建議走地端；公開研討會可續用 claude。
+## 1. 本機前處理（轉錄 + 投影片 OCR + 講者分離）
 
-## 驗證與恢復
-- **冪等**：每 stage 先檢查產物存在且有效 → 跳過（重跑安全）。
-- **驗證閘門**：verifier `fail` → 依 `recoverStage` 只重跑該 stage 及其下游；`pass` 才 publish。
-- **恢復**：中斷後重跑整個 SOP，已完成 stage 走快取；用 Workflow 則 `resumeFromRunId` 只重跑失敗 stage。
+**會議還沒開始、要錄下來？** 先用 **meeting-record** skill 錄會議視窗與雙路音訊，錄完的場次直接接下面的前處理。
 
-## 完成後
-- `lint the wiki`（若裝 claude-obsidian）檢查死連結/孤兒頁。
-- 首場跑完**人工快速校閱術語表**一次，之後自動累積。
+**資料還沒分場**（錄影、截圖全丟在同一個資料夾）：
+```bash
+bash "$MH/bin/meeting.sh" ingest "<資料夾>" --dry-run   # 先看會怎麼分
+bash "$MH/bin/meeting.sh" ingest "<資料夾>"             # 依時間戳分場（--split 可一檔一場）
+```
 
-## 未來沿用
-新會議：把資料照 `場次/錄音/*.m4a(+轉文字.txt)` 與 `場次/照片/*.HEIC` 放好，執行 `/meeting-summary <新根目錄>` 即可。
+**跑前處理**（可重跑、冪等；已有產物會 SKIP）：
+```bash
+bash "$MH/bin/meeting.sh" <型態> "<會議根目錄>"
+```
+型態決定講者數範圍與總結模板，會記在該場 `錄音/meeting.json`，之後不用再指定：
+
+| 型態 | 場景 | 型態 | 場景 |
+|---|---|---|---|
+| `seminar` | 研討會／演講 | `1on1` | 一對一 |
+| `internal` | 內部會議 | `workshop` | 工作坊 |
+| `client` | 客戶會議（對外） | `interview` | 訪談／面談 |
+
+產物（每場）：`錄音/transcript.raw.md`（原始逐字稿，**不要改它**）、`transcript.segments.json`、
+`diarization.json`、`embeddings.json`、`transcript.speakers.md`（帶講者名）、`照片/.ocr/*.txt`。
+
+## 2. 寫會議紀錄（這步是你要做的事）
+
+讀 `錄音/transcript.speakers.md`（有講者標籤的版本）＋ `照片/.ocr/*.txt`，
+**產出 `<場次>/meeting.record.json`**（schema：`$MH/schema/meeting-record.v1.json`），
+不要自己手寫 summary.md。欄位怎麼填見 **meeting-notes** skill。
+
+然後渲染：
+```bash
+bash "$MH/bin/meeting.sh" render "<場次目錄>"
+```
+一份 JSON 會產出：`summary.md`（人看的）、`actions.csv`、`actions.ics`（RFC 5545 待辦）、
+`錄音/transcript.vtt`（WebVTT 字幕）。要改內容就改 record 再 render 一次——
+**直接改 summary.md 會被下次 render 蓋掉。**
+
+`summary.md` 固定含「一句話：」與 `## 決議 / ## 依賴 / ## 風險與未決 / ## 交辦 / ## 存疑`，
+下游知識庫專案 的 `/ingest-meeting` 可以直接吃。
+
+## 3. 發佈（選用）
+Word／Obsidian wiki／術語表與會議索引 → 見 **meeting-publish** skill。
+
+## 重要原則
+- **原始逐字稿不動**：`transcript.raw.md` 是引擎原始輸出，不刪段、不改寫。精修另存 `transcript.md`。
+- **不編造負責人與期限**：逐字稿沒明講就留空（會渲染成「（未指定）」），並列進 `uncertain[]`。
+- **不確定的名字就別掛**：講者識別信心不足時維持 `SPEAKER_0x`，寫進存疑。寧可匿名也不掛錯人。
+- **雜訊段照實標**：任何 ASR 在交談重疊/吵雜段都會出錯；`.QUALITY_WARNING` 檔會標出重複迴圈，
+  那些段落在紀錄裡標「（聽不清）」，不要當成真的發言。
+
+## 在 harness 專案裡執行時
+`$MH/.claude/agents/` 有 8 個專職 subagent（transcribe / slide-ocr / slide-vision / summarizer /
+meeting-notes / speaker-id / verifier / publisher），可以分派。在其他工作目錄就照本 skill 自己做。
