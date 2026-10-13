@@ -2,6 +2,8 @@
 // 只做 AppKit 接線：每秒讀 record.status.json 與 kill -0，交給 Core 的 menuBarModel 算圖示、計時、狀態列與選單可用性。
 // R3（spec §4.38、§4.39、§4.27.4）：選單列＝U1-C 錄製膠囊（8 種外觀自繪，顏色一律取自 Core 的 menuBarCapsuleStyle）；
 //   toolTip／VoiceOver＝menuBarAccessibilityLabel；停止前先 stopTargetDecision；新告警發分級通知（notificationPolicy）。
+// R3（spec §4.40）：錄製小窗（Trigger/HUD.swift）依 hudVisible 顯示；圖示是否被擋住每 obscuredCheckSeconds 檢查一次
+//   交給 obscuredAction；快捷鍵回饋依 feedbackRoute。
 // menu bar 實例自己不擷取、不呼叫 SCK：
 //   「開始錄製」「錄這個視窗」＝以 open -n -a 自己帶 quick-start；視窗清單＝以 open -n -a 自己帶 windows --json；
 //   「停止錄製」＝ stopTargetDecision 確認後 SIGTERM 給錄製實例；暫停／麥克風靜音／加標記＝ requestControl 寫控制檔後送 SIGUSR1（spec §4.20.8）。
@@ -48,8 +50,18 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 本次執行期間看過處於進行中（recording／stopping／finalizing）的 runId（spec §4.23.3）
     private var seenInProgress = Set<String>()
     private var completionPosted = Set<String>()
-    /// 已檢查過「圖示被瀏海擋住」的 runId（每場只提醒一次，§6 第 106 條）
-    private var obscureChecked = Set<String>()
+    /// 選單列圖示是否被瀏海擋住或被系統藏起來（錄製中每 obscuredCheckSeconds 檢查一次；nil＝這次錄製還沒檢查過；
+    /// spec §4.40.3、§6 第 121 條）
+    private var iconObscured: Bool?
+    /// 已排過開錄後第一次檢查的 runId（計時顯示、寬度定下來後再看）
+    private var obscureFirstCheckRunId: String?
+    private var obscuredTimer: Timer?
+    /// 錄製小窗 U2-C（Trigger/HUD.swift）；何時顯示由 hudVisible 決定
+    private lazy var hud: HUDController = {
+        let h = HUDController(home: home)
+        h.actions = self
+        return h
+    }()
     /// 「錄這個視窗」子選單讀清單用的輪詢
     private var windowsTimer: Timer?
     private var preferences: PreferencesWindowController?
@@ -127,6 +139,10 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        // 圖示是否被擋住：錄製中持續檢查，結果驅動 auto 模式的 HUD 與快捷鍵回饋路徑（spec §4.40.3、§6 第 121 條）
+        let o = Timer(timeInterval: obscuredCheckSeconds, repeats: true) { [weak self] _ in self?.checkObscured() }
+        RunLoop.main.add(o, forMode: .common)
+        obscuredTimer = o
         // 四組快捷鍵（Carbon hot key，不需要輔助使用授權）；任一組失敗不影響其他組與選單（spec §4.20.5）
         for spec in r2HotKeys {
             guard let code = hotKeyCode(spec.key) else { continue }
@@ -172,8 +188,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let pid = st?.pid ?? readPid(pidURL) ?? 0
         let alive = pidAlive(pid)
         trackCompletion(raw)
-        checkObscured(raw)
-        notifyNewAlerts(raw)
+        scheduleFirstObscuredCheck(raw)
         // 點下「停止錄製」後立即顯示「收尾中…」，不等錄製實例寫出 stopping（spec §4.11.7）
         if var s = st, s.runId == stopRequestedRunId, s.phase == .recording {
             s.phase = .stopping
@@ -183,6 +198,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let m = menuBarModel(status: st, pidAlive: alive, now: Date())
         model = m
         updateButton(m)
+        if !hudEligible(m) { iconObscured = nil }   // 這次錄製結束：下一場重新判斷
+        updateHUD(m)
+        notifyNewAlerts(raw)
         // 狀態列：不可點，但用 labelColor 而非系統灰色；過長截斷，完整內容放 toolTip（spec §4.11.8）
         statusLine.attributedTitle = NSAttributedString(
             string: truncatedStatusTitle(m.statusLine, limit: 40),
@@ -400,7 +418,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         switch action {
         case "start":
             if model.canStart { startRecording() }
-        // 快捷鍵按下後一律發通知回饋（t7，§6 第 105 條：圖示被瀏海擋住時看不到任何反應，使用者會一直重按）
+        // 快捷鍵回饋依 feedbackRoute（spec §4.40.5）：HUD 看得到走 HUD、圖示看得到不發、兩者都看不到才發通知
         case "mute": sendControl(model.micMuted ? .unmute : .mute, action: "mute", feedback: true)
         case "pause": sendControl(model.paused ? .resume : .pause, action: "pause", feedback: true)
         case "mark": sendControl(.mark, action: "mark", feedback: true)
@@ -522,10 +540,16 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     }
 
     private func sendControl(_ cmd: ControlCommand, action: String, feedback: Bool = false) {
-        guard debouncer.accept(action, at: ProcessInfo.processInfo.systemUptime) else { return }
         let recordPid = readPid(pidURL)
         let availability = controlAvailability(status: readStatus(statusURL), recordPid: recordPid,
                                                pidAlive: recordPid.map(pidAlive) ?? false)
+        performControl(cmd, action: action, availability: availability, feedback: feedback)
+    }
+
+    /// 選單、快捷鍵與 HUD 共用：依 controlAvailability 的結果寫控制檔、送 SIGUSR1（同一動作 1 秒內只算一次）
+    private func performControl(_ cmd: ControlCommand, action: String, availability: ControlAvailability,
+                                feedback: Bool) {
+        guard debouncer.accept(action, at: ProcessInfo.processInfo.systemUptime) else { return }
         switch availability {
         case .unavailable(let message):
             notify(title: "MeetingRecorder 沒辦法操作錄製", body: message, kind: .failure)
@@ -542,8 +566,13 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
                 notify(title: "MeetingRecorder 沒辦法操作錄製", body: "通知錄製實例失敗（errno \(errno)）",
                        kind: .failure, runId: runId)
             } else if feedback {
-                notify(title: "MeetingRecorder", body: controlFeedback(cmd, markerSeq: written.markerSeq),
-                       kind: .hotkeyFeedback, runId: runId)
+                switch feedbackRoute(hudVisible: hud.isShown, iconVisible: iconObscured != true) {
+                case .hud, .none:   // HUD 或選單列圖示看得到：下一次 refresh 就反映新狀態，不另發通知
+                    break
+                case .notification:
+                    notify(title: "MeetingRecorder", body: controlFeedback(cmd, markerSeq: written.markerSeq),
+                           kind: .hotkeyFeedback, runId: runId)
+                }
             }
         }
     }
@@ -568,6 +597,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let fresh = newAlertWarnings(previous: seenWarnings, current: st.warnings)
         seenWarnings = st.warnings
         guard st.phase == .recording, let latest = fresh.max(by: { $0.t < $1.t }) else { return }
+        hud.newAlert(message: latest.message)   // HUD 顯示中才自動展開 8 秒（§4.40.7）
         let more = fresh.count > 1 ? "（另有 \(fresh.count - 1) 則新告警）" : ""
         notify(title: "MeetingRecorder 錄製中有告警", body: alertNotificationBody(latest.kind) + more,
                kind: .alertWarning, runId: st.runId)
@@ -589,7 +619,12 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
                                           pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current?.pid,
                                           command: recordPid.flatMap(executablePath))
-        guard case .signal(let pid) = decision else {
+        performStop(decision, current: current)
+    }
+
+    /// 選單與 HUD 共用：只有 stopTargetDecision 回 .signal(pid:) 才送 SIGTERM
+    private func performStop(_ decision: StopTarget, current: RecordStatus?) {
+        guard case let .signal(pid) = decision else {
             if case .refuse(let why) = decision {
                 Logger(path: logURL.path, append: true).line("\(isoNow()) 停止錄製被拒（\(why.rawValue)）：不送訊號")
                 notify(title: "MeetingRecorder 沒有停止錄製", body: stopRefusalText(why), kind: .failure,
@@ -657,28 +692,59 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         ])
     }
 
-    /// 錄製中第一次 refresh（計時已顯示、寬度已定）時看圖示是否被瀏海擋住或被系統藏起來；是就發一次通知（§6 第 106 條）
-    private func checkObscured(_ st: RecordStatus?) {
-        guard let st, st.phase == .recording, !obscureChecked.contains(st.runId) else { return }
-        obscureChecked.insert(st.runId)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, let window = self.item.button?.window else { return }
-            let frame = window.frame
-            let screen = window.screen ?? NSScreen.main
-            var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
-            if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
-                notchMinX = sc.frame.minX + l.maxX
-                notchMaxX = sc.frame.minX + r.minX
-            }
-            let visible = window.occlusionState.contains(.visible)
-            if statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
-                                  notchMinX: notchMinX, notchMaxX: notchMaxX) {
-                Logger(path: self.logURL.path, append: true)
-                    .line("\(isoNow()) 選單列圖示看不到（x \(Int(frame.minX))–\(Int(frame.maxX))、visible \(visible)）：已提醒使用者")
-                self.notify(title: "MeetingRecorder 正在錄製，但選單列圖示被擋住了",
-                            body: "可按住 ⌘ 把右上角其他圖示拖走騰出空間；暫停 ⌃⌥⌘P、靜音 ⌃⌥⌘M、標記 ⌃⌥⌘B 按下後都會跳通知",
-                            kind: .failure, runId: st.runId)
-            }
+    /// HUD 可能顯示的外觀（錄製中、靜音、告警、暫停；spec §4.40.1）
+    private func hudEligible(_ m: MenuBarModel) -> Bool {
+        hudVisible(mode: .always, obscured: false, appearance: m.appearance)
+    }
+
+    /// HUD 顯示與否＝hudVisible（設定的 hudMode、圖示是否被擋住、目前外觀）；收尾中與之後不顯示
+    private func updateHUD(_ m: MenuBarModel) {
+        let settings = loadMenuBarSettings(home: home)
+        let visible = hudVisible(mode: settings.hudMode, obscured: iconObscured ?? false, appearance: m.appearance)
+        let label = menuBarAccessibilityLabel(appearance: m.appearance, alertBadge: m.alertBadge, spoken: m.spokenDuration,
+                                              alertText: latestAlertMessage(status), status: m.statusLine)
+        hud.update(model: m, status: status, visible: visible, hudPosition: settings.hudPosition,
+                   screen: item.button?.window?.screen, accessibilityLabel: label)
+    }
+
+    /// 開錄後第一次 refresh 時排一次檢查（計時已顯示、寬度已定），之後由 obscuredTimer 每 obscuredCheckSeconds 檢查
+    private func scheduleFirstObscuredCheck(_ st: RecordStatus?) {
+        guard let st, st.phase == .recording, obscureFirstCheckRunId != st.runId else { return }
+        obscureFirstCheckRunId = st.runId
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.checkObscured() }
+    }
+
+    /// 看選單列圖示是否被瀏海擋住或被系統藏起來（spec §4.40.3、§6 第 121 條）。結果交給 obscuredAction：
+    /// auto 模式下狀態改變時顯示／收起 HUD；同一結果也決定快捷鍵回饋走哪條路（feedbackRoute）。
+    private func checkObscured() {
+        guard hudEligible(model) else {
+            iconObscured = nil
+            return
+        }
+        guard let window = item.button?.window else { return }
+        let frame = window.frame
+        let screen = window.screen ?? NSScreen.main
+        var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
+        if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
+            notchMinX = sc.frame.minX + l.maxX
+            notchMaxX = sc.frame.minX + r.minX
+        }
+        let visible = window.occlusionState.contains(.visible)
+        let obscured = statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
+                                          notchMinX: notchMinX, notchMaxX: notchMaxX)
+        let previous = iconObscured
+        iconObscured = obscured
+        let mode = loadMenuBarSettings(home: home).hudMode
+        switch obscuredAction(previous: previous, current: obscured, mode: mode, recording: true) {
+        case .showHUD:
+            Logger(path: logURL.path, append: true)
+                .line("\(isoNow()) 選單列圖示看不到（x \(Int(frame.minX))–\(Int(frame.maxX))、visible \(visible)）：顯示錄製小窗")
+            updateHUD(model)
+        case .hideHUD:
+            Logger(path: logURL.path, append: true).line("\(isoNow()) 選單列圖示又看得到了：收起錄製小窗")
+            updateHUD(model)
+        case .none:
+            break
         }
     }
 
@@ -748,6 +814,27 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list])
+    }
+}
+
+// MARK: - HUD 按鈕的執行端（與選單同一條控制路徑；Trigger/HUD.swift）
+
+extension MenuBarController: HUDActions {
+    func hudControl(_ cmd: ControlCommand, action: String, availability: ControlAvailability) {
+        performControl(cmd, action: action, availability: availability, feedback: false)
+    }
+
+    func hudStop(_ decision: StopTarget, status current: RecordStatus?) {
+        guard model.canStop else { return }
+        performStop(decision, current: current)
+    }
+
+    func hudRecordLockHeld() -> Bool {
+        recordLockHeld()
+    }
+
+    func hudExecutablePath(_ pid: Int32) -> String? {
+        executablePath(pid)
     }
 }
 
