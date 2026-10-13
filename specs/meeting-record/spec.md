@@ -1777,7 +1777,7 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 |---|---|---|---|
 | 4.39.1 | `notificationPolicy`：`alertWarning` 且 `timeSensitiveAllowed` → `.timeSensitive`，不允許時 `.active`；`failure`、`completion`、`meetingDetected` → `.active`；`hotkeyFeedback`、`onboarding` → `.passive`。`threadIdentifier`＝非空 `runId`，否則 `"mh.app"`；`meetingDetected` 一律 `"mh.app"`。 | U3 | `swift:R3MenuBarTests.swift::testNotificationPolicy` |
 | 4.39.2 | `newAlertWarnings(previous:current:)` 只回 `current` 中 `isAlert` 為 true 且（`t`, `kind`）不在 `previous` 的項；同一則告警連續兩次輪詢只發一次。 | U3 | `swift:R3MenuBarTests.swift::testNewAlertWarnings` |
-| 4.39.3 | 錄製中出現新告警時，menu bar 應發通知（`interruptionLevel` 依 4.39.1、`threadIdentifier` 依 4.39.1）；通知標題與內文不得含場次名或視窗標題（**由實機驗收場確認**，§4.47.4 觸發告警時一併檢查通知文字；自動測試不驗；Red 層補字面）。entitlements 仍恰為 2 項（§4.2.8 不改）。實作形狀：`Notifier.swift` 含 `interruptionLevel`、`threadIdentifier`；`MenuBar.swift` 呼叫 `newAlertWarnings(`。 | U3；R3-D11 | `test_r3_app_static.py::NotifyStatic.test_policy_applied`；實機（Time Sensitive 是否生效，§7 疑慮 44；通知不含場次名與視窗標題，§4.47.4） |
+| 4.39.3 | 錄製中出現新告警時，menu bar 應發通知（`interruptionLevel` 依 4.39.1、`threadIdentifier` 依 4.39.1）；通知標題與內文不得含場次名或視窗標題（**由實機驗收場確認**，§4.47.4 觸發告警時一併檢查通知文字；自動測試不驗；Red 層補字面）。entitlements 依 §6 第 138 條恰為 3 項（閘門 2 疑慮 57 選 (b)）。實作形狀：`Notifier.swift` 含 `interruptionLevel`、`threadIdentifier`；`MenuBar.swift` 呼叫 `newAlertWarnings(`。 | U3；R3-D11 | `test_r3_app_static.py::NotifyStatic.test_policy_applied`；實機（Time Sensitive 是否生效，§7 疑慮 44；通知不含場次名與視窗標題，§4.47.4） |
 | 4.39.4 | 通知的文字與動作照本節；外觀為系統原生（D11 不出稿）。 | intent R3-2 | 設計審查 |
 
 #### 4.40 HUD（U2；推翻 §6 第 105、106 條）
