@@ -306,3 +306,272 @@
 - R2-Q3：最近位置清單另開 menu bar 專用設定檔，`record.defaults.json` 維持 `record.sh` 單一寫者。
 - R2-Q5：使用者原話「全面更新子指令」：接受 CLI 表面的語意變更，新子指令（pause／resume／mute／unmute／mark）比照 `help` 列為保留字，並全面更新 CLI 封閉清單（`spec.md §2.4`）、`surface.py`、usage、SKILL.md、README 與鍵集合測試的預期（屬使用者核准的測試修改，記 `spec.md §6`）。
 - 閘門 1：核准。
+
+---
+
+## R3 第三輪（2026-10-13）
+
+- 性質：第三輪（R3）增補，**另走 R3 的閘門 1 核准**；本節以上的第一輪（第 1–176 行）與 R2（第 180–308 行）原文不動，仍以各自的核准為準。本節推翻的既有定案逐條列在 R3-3〈要推翻或改寫的既有定案〉。
+- 調研依據（本機、不在版控）：`_tpm/runs/20261010-sdlc-meeting-record/` 的 `r3-research-synthesis.md`（收斂結論，簡寫 `syn`），細節查同目錄 `r3-research-sync.md`（`sync`）、`r3-research-transcript.md`（`tr`）、`r3-research-features.md`（`feat`）、`r3-research-ui.md`（`ui`）、`r3-research-quality.md`（`q`）。引用格式為「簡寫 §節」或「簡寫:行」。
+- 使用者決定：2026-10-13 由主 session 轉述（派工單「使用者已做的決定」1–4），本節照寫，以下簡寫「使用者決定 1–4」。
+- 程式行號：調研在 `3ab9df3` 做，本 worktree HEAD 是 `377dd92`（origin/main）。兩者在程式檔只差數個單行替換、行數沒變（`git diff --stat 3ab9df3 HEAD`：每檔增刪行數相同），報告裡的程式行號可以直接沿用。
+- 代號：T／Q／S／U／F／D 開頭的代號（T1、Q9a、S-A、U4、F2、D5 等）沿用 `syn` 的對照標籤，R3-Qx 只供本節內引用，**都不是任務編號**。子任務一律用描述性 slug。
+- 範例名稱一律用「[Stand-up] 範例專案」；實機場次只用 run 代號（例如 0145）；本節不寫任何真實客戶、組織、會議或視窗標題。
+
+### R3-1. 問題
+
+R2 交付並經 t7 實機驗收之後（`run.json` 的 `r2-test` 註記「sync 判讀為播放端延遲，改善列 R3」），調研在五個面向找到四類問題：
+
+1. **錄壞了也不知道的競態與卡死**（`q` ★1–★5，信心 0.8–0.85）：
+   - 開錄沒有互斥，preflight 期間第二次開錄也會通過（★2，`Capture/Commands.swift:130-131`）。
+   - `record.status.json` 會被其他實例覆寫；暫停中被覆寫後就無法繼續（★1，`RecordingSession.swift:181`、`:641`）。
+   - 收尾沒有逾時、不能取消，ffmpeg 卡住時錄製器永遠不結束（★3，`_record_finalize.py:153-169`；`RecordingSession.swift:819`、`:953-964`）。
+   - 同一場次可以同時跑兩個收尾，彼此破壞（★4，`_record_finalize.py:685-687`）。
+   - `stop` 沒有確認 pid 屬於錄製器，pid 被重用時會 SIGTERM 到無關程序（★5，`record.sh:546-567`）。
+2. **逐字稿品質從源頭就有缺口**：
+   - 產 VTT 時忽略聲紋的 `apply` 旗標，cos 0.70–0.75 的講者會被掛成真名，違反鐵則 3（`tr` §3(6)；`bin/_render.py:246-262`；`.claude/teams/rules.md:64`）。
+   - 靜音段整段送進 ASR 會產生迴圈。用 levels 做 VAD 只送有聲區間，0141 場次實驗的迴圈從 5 處降到 0 處（`tr` §2.2）。
+   - `run_diarize` 會刪掉 raw 後重轉（`bin/meeting.sh:247`）；`--compression-ratio-threshold` 沒有作用（`tr` §3(5a)）。
+   - 暫停、靜音、標記在逐字稿裡看不到（`tr` §3(2)、§3(4)）。
+3. **錄製中的狀態看不清楚**：t7 時選單列圖示看不到，使用者連按快捷鍵 9 次（`spec.md:1358-1360`，§6 第 105–107 條）。準備中與收尾中也用紅點；錄製中的告警完全不發通知（`ui` §1 P0-3、P0-4、P1-1、P1-2）。選單是 18 項扁平清單、全部灰掉不隱藏（`spec.md:1255`，§4.20.6；`ui` §3.3）。沒有首次使用引導，只用選單列 app 的人要先在終端機跑一次 `meeting record` 才能開錄（`ui` §3.7，P1-4）。也沒有 app 圖示（`ui` P2-3）。
+4. **影音一致沒有可信的量法**：t7 的「藍牙 +80／內建 −45 ms」是 ffplay 加上裝置切換歷程的結果，不能拿來推算真實會議 app 的偏移（`sync` §0 第 3 點）。一手證據顯示，SCK 系統聲音的 PTS 約等於 render 時間，不含輸出裝置延遲：內建喇叭的聲學回授 mic − sys 為 25–26 ms，三個時段各 19–29 組（`sync` §2.3）。以此推論，戴藍牙 A2DP 開會補償延遲的播放端時，成品的聲音會比畫面早約 150–185 ms，超過 ITU-R BT.1359 的 90 ms 門檻（`sync` §0 第 4 點，推論、未實測）。
+
+另外，會前會後有三個缺口：不想要的錄製只能等收尾跑完再手動刪（`feat` §3.3）；會議開始時沒有任何提示（`feat` §3.1）；`actions.ics` 能不能匯入提醒事項沒有一手依據（`feat` §3.6）。
+
+### R3-2. 期望結果
+
+**範圍（使用者決定 1）**＝`syn` §1.1 的核心 18 項 ＋ UI 全面重設計（U4–U7）＋ 會前會後功能（F2、F3、F5）＋ 影音一致的分層做法（使用者決定 2）。
+
+#### 做
+
+| 群組 | 代號 | 使用者看得到的結果 | 大小 | 依據 |
+|---|---|---|---|---|
+| 錄製穩定 | Q1＋Q2 | 同時只會有一個錄製實例；第二次開錄直接被拒，而且不會碰狀態檔；暫停中狀態檔仍有低頻心跳 | M | `syn` §1.1 第 2 列；`q` ★1、★2 |
+| | Q4 | 同一場次的收尾互斥；暫存檔改用 `mkstemp` | S | `syn` 第 3 列；`q` ★4 |
+| | Q5 | `stop` 只會把 SIGTERM 送給錄製器本身 | S | `syn` 第 4 列；`q` ★5 |
+| | Q3 | 收尾有上限、可以取消；逾時回 5 並保留段落 | M | `syn` 第 5 列；`q` ★3 |
+| 逐字稿 | T1 | VTT 的講者歸屬和 `speakers.md` 用同一套規則，聲紋 < 0.75 不掛名 | S | `syn` 第 1 列；`tr` §3(6) |
+| | T2 | `run_diarize` 不再刪掉 raw 重轉 | S | `syn` 第 6 列 |
+| | T3 | 移除沒有作用的參數，並更正 meeting-transcribe SKILL.md | S | `syn` 第 7 列 |
+| | T4 | 用 levels 的有聲區間組成 `clip_timestamps`，靜音段不送 ASR；ingest 進來的舊檔退回現行做法；raw 標頭記下 clip 參數 | M | `syn` 第 8 列；`tr` §2.2 |
+| | T5 | 逐段品質檔 `transcript.quality.json`，衍生檔標「（聽不清）」；`QUALITY_WARNING` 原格式保留 | S | `syn` 第 9 列 |
+| | T6 | 暫停、麥克風靜音、長靜音、裝置切換標進 `speakers.md`、vtt 與總結（只寫衍生檔，raw 不動） | M | `syn` 第 15 列；`tr` §3(4) |
+| | T7 | 標記對齊逐字稿；`meeting.record.json` 加選用 `markers[]`，summary 加「## 標記」 | M | `syn` 第 16 列；`tr` §3(2) |
+| | Q9a | `bin/_record_lib.py` 最小版（`output_time`、`paused_total`、levels 區間），Swift 與 Python 共用一份測試向量 | S–M | `syn` 第 18 列；`q` ★9 |
+| | F1 | `meeting search <根> <關鍵字>`，只搜單一根目錄 | S | `syn` 第 17 列；`feat` §3.7 |
+| 狀態可見 | U1 | 選單列圖示 8 種外觀，只看形狀就分得出來；準備中與收尾中不再用紅點 | S | `syn` 第 10 列；`ui` §3.2 |
+| | U3 | 通知分級：錄製中告警用 Time Sensitive；同一場的通知以 `threadIdentifier=runId` 分組 | S | `syn` 第 11 列；`ui` §3.6 |
+| | U2 | 錄製中浮動小窗 HUD（紅點、計時、兩格音量條；滑鼠移上去出現暫停／靜音／標記／停止）；快捷鍵回饋改顯示在 HUD | M | `syn` 第 12 列；`ui` §3.4 |
+| UI 重設計（使用者決定 1） | U4 | 首次使用引導（權限、存檔位置與 harness、選單列空間、快捷鍵與試錄） | M | `ui` §3.7 |
+| | U5 | 設定視窗改成工具列分頁 | M | `ui` §3.5 |
+| | U6 | 選單依階段（待機／錄製中／收尾或失敗）顯示；收音改成即時音量條；失敗改成詳情小視窗 | M | `ui` §3.3 |
+| | U7 | app 圖示 | S | `ui` P2-3、§4.2 D12 |
+| 會前會後（使用者決定 1） | F2 | 選單「捨棄這次錄製…」＋確認對話框：停止後不收尾，場次資料夾移到垃圾桶（可復原） | M | `feat` §3.3 |
+| | F3 | 偵測到麥克風正在被使用時，發「錄這個會議？」通知；**只提示，不自動開錄**；按鈕走既有 quick-start | M | `feat` §3.1 |
+| | F5 | 交辦用 EventKit 寫進提醒事項，以 UID 去重、可重跑；負責人或期限缺值就照實留空 | M | `feat` §3.6 |
+| 影音一致（使用者決定 2） | S-A | `e2e_check.py --sync-acoustic`（mic − sys 聲學回授）；sync 判準改成按時段取中位數；產生給補償型播放端（QuickTime／Chrome）用的同步檔 | S | `syn` 第 13 列；`sync` §6 第 1 點 |
+| | S-B | 開錄時與每次 deviceEvent 時，唯讀記錄輸出裝置延遲（Latency、SafetyOffset、stream Latency、BufferFrameSize、NominalSampleRate）到 `record.meta.json`；延遲欄位**不能放進 Equatable 比較的結構**，要另外放一個物件 | S | `syn` 第 14 列；`sync` §6 第 2 點；`AudioDeviceMonitor.swift:51-55`、`:84` |
+| | S-C | finalize 依時段把系統聲音軌延後 L_out；開關 off／reported／calibrated，**預設 off**；輸出裝置變更時也提前換段；`finalize.json` 記下每段實際套用的延遲；要寫新 ADR。排在最後一層，預設要不要開由 R3 實機驗收場 E2／E4 的結果決定 | M | `sync` §3、§6 第 3 點；`syn` §1.2 |
+
+UI 重設計的流程（使用者決定 1）：U4–U7 以及 U1、U2、U6 的畫面，先用 Claude Design 依 `ui` §4（畫面清單 D1–D12、共通規格、驗收要點）出設計稿，**在 design 段由使用者挑選**，挑定的稿才寫進 spec。設計稿裡的範例資料同樣只能用「[Stand-up] 範例專案」與通用 app 名稱（`ui` §4.1）。
+
+**長期方向**（使用者決定 2；`syn` D2 的 A）：成品要重現使用者當下看到與聽到的時間關係。R3 的順序是「先量測、再補償」，S-A、S-B 先做，S-C 最後做。
+
+**可以判定的成果**（細節由 design 段寫成 spec 的 EARS 驗收條件）：
+
+- 自動：Swift Core 與 Python 單元測試涵蓋開錄鎖（第二個實例拿不到鎖時不寫狀態檔）、收尾鎖與逾時、`stop` 的 pid 確認、VTT 與 `speakers.md` 講者歸屬一致（0.70–0.75 不掛名）、`output_time` 共用測試向量、VAD clip 區間、品質檔、標記與暫停的標示、`meeting search`、`MenuBarState` 8 種外觀、S-B 的延遲欄位不影響 deviceEvent 判斷、S-C 三種開關模式（off 時輸出與現行逐位元相同）；`bash bin/_lint.sh && bash bin/meeting.sh doctor` 全綠（`CLAUDE.md`〈專案特定〉）。
+- 下游相容：`summary.md` 加「## 標記」後，四段與 `一句話：` 不變，並用下游知識庫專案的 `meetings._missing_sections()` 驗過（`.claude/teams/rules.md:67`）。
+- 實機（R3 實機驗收場，使用者在場，`syn` §2 第 11 點、D13）：E4 聲學回授、E2 補償型播放端、HUD 的 `sharingType`、Time Sensitive 原型、`.ics` 匯入與 F5 寫入提醒事項、F3 偵測提示、F2 捨棄後資料夾在垃圾桶、首次引導；再用 `keep-segments` 錄一場真實多人會議，用來調 T4 的門檻，也當雙軌實驗素材（使用者決定 3）；最後做全套 e2e 迴歸。
+
+#### 不做（本輪）
+
+| 項目 | 理由 | 依據 |
+|---|---|---|
+| T8 另存兩軌（D8 取 A） | 使用者決定 3：不另存；實機驗收場另用 `keep-segments` 錄一場做雙軌實驗 | 使用者決定 3；`syn` §2 第 2 點 |
+| 雙軌能量差做「我方／對方」歸屬 | 延後；依賴雙軌實驗的結果 | 使用者決定 3；`tr` §3(1) |
+| 即時／近即時轉錄（D16 取 A） | 使用者決定 4 | 使用者決定 4；`tr` §3(3) |
+| T9 術語 prompt（D10 取 C） | 使用者決定 4；要等 T4 穩定，而且用全域術語表會跨客戶串用 | 使用者決定 4；`tr` §3(5c) |
+| Q7 收尾效能、Q8、Q9b、Q10 拆檔 | `syn` §1.2 列為可選，使用者未選；Q10 在 UI 子任務期間會和 MenuBar.swift 衝突 | `syn` §1.2、§2 第 7 點 |
+| F4 捷徑自動化教學、F6 會後一句話摘要、F7 會議結束提示 | 使用者在 D15 選 F2＋F3＋F5，這三項未選 | 使用者決定 1；`syn` §1.2 |
+| 行事曆會前提醒（EventKit 讀行事曆） | 事件標題含客戶名稱，不能寫進 log 與狀態檔；F3 只讀麥克風狀態，不需要行事曆 | `syn` §1.3；`feat` §3.1 |
+| 靜默自動開錄、開錄倒數、選麥克風 UI、推送到手機或寄 email、跨根目錄搜尋 | 同意與隱私、R2 定案、不可逆的對外寄送、客戶資料邊界 | `syn` §1.3；`feat` §5 |
+| 錄製中重新打戳、整檔 `-itsoffset`、`hallucination_silence_threshold`、`ControlWidget` | 會改到 raw 段落或只能整檔平移；內容流失；打包改動大 | `syn` §1.3；`sync` §3 |
+| Q6 抽出 `SegmentScheduler` | **待決**（R3-Q1）：S-C 依賴它 | `syn` §1.2；`q` ★6 |
+
+### R3-3. 受影響的使用者與系統
+
+**使用者**：本機唯一使用者（會議主持人兼紀錄者），以及透過 `bin/meeting.sh` 與 `~/.claude/skills/meeting-*` 呼叫錄製與前處理的其他 session（`CLAUDE.md`〈對外介面〉；`.claude/teams/rules.md:68`）。F2 的刪除只對使用者本人在 UI 上的確認生效。
+
+**對外契約面**（本 repo 沒有服務；契約全是本機介面）：
+
+| 契約面 | R3 的變化 | 依據 |
+|---|---|---|
+| `meeting` CLI | 新增 `meeting search`；新子指令依 R2-Q5 先例列保留字，並更新 CLI 封閉清單、usage、SKILL.md、README；既有子指令與結束碼不改 | `syn` 第 17 列；本檔第 307 行 |
+| `meeting record preflight` 在錄製中的行為 | 預設採用 D14b-A 時，錄製中直接回 2，不跑 13 項檢查、不碰狀態檔 | `syn` D14 |
+| `~/.meeting-harness/record.lock`（新） | 錄製實例與 `record.sh` 共用的開錄鎖 | `syn` 第 2、4 列 |
+| `~/.meeting-harness/record.status.json` | 可能加心跳時間（選用欄位） | `syn` §2 第 8 點 |
+| `~/.meeting-harness/record.defaults.json` | 第二個寫者：app 只能在首次引導寫 `harness` 與預設根目錄兩個鍵，用 flock＋tmp＋rename；`record.sh` 的整檔覆寫也要改成拿同一把鎖。S-C 的開關（off／reported／calibrated）也放這個檔，但由 CLI 寫，app 不寫 | 使用者決定 1（D6-A）；`sync` §6 第 3 點；`bin/record.sh:315-327` |
+| 場次 `record.meta.json` | S-B 新增輸出延遲的選用欄位 | `syn` 第 14 列 |
+| 場次 `finalize.json` | S-C 記下每段套用的延遲；D12 預設採用時記下讀不到的段落 | `sync` §6 第 3 點；`syn` D12 |
+| 場次 `transcript.quality.json`、`segments.json`（衍生檔） | 新增；`segments.json` 一律輸出 | `syn` 第 9 列 |
+| `schema/meeting-record.v1.json` | 加選用 `markers[]`（D11 預設採用 A） | `syn` D11；`schema/meeting-record.v1.json:164-170` |
+| `summary.md`、`transcript.vtt`、`transcript.speakers.md` | 新增「## 標記」段與暫停、靜音的標示；五個必備段不動 | `syn` 第 15、16 列 |
+| 提醒事項（EventKit，新） | F5 寫入；需要提醒事項的 TCC 權限；清單開了 iCloud 同步時，內容會離開本機 | `feat` §3.6 |
+| 垃圾桶（新） | F2 把場次資料夾移到垃圾桶 | `feat` §3.3 |
+
+**要推翻或改寫的既有定案**（design 段寫明，並記入 `spec.md §6`〈整合修訂與例外〉）：
+
+1. **R2「明確在範圍外」的「會議自動偵測」與「捨棄這次錄製」**（本檔第 295 行）→ 使用者決定 1 推翻，改做 F3（只提示、不自動開錄）與 F2。「行事曆提醒」維持在範圍外。
+2. **R2-Q3「`record.defaults.json` 維持 `record.sh` 單一寫者」**（本檔第 278、306 行）→ 使用者決定 1（D6 取 A）推翻，app 只能在首次引導寫兩個鍵（見上表）。
+3. **`spec.md §4.20.6`「不能用的項目灰掉不隱藏」**（`spec.md:1255`）→ 使用者決定 1（D5 取 A）改成依階段顯示。`test_r2_static.py::test_trigger_menu_items_r2` 的預期要跟著改，屬於使用者核准的測試修改（`.claude/teams/rules.md:37`）。
+4. **`spec.md §6` 第 105、106 條**（快捷鍵回饋走通知、圖示被擋住只發一次通知；`spec.md:1358-1359`）→ U2 上線後改成「HUD 與圖示都看不到時才發通知」，圖示被擋住的偵測改成持續進行（`syn` §2 第 5 點）。
+5. **`spec.md §4.9.3` 的 sync 判準**（`spec.md:708`：每個閃白與嗶聲的差都 < 100 ms）→ D3 預設採用 A 時改寫（R3-5）。
+6. **`spec.md §6` 第 111 條「收尾成功後刪段落」**（`spec.md:1364`）→ D12 預設採用 A 時，讀不到的段落改成保留（R3-5）。
+7. **`MenuBarState` 與 spec §3.4.1 的圖示外觀** → U1 改成 8 種；既有靜態測試的預期要改（`syn` 第 10 列）。
+8. **既有測試「鍵集合恰為 N 個」**（`RecordsTests.swift:58`、`:112-113`）→ S-B 與 Q1 的心跳碰到時，照 R2-Q10 與 `adr/adr-r2-status-fields.md` 的先例處理（`syn` §2 第 8 點）。
+9. **D20 的「逐段正規化、串接時一次編 AAC」流程**（`adr/adr-segment-writer.md`；`design.md:307-311`）→ S-C 的段落邊界補償會動到它，要寫新 ADR（`sync` §6 風險第 4 點）。
+
+**要改的既有檔**（主要；完整清單由 design 段逐子任務列出，`syn` §4）：`bin/_render.py`、`bin/_merge_speakers.py`、`bin/meeting.sh`、`bin/transcribe.sh`、`bin/record.sh`、`bin/_record_finalize.py`、新增 `bin/_record_lib.py` 與 `bin/_search.py`、`schema/meeting-record.v1.json`、`tools/MeetingRecorder/Sources/` 的 `Capture/Commands.swift`、`PreflightRunner.swift`、`RecordingSession.swift`、`AudioDeviceMonitor.swift`、`Core/Trigger.swift`、`Trigger/MenuBar.swift`、`Notifier.swift`，新增 HUD、引導、設定分頁與 EventKit 的來源檔、app 圖示資源、`tests/record/e2e_check.py`、`.claude/skills/meeting-*/SKILL.md`、`README.md`，以及 `specs/meeting-record/` 的 design、spec、plan、progress 與 ADR。
+
+### R3-4. 限制
+
+1. **對外介面不得破壞性變更**：`bin/meeting.sh` 的子指令與結束碼、`~/.claude/skills/meeting-*`（`.claude/teams/rules.md:68`）。新增子指令照 R2-Q5 先例（本檔第 307 行）。狀態檔不加新的 `RecordPhase` 或 `WarningKind` case（本檔第 252–253 行）。
+2. **五條鐵則不變**（`.claude/teams/rules.md:62-66`）：
+   - T4 只改送進 ASR 的範圍，T6、T7 只寫衍生檔，raw 不動。
+   - T1 修的就是鐵則 3。
+   - F5 缺負責人或期限時照實留空，不補猜。
+3. **刪資料是不可逆節點**（`CLAUDE.md`〈不可逆節點〉）：
+   - F2 只能由使用者本人在 UI 確認後執行，而且是移到垃圾桶，不是硬刪。
+   - 沒有 tty 的 session 呼叫時一律拒絕（`feat` §3.3）。
+4. **F3 只讀狀態**：
+   - 不能為了偵測去開麥克風，否則藍牙會切到 HFP（`feat` §3.1）。
+   - 要排除本工具自己的 preflight。
+   - 只提示、不自動開錄（使用者決定 1）。
+5. **F5 的資料邊界**：
+   - 只寫進使用者指定的提醒事項清單。
+   - 說明裡要明講「清單開了 iCloud 同步時，內容會離開本機」（`feat` §3.6）。
+   - 只同步該場紀錄自己的交辦，不跨客戶根目錄（`CLAUDE.md`〈客戶資料邊界〉）。
+6. **S-C 預設 off**：方向或大小錯了，偏移會加倍；E2／E4 沒有證實之前不能預設開（`sync` §6 風險第 1 點；使用者決定 2）。off 時成品要和現行逐位元相同。
+7. **S-B 只讀**：
+   - 不改變預設裝置（`spec.md §4.9.4`）。
+   - 延遲欄位不能讓 A2DP↔HFP 切換多出 deviceEvent（`AudioDeviceMonitor.swift:84`）。
+8. **public repo**：
+   - specs、tests、設計稿、範例都不得含真實客戶、組織、會議或視窗標題；範例一律用「[Stand-up] 範例專案」。
+   - HUD 與錄製中的通知預設不露出場次名或視窗標題（`ui` §4.3）。
+   - 每次 commit 前用 `client-names.txt` 掃描 diff，只回報「有／沒有」。
+9. **subagent 的實機限制**：
+   - 不得啟動 MeetingRecorder、不得觸發 TCC 授權框、不得改系統設定、不得寫 `~/.meeting-harness`、不得改 `~/Applications`。
+   - 下列項目只能由使用者在 R3 實機驗收場做：Time Sensitive、`sharingType`、提醒事項權限、F3 偵測、HUD、首次引導、E2／E4。
+10. **檔案熱點要序列化**（`syn` §2 第 1、7 點）：
+    - `_record_finalize.py`：Q4 → Q3 → S-C。
+    - `RecordingSession.swift`：Q1 → Q3 Swift 端 → S-B →（Q6）→ S-C、F2。
+    - `_render.py`／`_merge_speakers.py`：T1 → T6、T7。
+    - `MenuBar.swift`：U1 → U3 → U2 → U6、U4、U5。
+11. **測試失敗改程式、不改測試**：R3-3 列出的既有測試預期修改（§4.20.6 選單、§6 第 105–107 條、`MenuBarState`、鍵集合、sync 判準），都要使用者核准，並記在 `spec.md §6`（`.claude/teams/rules.md:37`）。
+12. **流程**：
+    - R3 在 `feature/meeting-record-r3`（從 origin/main `377dd92` 開出）上做；子任務分支 `feature/meeting-record--<sub>`，各開 worktree（`CLAUDE.md`〈commit 與分支〉；`syn` §4）。
+    - 不 push、不改 `main`。
+    - R3 的閘門紀錄沿用 R2-Q2 的先例，用 `r3-` 前綴的 stage 鍵（本檔第 305 行）。這是預設採用，閘門 1 可以改。
+
+### R3-5. 假設（未能確認，帶進 design 與實機驗收）
+
+依據 `syn` §5。
+
+1. SCK 系統聲音的 PTS 在藍牙輸出時是否仍然等於 render 時間，沒有確認。A2DP 與 HFP 的實測值和回報值方向相反，原因也沒有確認（`sync` §2.2、§2.4）。→ 由 E4 驗。S-C 的 `reported` 模式可能不可靠，`calibrated` 可能要做每顆耳機的校正表。
+2. Teams 在 macOS 上是否補償輸出延遲沒有確認；Chromium 路徑的細節只是推論（`sync` §5）。→ 由 E2 驗。
+3. 雙軌轉錄能不能提升 ASR 準確度，證據不足，只有一場 76 秒的測試音場次（`tr` §2.2）。→ 用驗收場的 `keep-segments` 實驗補。
+4. 自簽憑證下能不能用 Time Sensitive，沒有確認（`ui` §3.6）。不行的話，錄製中的告警只靠 HUD 呈現。
+5. `sharingType=.none` 能不能擋住其他 app 的螢幕分享，沒有確認（`ui` §3.4）。
+6. `actions.ics` 的 VTODO 能不能匯入提醒事項，只有二手來源（`feat` §3.6）。F5 改走 EventKit，不依賴這一點。EventKit 的 API 名稱與 plist key 由 design 段查一手文件確認。
+7. 會議視窗在錄製中被關掉時，錄製器的結束碼與收尾行為沒有確認（`feat` §4）。
+8. 收尾耗時的分布是用 mtime 推估的，不夠精確（`q` ★7）。這會影響 D14 逾時上限的合理性。
+9. `NSMenuItem.view` 自訂收音列在 macOS 26 的鍵盤導覽與 VoiceOver 行為，沒有確認（`ui` §3.3）。要先做原型。
+
+### R3-6. 待決問題
+
+#### 交閘門 1 決定（R3-Q1，附選項與代價）
+
+| # | 問題 | 選項與代價 | 建議 | 依據 |
+|---|---|---|---|---|
+| R3-Q1 | Q6（抽出 `SegmentScheduler`，並用假 writer 補行為測試）要不要納入 R3？S-C 的「輸出裝置變更提前換段」要改錄製熱路徑，而 `RecordingSession` 的編排邏輯目前只有靜態字串檢查 | A. 納入，排在 S-C 前一層：大小 L，大幅重構熱路徑，要用 e2e 重新驗收；R3 工期拉長／B. 不納入，S-C 直接在 `RecordingSession.swift` 加換段觸發：工期短，但熱路徑的改動沒有行為測試保護，回歸只能靠實機 e2e／C. 不納入，S-C 也延到下一輪，R3 只做 S-A、S-B：和使用者決定 2「S-C 排最後一層」不一致，要使用者改決定 | **A**（`syn` 註明「R3 要做 S-C 的話，Q6 要先做」） | `syn` §1.2 Q6 列；`q` ★6；使用者決定 2 |
+
+#### 預設採用，閘門 1 可改
+
+| # | 問題 | 預設採用 | 其他選項與代價 | 依據 |
+|---|---|---|---|---|
+| D3 | `spec.md §4.9.3` 的 sync 判準要不要改 | **A**：補償型播放端按時段取中位數，\|d\| < 45 ms；ffplay 只用來驗錄製器沒有引入額外偏移；和 S-A 一起做。代價：要改 spec 與 `e2e_check` 的既有預期（需要核准） | B 維持 ffplay、全片最大值 < 100 ms。代價：0145 的 159 ms 這類離群值與裝置切換歷程會繼續造成誤判 | `syn` D3；`spec.md:708` |
+| D4 | HUD 預設怎麼顯示 | **A**：自動，偵測到圖示被擋住才顯示，設定裡可以改成一律顯示。代價：依賴偵測的準確度 | B 一律顯示。代價：每場都多一個浮窗，分享整個螢幕時別人看得到／C 不做 HUD。代價：和範圍內的 U2 衝突，Time Sensitive 也未確認 | `syn` D4；`ui` §5 第 1 題 |
+| D7 | 快捷鍵要不要開放自訂 | **A**：R3 不開放；U5 的快捷鍵分頁只顯示、不能改。代價：被別的 app 占用時仍然只能寫 log | B 開放。代價：`r2HotKeys`、SKILL.md、README 的固定字串都要改 | `syn` D7 |
+| D9 | 「我方（本機麥克風）」能不能直接掛使用者本人的名字 | **A**：不行，一律顯示「我方（本機麥克風）」，`voiceprint add` 確認後才掛名。雙軌歸屬延後，這題實際上也延後 | B 直接用本人姓名。代價：共用麥克風或喇叭外放時違反鐵則 3 | `syn` D9；`.claude/teams/rules.md:64` |
+| D11 | markers 怎麼進 schema | **A**：v1 加選用欄位 `markers[]`，summary 加「## 標記」，五個必備段不動。代價：要過下游知識庫專案的相容檢查 | B 升 v2。代價：下游都要改 | `syn` D11；`.claude/teams/rules.md:67` |
+| D12 | 讀不到的段落（skipped）收尾後要刪還是留 | **A**：保留，搬到 `tracks/unreadable/`，並寫進 `finalize.json`。代價：要改 `spec.md §6` 第 111 條的字面寫法 | B 照現行全部刪除。代價：可能用其他工具救回的檔會被永久刪掉 | `syn` D12；`q` 第 11 項；`spec.md:1364` |
+| D13 | R3 實機驗收場怎麼安排 | **A**：一場，使用者在場約 1.5–2 小時，依序做 E4、E2、HUD、Time Sensitive、`.ics` 匯入與 F5、F3、F2、首次引導，再錄一場 `keep-segments` 的真實多人會議 | B 只做 E4 與 HUD，VAD 門檻用測試場次調。代價：門檻可能不適合真實會議；S-C 的預設也沒有 E2 可以依據 | `syn` D13、§2 第 11 點 |
+| D14a | 收尾逾時上限 | **A**：「錄製長度 ×3＋10 分鐘」，逾時回 5 並保留段落 | B 不設上限，只能取消。代價：ffmpeg 卡住時仍然要手動處理 | `syn` D14 |
+| D14b | 開錄鎖要不要也擋 `meeting record preflight` | **A**：擋，錄製中直接回 2，不跑 13 項檢查、不碰狀態檔。代價：preflight 在錄製中的行為改變（t6 測過「錄製中再跑 preflight」），既有預期要調整 | B 不擋，但不寫狀態檔。代價：錄製中跑 preflight 仍會開麥克風與 SCK | `syn` D14 |
+| — | R3 的閘門紀錄 | `run.json` 用 `r3-` 前綴的 stage 鍵，同一個 run 目錄 | 另開 run 目錄。代價：調研報告要搬或連結 | 本檔第 305 行（R2-Q2 先例） |
+
+#### 留給 design 段定案（附建議，不阻斷）
+
+| # | 待解 | 建議方向 | 依據 |
+|---|---|---|---|
+| R3-Q2 | F2 有沒有 CLI 對等子指令？ | R3 只在選單提供；CLI 不新增 `discard`，避免其他 session 刪資料。如果要加，就照 R2-Q5 列保留字，而且沒有 tty 時拒絕 | `feat` §3.3；本檔第 307 行 |
+| R3-Q3 | F5 由哪個程序取得提醒事項權限？入口是 CLI 子指令還是 app？ | TCC 權限跟著 app bundle，建議由 MeetingRecorder.app 執行寫入，CLI 只觸發；需要 `NSRemindersFullAccessUsageDescription`（由 design 查一手文件確認） | `feat` §3.6 |
+| R3-Q4 | F3 的偵測怎麼排除本工具自己的 preflight 與錄製？前景 app 不在 ★ 清單時要不要提示？ | 用 R3 的開錄鎖判斷「本工具正在用麥克風」；只在前景 app 屬於 ★ 清單時提示；同一場會議只提示一次 | `feat` §3.1；`syn` §2 第 9 點 |
+| R3-Q5 | `record.defaults.json` 兩個寫者的鎖：`record.sh` 的整檔覆寫要不要改成合併寫入？ | 兩邊拿同一把 flock；`record.sh` 改成「讀、合併、tmp＋rename」，保留 app 寫的鍵 | `bin/record.sh:315-327`；使用者決定 1（D6-A） |
+| R3-Q6 | S-C 開關放在哪裡、`calibrated` 的校正值從哪裡來？ | 開關放 `record.defaults.json`，由 CLI 寫；`calibrated` 讀 E4 量出的每個裝置校正表（放 `~/.meeting-harness/`，不進 repo） | `sync` §6 第 3 點、風險第 2 點 |
+| R3-Q7 | UI 設計稿怎麼進流程？Claude Design 的稿怎麼保存，才不會帶入真實名稱？ | design 段開頭先出 D1–D12 的設計稿，使用者挑定後存到 `specs/meeting-record/design-r3/`（存之前掃名稱）；被挑定的稿是 spec 的驗收依據 | 使用者決定 1；`ui` §4 |
+
+### R3-7. 粗估工期
+
+依 `syn` 的大小定義：S 約半天以內，M 1–2 天，L 3 天以上；都是推估（`syn` §1）。這裡寫的是日曆工期，也就是 agent 實作加上使用者審閘門的經過時間，不是人力工時（`.claude/teams/rules.md:23`）。
+
+| 範圍 | 項目大小 | 日曆工期粗估 | 依據 |
+|---|---|---|---|
+| 核心 18 項 | S×11、S–M×1、M×6 | 約 10–14 個工作天 | `syn` D1-A |
+| UI 全面重設計（U4–U7） | M×3、S×1；另外要等 Claude Design 出稿、使用者挑選 | 再加約 4–6 天 | `syn` D1-B |
+| 會前會後（F2、F3、F5） | M×3 | 再加約 4–5 天 | `syn` D1-C |
+| S-C | M；依賴 E2／E4 與 Q6 | 再加約 1–2 天 | `syn` §1.2 |
+| Q6（R3-Q1 選 A 時） | L | 再加 3 天以上 | `syn` §1.2 |
+| R3 實機驗收場 | 使用者在場 | 約 1.5–2 小時；要排在 S-C 預設決定之前 | `syn` D13 |
+| **合計** | | **R3-Q1 選 A 約 22–30 個工作天；選 B 約 19–27 天** | 上列加總 |
+
+有第 0 層到第 2 層可以平行（`syn` §4），日曆時間可能比加總短；但 `RecordingSession.swift`、`MenuBar.swift`、`_record_finalize.py` 三條序列鏈會壓住下限（R3-4 第 10 點）。
+
+### R3-8. 建議子任務分層摘要
+
+依據 `syn` §4，並按使用者決定 1–2 補上 UI 重設計、會前會後與 S-C。`<sub>` 是描述性 slug，**不是任務編號**；分支 `feature/meeting-record--<sub>`。最後的切分、檔案歸屬與完成條件，由 design 段在 intent 核准後定案。
+
+| 層 | sub | 內容 | 依賴 |
+|---|---|---|---|
+| 0 | `r3-vtt-raw` | T1、T2、T3 | — |
+| 0 | `r3-record-lib` | Q9a | — |
+| 0 | `r3-lock` | Q1、Q2、Q5 | — |
+| 0 | `r3-finalize-guard` | Q4、Q3 的 Python 端 | — |
+| 0 | `r3-sync-measure` | S-A（含 D3 判準） | — |
+| 0 | `r3-search` | F1 | — |
+| 0 | `r3-ui-design` | 不寫程式：Claude Design 出 D1–D12 設計稿，使用者在 design 段挑選 | — |
+| 1 | `r3-menubar-states` | U1（照挑定的設計稿） | `r3-ui-design`；和 `r3-lock` 同改 `Core/Trigger.swift`，所以排在第 1 層 |
+| 1 | `r3-finalize-runner` | Q3 的 Swift 端 | `r3-lock`、`r3-finalize-guard` |
+| 1 | `r3-latency-log` | S-B | `r3-lock`；和 `r3-finalize-runner` 依序做（同一支 `RecordingSession.swift`） |
+| 1 | `r3-transcript-vad` | T4、T5 | `r3-record-lib`、`r3-vtt-raw` |
+| 1 | `r3-annotations` | T6、T7 | `r3-record-lib`、`r3-vtt-raw` |
+| 2 | `r3-notify` | U3 | `r3-menubar-states` |
+| 2 | `r3-hud` | U2，修 §6 第 105、106 條 | `r3-lock`、`r3-menubar-states`、`r3-notify` |
+| 2 | `r3-discard` | F2 | `r3-lock`、`r3-finalize-runner` |
+| 2 | `r3-reminders` | F5 | `r3-annotations`（交辦資料形狀）；檔案和其他子任務不重疊時可以提前 |
+| 3 | `r3-menu-stages` | U6 | `r3-hud`（同一支 `MenuBar.swift`） |
+| 3 | `r3-onboarding-settings` | U4、U5、U7（含 D6-A 的 defaults 寫入） | `r3-menu-stages`、`r3-notify` |
+| 3 | `r3-meeting-detect` | F3 | `r3-lock`、`r3-notify` |
+| 4 | `r3-segment-scheduler` | Q6（R3-Q1 選 A 時） | 所有改 `RecordingSession.swift` 的子任務 |
+| 5 | `r3-sync-compensate` | S-C，開關預設 off，加新 ADR | `r3-latency-log`、`r3-sync-measure`、`r3-finalize-runner`、（Q6） |
+| 6 | `r3-field-check` | 不寫程式，使用者在場：D13 的實機驗收場；結果寫進 run 目錄，並決定 S-C 的預設要不要開 | 全部 |
+
+平行度：第 0 層最多 7 個（`r3-ui-design` 只寫設計稿，不碰程式）。有四條序列鏈：`RecordingSession.swift`（lock → finalize-runner → latency-log → discard → segment-scheduler → sync-compensate）、`MenuBar.swift`（menubar-states → notify → hud → menu-stages → onboarding-settings）、`_record_finalize.py`（finalize-guard → finalize-runner → sync-compensate）、`_render.py`（vtt-raw → annotations）。
+
+### R3-9. 衍生工作（不編號）
+
+- `bin/_profile.py:13`、`:30` 的註解疑似含真實組織名稱（`syn` §6）。在本 worktree HEAD 用名稱清單掃描的結果是「沒有」，可能已經在 main 處理過。design 段再用候選清單確認一次，就可以結案。
+- status item 的 `autosaveName` 沒有設定，使用者拖動圖示後重開 app，位置會不會保留要驗證（`ui` §6）。可以併入 `r3-menubar-states`。
+- 在 `_record_finalize.py` 的 `ffmpeg()`／`probe()` 加逐步計時 log（`q` §6）。可以併入 `r3-finalize-guard`，也能為 D14a 的上限提供依據。
+- Swift 和 Python 同時寫控制檔的整合測試，`markerSeq` 不能掉號（`q` §6）。
+- 設計審查 R2 還沒處理的 N-2、N-4、N-5、N-6，併入 UI 子任務（`ui` §6）。
