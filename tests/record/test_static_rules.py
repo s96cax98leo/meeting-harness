@@ -328,7 +328,9 @@ class TestStaticRules(unittest.TestCase):
         self.assertEqual(hits, [], "Capture/ 除 Probe.swift 外不得出現 SCRecordingOutput 系列（spec §4.4.5）")
         # 「應出現」只認程式碼（去掉註解），而且不靠 Probe.swift 湊數
         code = "\n".join(strip_swift_comments(t) for t in srcs.values())
-        missing = [need for need in SEGMENT_WRITER_REQUIRED if need not in code]
+        sched = SOURCES / "Core" / "SegmentScheduler.swift"  # R3 §6 第 137 條：routeSample( 改在 Capture/＋SegmentScheduler.swift 找
+        merged = code + "\n" + (strip_swift_comments(sched.read_text(encoding="utf-8")) if sched.is_file() else "")
+        missing = [need for need in SEGMENT_WRITER_REQUIRED if need not in (merged if need == "routeSample(" else code)]
         self.assertEqual(missing, [], "Capture/（不含 Probe.swift、不含註解）缺少 D20 寫檔機制必備的字串（spec §4.4.5）")
 
     # spec §4.2.11（D20）：startCapture 前等 1.0 秒、失敗等 2.0 秒重建 SCStream 重試一次
@@ -456,7 +458,8 @@ class TestStaticRules(unittest.TestCase):
         self.assertTrue(p.is_file(), f"{p} 不存在")
         ent = plistlib.loads(p.read_bytes())
         self.assertEqual(set(ent), {"com.apple.security.device.audio-input",
-                                    "com.apple.security.automation.apple-events"})
+                                    "com.apple.security.automation.apple-events",
+                                    "com.apple.security.personal-information.calendars"})
         for k, v in ent.items():
             self.assertIs(v, True, f"{k} 應為 true")
         self.assertNotIn("com.apple.security.app-sandbox", ent)

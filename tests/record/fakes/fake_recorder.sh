@@ -14,6 +14,11 @@
 #   FAKE_CONTROL 未設定  舊版錄製器：狀態檔沒有 controlVersion，也不裝 SIGUSR1 處理（收到會被預設動作終止）
 #   FAKE_PHASE           開始時寫的 phase（preflight／stopping／finalizing…；預設 recording）
 #   FAKE_STATUS_EXTRA    JSON 物件，每次寫狀態檔時合併進去（例：{"markers": 2}、recordingStartedAt 等 R2 欄位）
+#
+# R3（spec §6 第 136 條、§4.27.6）：
+#   FAKE_LOCK            預設 1：寫 record.status.json 與 record.pid 之前，由背景 python3 子程序以 fcntl.flock 持有
+#                        <home>/record.lock（最多重試 5 秒）；子程序每 0.2 秒看父程序是否還在，父程序結束（含 SIGKILL）就退出放鎖；
+#                        on_term 與正常結束時先結束該子程序。FAKE_LOCK=0 時不持鎖。
 set -uo pipefail
 home="${MH_RECORD_HOME:?fake_recorder.sh 需要 MH_RECORD_HOME}"
 mkdir -p "${home}"
@@ -90,8 +95,58 @@ os.replace(tmp, path)
 PY
 }
 
+lock_pid=""
+start_lock() { # FAKE_LOCK（預設 1）：背景子程序持有 <home>/record.lock，等它拿到鎖（或放棄）才回來
+  [[ "${FAKE_LOCK:-1}" == "0" ]] && return 0
+  local ready
+  ready="$(mktemp "${TMPDIR:-/tmp}/fake_recorder.lock.XXXXXX")"
+  rm -f "${ready}"
+  python3 - "${home}/record.lock" "$$" "${ready}" <<'PY' &
+import fcntl, os, sys, time
+path, parent, ready = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+held = False
+deadline = time.monotonic() + 5
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held = True
+        break
+    except OSError:
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+with open(ready, "w") as fh:
+    fh.write("held\n" if held else "failed\n")
+if not held:
+    sys.exit(0)
+while True:
+    if os.getppid() != parent:
+        break
+    try:
+        os.kill(parent, 0)
+    except OSError:
+        break
+    time.sleep(0.2)
+PY
+  lock_pid=$!
+  local i
+  for i in $(seq 1 200); do
+    [[ -s "${ready}" ]] && break
+    sleep 0.05
+  done
+  rm -f "${ready}"
+}
+stop_lock() { # 結束持鎖子程序（放鎖）
+  [[ -n "${lock_pid}" ]] || return 0
+  kill "${lock_pid}" 2>/dev/null
+  wait "${lock_pid}" 2>/dev/null
+  lock_pid=""
+}
+
 on_term() {
   local code="${FAKE_STOP_CODE:-0}"
+  stop_lock
   write_status stopping 0 ""
   if [[ "${code}" == "0" ]]; then
     write_status done 0 "已完成（範例訊息）"
@@ -107,9 +162,11 @@ case "${FAKE_CONTROL:-}" in
   ignore) trap '' USR1 ;;
 esac
 
+start_lock
 write_status "${FAKE_PHASE:-recording}" 0 ""
 echo "$$" > "${home}/record.pid"
 # 等 SIGTERM；最多 120 秒後自行結束，避免殘留
 for _ in $(seq 1 1200); do sleep 0.1; done
+stop_lock
 rm -f "${home}/record.pid"
 exit 0

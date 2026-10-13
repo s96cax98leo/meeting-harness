@@ -690,3 +690,199 @@ def write_status_for(session, path, warnings=(), **extra):
     st.update(extra)
     Path(path).write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
     return Path(path)
+
+
+# ---------- R3（spec §4.29、§4.30、§4.31）：替身 ASR 與只有音檔的場次 ----------
+FAKE_ASR_DIR = Path(__file__).resolve().parent / "fakes" / "asr"
+
+
+def make_wav(path, dur=4.0, freq=440, rate=16000):
+    """16 kHz 單聲道正弦 wav（轉錄替身的輸入；內容不會被讀）。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ff("-f", "lavfi", "-i", f"sine=f={freq}:sample_rate={rate}:d={dur:.3f}", "-ac", 1, "-c:a", "pcm_s16le",
+       "-f", "wav", path)
+    return path
+
+
+def fake_asr_env(base, segments=None, **extra):
+    """bin/transcribe.sh 用替身 mlx_whisper 的環境：PATH 前置 fakes/asr、FAKE_ASR_LOG、FAKE_ASR_SEGMENTS。
+
+    segments：[(start, end, text)]（None＝替身預設一段）。回傳 (env 覆寫 dict, log 路徑)。"""
+    import os
+
+    base = Path(base)
+    log = base / "fake_asr.log"
+    env = {"PATH": f"{FAKE_ASR_DIR}:{os.environ.get('PATH', '')}", "FAKE_ASR_LOG": str(log),
+           "MH_ASR_MODEL": "fake/Breeze-範例"}
+    if segments is not None:
+        sp = base / "fake_asr_segments.json"
+        sp.write_text(json.dumps([{"start": a, "end": b, "text": t} for a, b, t in segments], ensure_ascii=False),
+                      encoding="utf-8")
+        env["FAKE_ASR_SEGMENTS"] = str(sp)
+    env.update({k: str(v) for k, v in extra.items()})
+    return env, log
+
+
+def read_asr_calls(log):
+    """替身 ASR 每次呼叫的 argv 清單。"""
+    log = Path(log)
+    if not log.is_file():
+        return []
+    return [json.loads(ln)["argv"] for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
+def make_audio_session(root, *, name=SESSION_NAME, dur=4.0, mtype="internal"):
+    """只有一個 wav 的場次（錄音/<名稱>.wav＋meeting.json）；回傳場次目錄。"""
+    sess = Path(root) / DAY / name
+    rec = sess / "錄音"
+    rec.mkdir(parents=True, exist_ok=True)
+    mj = dict(MEETING_JSON, type=mtype)
+    (rec / "meeting.json").write_text(json.dumps(mj, ensure_ascii=False, indent=2), encoding="utf-8")
+    make_wav(rec / f"{name} 2026-10-11 21.00.00.wav", dur=dur)
+    return sess
+
+
+# ---------- R3（spec §4.35、§4.37）：影音一致的量測與 S-C 補償用的合成素材 ----------
+SC_TONE = 0.05     # 跨段連續的 1 kHz 底音振幅（約 -29 dBFS RMS）
+SC_BEEP = 0.5      # 嗶聲振幅（與底音同頻，1 kHz 帶通的起點量法取最大值 50% 處）
+
+
+def _beeps_expr(times, width=0.1, var="t"):
+    return "+".join(f"between({var},{a:.4f},{a + width:.4f})" for a in times) or "0"
+
+
+def make_sync_master(path, beep_offsets, *, period=2.0, w=320, h=240, fps=60):
+    """同步測試源影片（H.264＋AAC 雙聲道）：每 period 秒閃白 0.1 秒（t＝0、period、…），第 i 次的嗶聲在
+    閃白＋beep_offsets[i] 秒（可為負以外的任意值）；長度＝len(beep_offsets) × period。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dur = len(beep_offsets) * period
+    video = (f"color=c=black:s={w}x{h}:r={fps}:d={dur},"
+             f"drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='lt(mod(t,{period}),0.1)'")
+    beeps = _beeps_expr([i * period + o for i, o in enumerate(beep_offsets)])
+    audio = f"aevalsrc='0.02*sin(2*PI*220*t)+0.5*sin(2*PI*1000*t)*({beeps})':s=48000:c=stereo:d={dur}"
+    ff("-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio, "-t", dur, "-c:v", "libx264", "-preset", "ultrafast",
+       "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-f", "mov", path)
+    return path
+
+
+def build_sync_player_session(base, beep_offsets, *, name=SESSION_NAME):
+    """--sync-player 的自我測試場次：先照 build_e2e_session 建（同步測試源、0 偏移），再把 影片/ 的成品與 錄音/ 的 wav
+    換成每次嗶聲偏移各自指定的版本（長度、尺寸、影格率不變）。"""
+    from tests.record.e2e_check import SYNC_PERIOD
+
+    dur = len(beep_offsets) * SYNC_PERIOD
+    sess = build_e2e_session(base, dur=dur, sync_offset=0.0, name=name)
+    master = next((sess / "影片").glob("*.mov"))
+    make_sync_master(master, beep_offsets, period=SYNC_PERIOD)
+    wav = next((sess / "錄音").glob("*.wav"))
+    ff("-i", master, "-map", "0:a:0", "-ar", 16000, "-ac", 1, "-c:a", "pcm_s16le", "-f", "wav", wav)
+    return sess
+
+
+def make_acoustic_segment(path, *, dur, sys_beeps, mic_beeps, w=160, h=120, fps=10):
+    """S-A 聲學回授的段落：影片＋系統聲音（雙聲道）＋麥克風（單聲道），兩路都是低音量 220 Hz 底音＋各自時刻的 1 kHz 嗶聲。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sysa = f"0.02*sin(2*PI*220*t)+0.5*sin(2*PI*1000*t)*({_beeps_expr(sys_beeps)})"
+    mic = f"0.02*sin(2*PI*220*t)+0.3*sin(2*PI*1000*t)*({_beeps_expr(mic_beeps)})"
+    ff("-f", "lavfi", "-i", f"testsrc2=s={w}x{h}:r={fps}:d={dur}",
+       "-f", "lavfi", "-i", f"aevalsrc='{sysa}':s=48000:c=stereo:d={dur}",
+       "-f", "lavfi", "-i", f"aevalsrc='{mic}':s=48000:c=mono:d={dur}",
+       "-map", "0:v", "-map", "1:a", "-map", "2:a",
+       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-b:v", "400k",
+       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac:a:0", "2", "-ac:a:1", "1", "-f", "mov", path)
+    return path
+
+
+def build_acoustic_session(base, *, dur=10.0, sys_beeps=(1.0, 3.0, 5.0, 7.0), mic_delay=0.08, name=SESSION_NAME):
+    """--sync-acoustic 的自我測試場次（保留段落、尚未收尾的樣子）：錄音/tracks/ 一段雙音軌，麥克風嗶聲比系統晚 mic_delay 秒。
+    sys_beeps 為空時兩路都沒有嗶聲。"""
+    sess = Path(base) / DAY / name
+    rec, tracks = sess / "錄音", sess / "錄音" / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    f = make_acoustic_segment(tracks / "seg-0001.mov", dur=dur, sys_beeps=list(sys_beeps),
+                              mic_beeps=[t + mic_delay for t in sys_beeps])
+    from tests.record.e2e_check import segment_audio_duration
+
+    ad = round(segment_audio_duration(f), 3)
+    manifest = {"schemaVersion": 1, "segmentSeconds": 60,
+                "segments": [{"file": f.name, "requestedAt": 0.0, "startedAt": 0.0, "finishedAt": dur,
+                              "width": 160, "height": 120, "audioDuration": ad}],
+                "frameStatus": {"complete": 100, "idle": 0, "blank": 0, "suspended": 0, "started": 1, "stopped": 0},
+                "blackIntervals": []}
+    (tracks / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (rec / "meeting.json").write_text(json.dumps(MEETING_JSON, ensure_ascii=False, indent=2), encoding="utf-8")
+    return sess
+
+
+def make_sc_segment(path, *, start, dur, flash_phase=0.0, beep_lead=0.0, tone=False, w=160, h=120, fps=30):
+    """S-C 段落：以「錄製時鐘」T＝start＋t 產生。影片在 T＋flash_phase 為 2 的倍數時閃白 0.1 秒；系統聲音（雙聲道）在
+    閃白前 beep_lead 秒有 0.1 秒 1 kHz 嗶聲（tone=True 時另有跨段連續的 1 kHz 底音）；麥克風（單聲道）為數位 0。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    T = f"(t+{start:.4f})"
+    video = (f"color=c=black:s={w}x{h}:r={fps}:d={dur},"
+             f"drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='lt(mod(t+{start + flash_phase:.4f},2),0.1)'")
+    base_tone = f"{SC_TONE}*sin(2*PI*1000*{T})+" if tone else "0.02*sin(2*PI*220*t)+"
+    beep = f"{SC_BEEP}*sin(2*PI*1000*{T})*lt(mod({T}+{flash_phase + beep_lead:.4f},2),0.1)"
+    ff("-f", "lavfi", "-i", video,
+       "-f", "lavfi", "-i", f"aevalsrc='{base_tone}{beep}':s=48000:c=stereo:d={dur}",
+       "-f", "lavfi", "-i", f"aevalsrc=0:s=48000:c=mono:d={dur}",
+       "-map", "0:v", "-map", "1:a", "-map", "2:a",
+       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-b:v", "400k",
+       "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac:a:0", "2", "-ac:a:1", "1", "-f", "mov", path)
+    return path
+
+
+def build_sc_session(base, *, seglen=2.0, outputs=(("uid-範例-a", 0.0),), flash_phase=0.0, beep_lead=0.0, tone=False,
+                     name=SESSION_NAME):
+    """S-C 的合成場次（尚未收尾）：outputs＝每段的 (輸出裝置 uid, 回報延遲秒數或 None)，段數＝len(outputs)。
+
+    段落在錄製時鐘上緊接（startedAt＝i × seglen）；record.meta.json 寫 devices.output、outputLatencies（開錄 t=0 一筆、
+    輸出裝置 uid 改變的段界各一筆，同時寫一筆 kind=output 的 deviceEvents）、pauseEvents／micMuteEvents 空陣列。"""
+    sess = Path(base) / DAY / name
+    rec, tracks = sess / "錄音", sess / "錄音" / "tracks"
+    tracks.mkdir(parents=True, exist_ok=True)
+    (rec / "meeting.json").write_text(json.dumps(MEETING_JSON, ensure_ascii=False, indent=2), encoding="utf-8")
+    recs = []
+    for i in range(len(outputs)):
+        st = round(i * seglen, 3)
+        f = make_sc_segment(tracks / f"seg-{i + 1:04d}.mov", start=st, dur=seglen, flash_phase=flash_phase,
+                            beep_lead=beep_lead, tone=tone)
+        recs.append({"file": f.name, "requestedAt": max(round(st - 0.005, 3), 0.0), "startedAt": st,
+                     "finishedAt": round(st + seglen, 3), "width": 160, "height": 120, "audioDuration": None})
+    total = len(outputs) * seglen
+    nwin = int(round(total / 0.5))
+    manifest = {"schemaVersion": 1, "segmentSeconds": seglen, "segments": recs,
+                "frameStatus": {"complete": 100, "idle": 0, "blank": 0, "suspended": 0, "started": 1, "stopped": 0},
+                "blackIntervals": [], "levels": {"windowSeconds": 0.5, "system": [-20.0] * nwin, "mic": [None] * nwin}}
+    (tracks / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def dev(uid):
+        return {"uid": uid, "name": "範例輸出裝置", "transport": "bluetooth"}
+
+    def lat(t, uid, sec):
+        frames = None if sec is None else int(round(sec * 48000))
+        return {"t": t, "uid": uid, "transport": "bluetooth", "sampleRate": 48000, "latencyFrames": frames,
+                "safetyOffsetFrames": 0 if frames is not None else None, "streamLatencyFrames": 0 if frames is not None
+                else None, "bufferFrameSize": 0 if frames is not None else None,
+                "reportedSeconds": None if sec is None else round(sec, 4)}
+
+    lats, events = [lat(0.0, outputs[0][0], outputs[0][1])], []
+    for i in range(1, len(outputs)):
+        if outputs[i][0] != outputs[i - 1][0]:
+            t = recs[i]["startedAt"]
+            lats.append(lat(t, outputs[i][0], outputs[i][1]))
+            events.append({"t": t, "kind": "output", "from": dev(outputs[i - 1][0]), "to": dev(outputs[i][0])})
+    meta = {"schemaVersion": 1,
+            "window": {"windowID": 89596, "app": "Google Chrome", "bundleID": "com.google.Chrome",
+                       "title": "[Stand-up] 範例專案"},
+            "config": dict(CONFIG_SNAPSHOT, segmentSeconds=seglen),
+            "devices": {"input": {"uid": "uid-範例-mic", "name": "範例麥克風", "transport": "builtIn"},
+                        "output": dev(outputs[0][0])},
+            "preflight": [], "deviceEvents": events, "audioFormatEvents": [], "pauseEvents": [],
+            "micMuteEvents": [], "outputLatencies": lats}
+    (tracks / "record.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return sess
