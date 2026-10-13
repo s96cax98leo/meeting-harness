@@ -10,6 +10,10 @@
 //   - 控制：SIGUSR1 → 在 q 上 readControl → controlActions → 套用（暫停／繼續、麥克風靜音、標記）。
 //   - 暫停閘門、換段原因、事件 append、狀態欄位、偵測器餵送一律經 Core 純函式（Segments.swift、Control.swift、
 //     Detectors.swift）；本檔只負責呼叫與落盤。
+//
+// R3 F2 捨棄（spec §3.15、§4.42.3、§4.42.4；design R3 §捨棄）：SIGTERM 時讀 record.discard.json（讀後刪），
+//   discardRequestValid 為 true → 照常停止擷取、收掉 writer，但跳過收尾，改以 trashItem 把 <場次>/錄音/ 移到垃圾桶；
+//   從不對場次路徑硬刪。無效或不存在 → 照一般停止收尾。開錄時刪掉殘留的 record.discard.json。
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -85,6 +89,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private var writersDrained = false                 // 已對目前與舊 writer 呼叫收尾
     private var finalizeStarted = false
     private var finalizeRunner: FinalizeRunner?         // 收尾執行器（spec §4.28.6）；beginFinalize 建立，只在 q 上讀寫
+    private var discarding = false                     // 這次停止是 F2 捨棄（spec §4.42.3）：跳過收尾、移到垃圾桶
     private var hadError = false
     private var forced: (code: Int32, message: String)?
     private var timers: [DispatchSourceTimer] = []
@@ -137,6 +142,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private var manifestURL: URL { ctx.tracksDir.appendingPathComponent("manifest.json") }
     private var metaURL: URL { ctx.tracksDir.appendingPathComponent("record.meta.json") }
     private var markersURL: URL { ctx.tracksDir.appendingPathComponent("markers.json") }
+    /// <home>/record.discard.json（spec §3.15）
+    private var discardURL: URL { ctx.home.appendingPathComponent("record.discard.json") }
 
     // MARK: - 開始
 
@@ -154,6 +161,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         } catch {
             log.line("⚠ 重設 \(controlFileName) 失敗：\(error.localizedDescription)")
         }
+        // 上一場殘留的捨棄請求不得帶進這一場（spec §4.42.4）
+        try? FileManager.default.removeItem(at: discardURL)
 
         // 畫布＝當下會議視窗的像素大小（D8）
         cfg.width = curSize.width
@@ -269,8 +278,11 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             signal(sig, SIG_IGN)
             let s = DispatchSource.makeSignalSource(signal: sig, queue: q)
             s.setEventHandler { [weak self] in
-                self?.log.line("● 收到停止訊號（\(sig == SIGTERM ? "SIGTERM" : "SIGINT")）")
-                self?.requestStop(fromSignal: true)
+                guard let self else { return }
+                self.log.line("● 收到停止訊號（\(sig == SIGTERM ? "SIGTERM" : "SIGINT")）")
+                // F2 捨棄只看 SIGTERM，且只在還沒開始停止時（spec §4.42.3）
+                if sig == SIGTERM, !self.stopping, self.consumeDiscardRequest() { self.discarding = true }
+                self.requestStop(fromSignal: true)
             }
             s.resume()
             signals.append(s)
@@ -921,7 +933,79 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private func checkStopDone() {
         guard stopping, writersDrained, closing.isEmpty, !finalizeStarted else { return }
         finalizeStarted = true
-        beginFinalize()
+        if discarding {
+            finishDiscard()
+        } else {
+            beginFinalize()
+        }
+    }
+
+    // MARK: - F2 捨棄（spec §4.42.3、§4.42.4）
+
+    /// 讀 record.discard.json 後刪掉（讀後刪，§3.15）；有效（discardRequestValid）才回 true。只在 q 上呼叫。
+    private func consumeDiscardRequest() -> Bool {
+        guard FileManager.default.fileExists(atPath: discardURL.path) else { return false }
+        let request = (try? Data(contentsOf: discardURL)).flatMap { try? JSONDecoder().decode(DiscardRequest.self, from: $0) }
+        try? FileManager.default.removeItem(at: discardURL)
+        if discardRequestValid(request, runId: ctx.runId, now: Date()) {
+            log.line("● 捨棄請求有效：停止錄製、跳過收尾，錄音資料夾移到垃圾桶")
+            return true
+        }
+        log.line("● record.discard.json 無效（runId 不符、過期或讀不懂），照一般停止收尾")
+        return false
+    }
+
+    /// 段落都已收掉之後：不啟動收尾子程序，以 trashItem 把 <場次>/錄音/ 移到垃圾桶；
+    /// <場次> 只剩 meeting.json（與 .DS_Store）時再把 <場次> 移到垃圾桶，使用者自己放的其他檔不碰（§7 疑慮 51）。
+    /// 從不硬刪。成功 → done／0／discarded=true；錄音/ 移不動 → failed／5、檔案原地保留。
+    private func finishDiscard() {
+        levelsTimer?.cancel()
+        closeLevels(final: true)
+        deviceMonitor?.stop()
+        lastFrame = nil
+        manifest.blackIntervals = roundedBlack()
+        writeManifest()
+        writeMeta()
+        let fm = FileManager.default
+        var trashed: NSURL?
+        do {
+            try fm.trashItem(at: ctx.recordingDir, resultingItemURL: &trashed)
+        } catch {
+            let message = "捨棄失敗：錄音資料夾移不到垃圾桶（\(error.localizedDescription)），檔案原地保留：\(ctx.recordingDir.path)"
+            log.line("✗ \(message)")
+            status.update {
+                $0.phase = .failed
+                $0.code = 5
+                $0.message = message
+            }
+            try? fm.removeItem(at: ctx.pidURL)
+            Notifier.post(title: "捨棄這次錄製失敗", body: "錄音資料夾移不到垃圾桶，檔案原地保留",
+                          identifier: completionNotificationID(runId: ctx.runId))
+            exit(5)
+        }
+        log.line("✓ 錄音資料夾已移到垃圾桶：\(trashed?.path ?? "（系統沒有回報位置）")")
+        let left = (try? fm.contentsOfDirectory(atPath: ctx.session.path)) ?? []
+        if left.contains("meeting.json"), Set(left).isSubset(of: ["meeting.json", ".DS_Store"]) {
+            var sessionTrashed: NSURL?
+            do {
+                try fm.trashItem(at: ctx.session, resultingItemURL: &sessionTrashed)
+                log.line("✓ 場次資料夾只剩 meeting.json，一併移到垃圾桶")
+            } catch {
+                // 錄音/ 已進垃圾桶，捨棄本身已完成；場次資料夾留在原地
+                log.line("⚠ 場次資料夾移不到垃圾桶（\(error.localizedDescription)），留在原地")
+            }
+        }
+        status.update {
+            $0.phase = .done
+            $0.code = 0
+            $0.message = "已捨棄，錄音已移到垃圾桶"
+            $0.discarded = true
+        }
+        try? fm.removeItem(at: ctx.pidURL)
+        log.line("✓ 已捨棄這次錄製（沒有收尾、沒有成品）")
+        Notifier.post(title: "已捨棄這次錄製", body: "錄音資料夾已移到垃圾桶，可從垃圾桶復原。",
+                      identifier: completionNotificationID(runId: ctx.runId))
+        exit(0)
     }
 
     private func roundedBlack() -> [BlackInterval] {
