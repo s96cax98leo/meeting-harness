@@ -242,18 +242,33 @@ run_diarize() {
   [[ -z "${MH_TYPE:-}" ]] && load_profile "$sess"
   echo "  ▶ 講者分離（pyannote；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
   if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
-    local audio; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
-    echo "    · 補段落時間戳（重轉一次）"
-    rm -f "$sess/錄音/transcript.raw.md"
-    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
-    [[ -s "$sess/錄音/transcript.md" ]] || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
+    # raw 逐字稿不改（鐵則 1，spec §4.29.3）：在暫存目錄重轉一次，只取段落檔；
+    # 既有的 transcript.raw.md 與衍生檔一律不動，只有原本就沒有 raw 時才補上。
+    local audio segtmp; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
+    echo "    · 補段落時間戳（在暫存目錄重轉一次，raw 不動）"
+    segtmp="$(mktemp -d)"
+    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$segtmp/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
+    [[ -s "$segtmp/transcript.segments.json" ]] \
+      && cp "$segtmp/transcript.segments.json" "$sess/錄音/transcript.segments.json"
+    if [[ ! -e "$sess/錄音/transcript.raw.md" && -s "$segtmp/transcript.raw.md" ]]; then
+      cp "$segtmp/transcript.raw.md" "$sess/錄音/transcript.raw.md"
+      [[ -f "$segtmp/transcript.raw.md.QUALITY_WARNING" ]] \
+        && cp "$segtmp/transcript.raw.md.QUALITY_WARNING" "$sess/錄音/transcript.raw.md.QUALITY_WARNING"
+    fi
+    [[ -s "$sess/錄音/transcript.md" || ! -s "$sess/錄音/transcript.raw.md" ]] \
+      || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
+    rm -rf "$segtmp"
   fi
   bash "$BIN/diarize.sh" "$sess" || { echo "    ✗ 分離失敗（見上面訊息）"; return 1; }
   python3 "$BIN/_merge_speakers.py" \
     "$sess/錄音/transcript.segments.json" "$sess/錄音/diarization.json" \
     "$sess/錄音/transcript.speakers.md" "$sess/錄音/speakers.map.json" \
-    && { state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"; } \
     || { state_set "$sess" diarize failed; return 1; }
+  # 後處理（spec §4.31.10）：在 speakers.md 插註記與「（聽不清）」；沒有事件、沒有品質檔時不改檔。
+  # 失敗只警告，speakers.md 維持 _merge_speakers.py 的原樣。
+  python3 "$BIN/_render.py" "$sess" --annotate-speakers >/dev/null \
+    || echo "    ⚠ speakers.md 註記後處理失敗（維持原樣）"
+  state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"
 }
 
 # 找出所有場次目錄（含 錄音/ 的音/視訊檔：m4a/mp3/wav/mov/mp4/m4v）

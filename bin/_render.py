@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_render.py <場次目錄> [--summary] [--actions] [--vtt] [--all]
+"""_render.py <場次目錄> [--summary] [--actions] [--vtt] [--all] [--annotate-speakers]
 
 由 `<場次>/meeting.record.json`（schema/meeting-record.v1.json）渲染所有對外產物：
 
@@ -8,7 +8,11 @@
                   ——下游知識庫專案 的 tools/meetings.py 是照這幾個標題檢查的。
   actions.csv     交辦事項表（任何試算表/任務系統都吃）
   actions.ics     iCalendar VTODO（RFC 5545），可直接匯入行事曆/提醒事項
-  錄音/transcript.vtt  WebVTT（W3C）逐字稿，帶 <v 講者> 標籤
+  錄音/transcript.vtt  WebVTT（W3C）逐字稿；對得到真名的段落帶 <v 講者> 標籤
+                  （講者歸屬與 _merge_speakers.py 相同）
+
+--annotate-speakers 只做 錄音/transcript.speakers.md 的後處理（meeting diarize 在
+_merge_speakers.py 之後呼叫），不產其他檔；沒有註記可加時不改檔。
 
 沒有參數時＝--all（有什麼來源就產什麼）。
 單一真相：只改 meeting.record.json 再重跑本程式，所有產物一致。
@@ -229,48 +233,124 @@ def _ts(sec):
     mnt, s = divmod(rem, 60)
     return f"{int(h):02d}:{int(mnt):02d}:{s:06.3f}"
 
+# ── 講者歸屬：與 _merge_speakers.py 用同一套（spec §4.29.2；該檔不改） ──────────
+# 段落→講者以 importlib 載入 bin/_merge_speakers.py 既有的 assign_speaker／load_speaker_segments／UNKNOWN，
+# 它 main() 內的套名判準、MH_MIN_SPEAKER_SEC 併入、退到含重疊那份照抄於下方函式（註解寫出處行號），
+# 一致性由 tests/record/test_r3_vtt_raw.py::test_render_copy_matches_merge 保證。
+_MERGE = None
+
+def _merge_module():
+    """以 importlib 載入 bin/_merge_speakers.py（有 __main__ 保護，匯入不會執行 main）。不寫 .pyc。"""
+    global _MERGE
+    if _MERGE is None:
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location("_merge_speakers", os.path.join(here, "_merge_speakers.py"))
+        mod = importlib.util.module_from_spec(spec)
+        dwb, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.dont_write_bytecode = dwb
+        _MERGE = mod
+    return _MERGE
+
+def load_name_map(path):
+    """speakers.map.json → {代號: 真名}。照抄 _merge_speakers.py:70-82（main 內的套名判準）：
+    dict 值有 apply 就聽 apply，沒有就看 confidence ≥ 0.7；字串值直接套。不夠的不掛名（鐵則 3）。"""
+    name_map = {}
+    if path and os.path.exists(path):
+        raw_map = json.load(open(path, encoding="utf-8"))
+        for k, v in raw_map.items():
+            if isinstance(v, dict):
+                ok = v.get("apply") if "apply" in v else (float(v.get("confidence", 1.0)) >= 0.7)
+                if ok and v.get("name"):
+                    name_map[k] = v["name"]
+            elif v:
+                name_map[k] = v
+    return name_map
+
+def _fold_minor_speakers(ssegs):
+    """照抄 _merge_speakers.py:91-111：MH_MIN_SPEAKER_SEC > 0 時，把總時長過短的講者併入最近的主要講者
+    （只動主要講者段，不動含重疊那份；與原程式相同）。"""
+    min_sec = float(os.environ.get("MH_MIN_SPEAKER_SEC", "0") or 0)
+    if min_sec > 0:
+        tot = {}
+        for sp in ssegs:
+            tot[sp["speaker"]] = tot.get(sp["speaker"], 0.0) + (sp["end"] - sp["start"])
+        major = {s for s, d in tot.items() if d >= min_sec} or set(tot)
+        def nearest_major(seg):
+            best, bd = None, float("inf")
+            for sp in ssegs:
+                if sp["speaker"] not in major:
+                    continue
+                mid = (seg["start"] + seg["end"]) / 2
+                d = 0 if sp["start"] <= mid <= sp["end"] else min(abs(mid - sp["start"]), abs(mid - sp["end"]))
+                if d < bd:
+                    bd, best = d, sp["speaker"]
+            return best
+        for sp in ssegs:
+            if sp["speaker"] not in major:
+                sp["speaker"] = nearest_major(sp) or sp["speaker"]
+
+def speaker_assigner(rec_dir):
+    """回傳 (assign, name_map)；assign(seg) → 講者代號（證據不足為 UNKNOWN）。沒有講者分段時回傳 (None, {})。
+    歸屬本身用 _merge_speakers.assign_speaker（_merge_speakers.py:47）；
+    「主要段判不出來就退到含重疊那份再試一次」照抄 _merge_speakers.py:113-119。"""
+    dp = os.path.join(rec_dir, "diarization.json")
+    if not os.path.isfile(dp):
+        return None, {}
+    ms = _merge_module()
+    ssegs, ssegs_all = ms.load_speaker_segments(dp)          # _merge_speakers.py:20
+    if not ssegs:
+        return None, {}
+    _fold_minor_speakers(ssegs)
+    unknown = ms.UNKNOWN                                       # _merge_speakers.py:45
+
+    def assign(seg):
+        spk = ms.assign_speaker(seg, ssegs)
+        if spk == unknown and ssegs_all:
+            alt = ms.assign_speaker(seg, ssegs_all)   # 退到含重疊那份再試一次
+            if alt != unknown:
+                return alt
+        return spk
+    return assign, load_name_map(os.path.join(rec_dir, "speakers.map.json"))
+
 def render_vtt(sess, path):
-    """逐字稿 → WebVTT。有講者分離就帶 <v 講者>。來源是 raw segments（不改 raw 本身）。"""
+    """逐字稿 → WebVTT。來源是 raw segments（不改 raw 本身）。
+    講者歸屬與 transcript.speakers.md 相同（speaker_assigner）；只有對得到真名的講者才加 <v 名字>，
+    代號與 SPEAKER_? 一律不加（鐵則 3：不確定的姓名不掛）。"""
     rec_dir = os.path.join(sess, "錄音")
     segp = os.path.join(rec_dir, "transcript.segments.json")
     if not os.path.isfile(segp):
         return 0
     segs = json.load(open(segp, encoding="utf-8")).get("segments", [])
-    spk = []
-    dp = os.path.join(rec_dir, "diarization.json")
-    if os.path.isfile(dp):
-        spk = json.load(open(dp, encoding="utf-8")).get("segments", [])
-    names = {}
-    mp = os.path.join(rec_dir, "speakers.map.json")
-    if os.path.isfile(mp):
-        raw = json.load(open(mp, encoding="utf-8"))
-        for k, v in raw.items():
-            if isinstance(v, dict):
-                if float(v.get("confidence", 1.0)) >= 0.7 and v.get("name"):
-                    names[k] = v["name"]
-            elif v:
-                names[k] = v
+    assign, names = speaker_assigner(rec_dir)
 
     def who(s):
-        best, bo = None, 0.0
-        for sp in spk:
-            ov = max(0.0, min(s["end"], sp["end"]) - max(s["start"], sp["start"]))
-            if ov > bo:
-                bo, best = ov, sp["speaker"]
-        if best and bo / max(s["end"] - s["start"], 1e-6) >= 0.3:
-            return names.get(best, best)
-        return None
+        if assign is None:
+            return None
+        name = names.get(assign({"start": float(s["start"]), "end": float(s["end"])}))
+        return name if name and not str(name).startswith("SPEAKER_") else None
 
     lines = ["WEBVTT", ""]
     for i, s in enumerate(segs, 1):
         txt = (s.get("text") or "").strip()
         if not txt:
             continue
-        v = who(s) if spk else None
+        v = who(s)
         lines += [str(i), f"{_ts(s['start'])} --> {_ts(s['end'])}",
                   (f"<v {v}>{txt}" if v else txt), ""]
     open(path, "w", encoding="utf-8").write("\n".join(lines))
     return len(segs)
+
+def annotate_speakers(sess):
+    """transcript.speakers.md 的後處理掛勾（spec §4.31.10）：插註記行與「（聽不清）」。
+    目前沒有任何註記來源，所以一律不改檔；回傳是否改了檔。註記內容由後續子任務補上。"""
+    p = os.path.join(sess, "錄音", "transcript.speakers.md")
+    if not os.path.isfile(p):
+        return False
+    return False
 
 def main():
     if len(sys.argv) < 2:
@@ -290,6 +370,8 @@ def main():
             sys.exit(3)
 
     done = []
+    if "--annotate-speakers" in flags and annotate_speakers(sess):
+        done.append("錄音/transcript.speakers.md（註記）")
     if rec and "--summary" in flags:
         p = os.path.join(sess, "summary.md")
         open(p, "w", encoding="utf-8").write(render_summary(rec))
