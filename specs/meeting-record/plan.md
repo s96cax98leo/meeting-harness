@@ -634,7 +634,7 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 
 **序列鏈檢查**（同檔的子任務都有相依路徑，不會同層）：`RecordingSession.swift`＝lock(2) → finalize-runner(3) → discard(4) → segment-scheduler(5) → sync-compensate(6)；`MenuBar.swift`＝menubar-states(2) → hud(3) → discard(4) → menu-stages(5) → onboarding-settings(6)；`Notifier.swift`＝menubar-states(2) → onboarding-settings(6)；`_record_finalize.py`＝finalize-guard(1) → sync-compensate(6)；`e2e_check.py`＝sync-measure(1) → sync-compensate(6)；`_render.py`＝vtt-raw(1) → annotations(2)；`meeting.sh`＝vtt-raw(1) → search(2) → reminders(3)；`transcribe.sh`、meeting-transcribe SKILL.md＝vtt-raw(1) → transcript-vad(2)；`Info.plist`＝reminders(3) → onboarding-settings(6)。
 
-**程式驗證**（同層 `owns` 不重疊、同檔必有相依路徑、層數）：`python3 <run 目錄>/r3-check-layers.py <run 目錄>/r3-subtasks.fix.json`（腳本存在 run 目錄，不進 git）（腳本內容：依 `depends_on` 算層，test 子任務為 Red；目錄型 `owns`（`/` 結尾）以前綴比對；修正輪跑出 6 層、問題數 0）。主 session 合併子任務 JSON 後要再跑一次。
+**程式驗證**（同層 `owns` 不重疊、同檔必有相依路徑、層數）：`python3 <run 目錄>/r3-check-layers.py <run 目錄>/r3-subtasks.json`（腳本存在 run 目錄，不進 git）（腳本內容：依 `depends_on` 算層，test 子任務為 Red；目錄型 `owns`（`/` 結尾）以前綴比對；修正輪跑出 6 層、問題數 0；修正輪的 `r3-subtasks.fix.json` 與 UI 版合併成 `r3-subtasks.json` 後重跑，同樣 6 層、問題數 0）。
 
 **拆分理由（能一個做完的不拆兩個）**：`r3-core` 不拆，因為 Swift 測試全編全過；`r3-lock` 把 Q1、Q2、Q5、D14b、R3-Q5 與 S-B 合在一起，因為都改 `record.sh` 或 `RecordingSession.swift` 的同一段開錄流程；`r3-menubar-states` 吸收 U3 通知，因為都是 `MenuBar.swift` 的狀態接線；`r3-annotations` 吸收 T5 的「（聽不清）」，因為同改 `_render.py`；`r3-onboarding-settings` 合併 U4、U5、U7、F3，因為同改 `Info.plist`、`MenuBar.swift`、`Notifier.swift` 且共用設定檔。`r3-segment-scheduler` 與 `r3-sync-compensate` 分開，因為 Scheduler 是熱路徑重構、要單獨用 e2e 迴歸驗，S-C 依賴它。
 

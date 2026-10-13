@@ -834,8 +834,8 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 ### R3-D14 首次引導、設定分頁、app 圖示（U4、U5、U7、D7；ADR `adr-r3-defaults-writers.md`）
 
 - **新設定檔** `<home>/menubar.settings.json`（app 唯一寫者）：`showTimer`、`hudMode`、`hudPosition`、`timeSensitiveAlerts`、`lastSettingsTab`、`onboardingCompletedAt`、`meetingDetect`。R2 的 `menubar.prefs.json`（6 鍵，`MenuBarR2Tests.swift:258` 斷言）不動，避免改既有鍵集合測試。
-- **U4 首次引導**（U4-A 分步精靈 5 步，R3-D21）：`onboardingCompletedAt` 為 nil 時，menu bar 啟動後顯示引導視窗，步驟：歡迎 → 權限（螢幕錄製、麥克風、通知、自動化〔選用〕；按鈕只觸發 TCC 授權框或打開系統設定，不做其他系統設定變更）→ 存檔位置（含 harness）→ 選單列空間（提示圖示可能被瀏海擋住、HUD 的作用，可一鍵改成一律顯示 HUD）→ 試錄（含四組快捷鍵說明；試錄走既有 quick-start，錄 5 秒後自動停止並捨棄——用 R3-D13 的路徑，移到垃圾桶）。每一步可略過；完成或略過全部時寫 `onboardingCompletedAt`。
-- **app 寫 `record.defaults.json`**（推翻 R2-Q3）：只在引導的「存檔位置與 harness」一步，以 `writeOnboardingDefaults(home:harness:root:)` 寫 `harness` 與 `root` 兩個鍵：取 `<home>/record.defaults.lock` 的 flock → 讀現有內容 → 只改這兩鍵、其他鍵原樣保留 → `mkstemp`＋rename。`record.sh` 的 `write_defaults`（`bin/record.sh:329-341`）改成拿同一把鎖、讀後合併（保留 app 與 `record sync` 寫的鍵），由 `r3-lock` 先做。
+- **U4 首次引導**（U4-A 分步精靈 5 步，R3-D21）：`onboardingCompletedAt` 為 nil 時，menu bar 啟動後顯示引導視窗，步驟：歡迎 → 權限（螢幕錄製、麥克風、通知、自動化〔選用〕；按鈕只觸發 TCC 授權框或打開系統設定，不做其他系統設定變更）→ 存檔位置（含 harness）→ 選單列空間（提示圖示可能被瀏海擋住、HUD 的作用，可一鍵改成一律顯示 HUD）→ 試錄（含四組快捷鍵說明；試錄場次放在 `temporaryDirectory/meeting-harness-trial-<runId>/`，錄 5 秒後自動停止、跳過收尾，讀 `recentLevels` 顯示兩路是否有聲，之後直接刪除這個暫存目錄——不移垃圾桶、不寫 `record.discard.json`、不跳確認框；`spec.md` §6 第 139 條、R3-D30 I-2）。每一步可略過；完成或略過全部時寫 `onboardingCompletedAt`。
+- **app 寫 `record.defaults.json`**（推翻 R2-Q3）：只在引導的「存檔位置與 harness」一步，以 `writeOnboardingDefaults(home:harness:root:)` 寫 `harness` 與 `root` 兩個鍵：取 `<home>/record.defaults.lock` 的 flock → 讀現有內容 → 只改這兩鍵、其他鍵原樣保留 → `mkstemp`＋rename。`record.sh` 的 `write_defaults`（`bin/record.sh:329-341`）改成拿同一把鎖、讀後合併（保留 app 與 `meeting sync` 寫的鍵），由 `r3-lock` 先做。
 - **U5 設定視窗**改成 7 個工具列分頁（U5-A：一般、錄製、回饋與通知、快捷鍵、錄完之後、權限、進階；R3-D21）；快捷鍵分頁只顯示、不能改（D7-A）；回饋與通知分頁含 HUD 模式與位置、F3 的開關與 Time Sensitive 說明；進階分頁顯示 `syncCompensation` 目前值（唯讀，改要用 CLI）。視窗標題跟著分頁變（HIG；推翻「MeetingRecorder 設定」，`spec.md` §6 第 130 條）。
 - **U7 app 圖示**：`Resources/AppIcon.icns`（U7-A 錄製點＋聲波，幾何比例見 `design-r3/README.md` §6.4），`Info.plist` 加 `CFBundleIconFile`，`build.sh` 把它複製進 bundle。
 - 引導與設定的文字不得含真實名稱；範例用「[Stand-up] 範例專案」。
@@ -849,7 +849,7 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 ### R3-D16 UI 設計稿流程（R3-Q7；R3-Q8＝B）
 
 - design 段先用 Claude Design 依 `ui` §4 與 `brief` 的設計 token 出稿：D1（U1 圖示 8 種）、D2–D6（U6 選單各階段、音量條、失敗詳情）、D7（U2 HUD）、D8（U5 設定分頁）、D9（U6）、D10（U4 引導）、D11（U3 通知，系統原生外觀，只定文字）、D12（U7 圖示）；F2 的確認對話框與 F3 的通知也一併出稿。`brief` 的建議方向：U1-B、U2-A、U6-A、F2-A、F3-A、U4-A、U5-A、U7-A。
-- 使用者挑定後存到 `specs/meeting-record/design-r3/`（存之前照 intent R3-4 第 8 點掃名稱），再把 spec 的外觀佔位換成稿的路徑與要點（SF Symbol 名、顏色 token、尺寸、文字）。**2026-10-13 已完成**（R3-D21）。**這一步是 UI 子任務開工的前提**：`r3-menubar-states`、`r3-hud`、`r3-menu-stages`、`r3-onboarding-settings`、`r3-discard`（確認框）、`r3-meeting-detect`（通知）的外觀相關靜態測試，要等稿挑定才寫得出字面。行為、狀態機、無障礙與結束碼不等稿。
+- 使用者挑定後存到 `specs/meeting-record/design-r3/`（存之前照 intent R3-4 第 8 點掃名稱），再把 spec 的外觀佔位換成稿的路徑與要點（SF Symbol 名、顏色 token、尺寸、文字）。**2026-10-13 已完成**（R3-D21）。**這一步是 UI 子任務開工的前提**：`r3-menubar-states`、`r3-hud`、`r3-menu-stages`、`r3-onboarding-settings`（含併入的 F3 通知，原 `r3-meeting-detect`）、`r3-discard`（確認框）的外觀相關靜態測試，要等稿挑定才寫得出字面。行為、狀態機、無障礙與結束碼不等稿。
 
 ### R3-D17 Swift 原始碼切分（增補 `design.md §9`、R2-D13）
 
@@ -956,7 +956,7 @@ Resources/                         Info.plist（提醒事項權限說明、CFBun
 
 - 合併理由：`r3-latency-log` 只動 `RecordingSession.swift` 的兩處與 `AudioDeviceMonitor.swift`，和 `r3-lock` 同檔，拆開只會多一層；`r3-notify` 與 `r3-menubar-states` 都是 `MenuBar.swift` 的狀態接線；`r3-meeting-detect` 與 `r3-onboarding-settings` 共用設定檔（`meetingDetect` 開關在設定分頁）且都改 `MenuBar.swift`、`Notifier.swift`。
 - 排序：`r3-discard` 放在 `r3-segment-scheduler` 之前（兩者都改 `RecordingSession.swift`，捨棄是「停止時跳過收尾」，與 Scheduler 的接線不相依；排前面才能讓 `MenuBar.swift` 鏈與 `RecordingSession.swift` 鏈都在 6 層內走完）。`meeting.sh` 鏈（vtt-raw → search → reminders）與第 1 層不變。
-- 同層 `owns` 不重疊以程式驗證（`plan.md §10.1` 的檢查腳本，跑在 run 目錄的 `r3-subtasks.fix.json`）。
+- 同層 `owns` 不重疊以程式驗證（`plan.md §10.1` 的檢查腳本，跑在 run 目錄的 `r3-subtasks.json`；修正輪當時是 `r3-subtasks.fix.json`，與 UI 版合併後覆寫為 `r3-subtasks.json`）。
 
 **其他**
 
