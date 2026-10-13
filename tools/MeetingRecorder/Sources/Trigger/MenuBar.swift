@@ -13,6 +13,10 @@
 //   「停止錄製並收尾」「取消收尾」＝ stopTargetDecision 確認後 SIGTERM 給錄製實例；
 //   暫停／麥克風靜音／加標記＝ requestControl 寫控制檔後送 SIGUSR1（spec §4.20.8）。
 // 登入項目只在偏好設定視窗的勾選框處理（Trigger/Preferences.swift），這裡任何流程都不註冊。
+// R3（spec §4.43.5）：menubar.settings.json 的 onboardingCompletedAt 為 nil 時，啟動後顯示首次引導（Trigger/Onboarding.swift）；
+//   設定視窗的「重新執行首次設定…」也從這裡開。
+// R3（spec §4.44；F3-A）：會議偵測提示（Trigger/MeetingDetect.swift）——設定的 meetingDetect 打開、且不在錄製中才提示；
+//   通知的「開始錄製」走既有 quick-start（startRecording），「這場不用」讓本 episode 不再提示。
 import AppKit
 import Carbon
 import UserNotifications
@@ -91,6 +95,10 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 「錄其他視窗」子選單讀清單用的輪詢
     private var windowsTimer: Timer?
     private var preferences: PreferencesWindowController?
+    /// 首次引導（U4-A；spec §4.43.5）
+    private var onboarding: OnboardingWindowController?
+    /// F3 會議偵測（spec §4.44）
+    private var meetingDetector: MeetingDetector?
     /// 新告警通知（spec §4.39.2、§4.39.3）：上一次看到的 warnings 與它屬於哪一場
     private var alertRunId: String?
     private var seenWarnings: [RecordWarning] = []
@@ -181,6 +189,28 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
                     .line("\(isoNow()) 快捷鍵 \(spec.display) 註冊失敗（可能被別的 app 佔用），請改用選單或 Shortcuts 捷徑")
             }
         }
+        // F3 會議偵測（spec §4.44.2）：每 meetingDetectPollSeconds 輪詢；設定關掉或錄製中不提示
+        let detector = MeetingDetector(home: home, enabled: { [weak self] in
+            guard let self else { return false }
+            return loadMenuBarSettings(home: self.home).meetingDetect
+        }, recordingInProgress: { [weak self] in
+            guard let self else { return false }
+            return self.model.canStop || menuStage(self.model) == .recording || menuStage(self.model) == .finalizing
+        })
+        meetingDetector = detector
+        detector.start()
+        // 首次引導（spec §4.43.5）：還沒看過就在啟動後顯示（快捷鍵註冊結果已知，試錄步才標得出註冊失敗）
+        if loadMenuBarSettings(home: home).onboardingCompletedAt == nil {
+            DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
+        }
+    }
+
+    /// 開首次引導；已開就帶到前面
+    private func showOnboarding() {
+        let o = onboarding ?? OnboardingWindowController(home: home, prefsStore: prefsStore, failedHotKeyIDs: failedHotKeyIDs,
+                                                         iconObscured: { [weak self] in self?.statusIconObscuredNow() })
+        onboarding = o
+        o.present()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -890,7 +920,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
 
     @objc private func openPreferences() {
         let p = preferences ?? PreferencesWindowController(home: home, prefsStore: prefsStore,
-                                                           failedHotKeyIDs: failedHotKeyIDs)
+                                                           failedHotKeyIDs: failedHotKeyIDs,
+                                                           onRerunOnboarding: { [weak self] in self?.showOnboarding() })
         preferences = p
         p.present()
     }
@@ -909,6 +940,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let reveal = UNNotificationAction(identifier: revealActionID, title: "在 Finder 顯示", options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: completionCategoryID, actions: [reveal], intentIdentifiers: [], options: []),
+            meetingDetectCategory(),     // F3：「開始錄製」「這場不用」（spec §4.44.3）
         ])
     }
 
@@ -946,15 +978,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         }
         guard let window = item.button?.window else { return }
         let frame = window.frame
-        let screen = window.screen ?? NSScreen.main
-        var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
-        if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
-            notchMinX = sc.frame.minX + l.maxX
-            notchMaxX = sc.frame.minX + r.minX
-        }
         let visible = window.occlusionState.contains(.visible)
-        let obscured = statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
-                                          notchMinX: notchMinX, notchMaxX: notchMaxX)
+        guard let obscured = statusIconObscuredNow() else { return }
         let previous = iconObscured
         iconObscured = obscured
         let mode = loadMenuBarSettings(home: home).hudMode
@@ -969,6 +994,22 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         case .none:
             break
         }
+    }
+
+    /// 選單列圖示此刻是否被瀏海擋住或被系統藏起來（statusItemObscured）；取不到按鈕視窗回 nil。
+    /// 錄製中的定時檢查與首次引導的「選單列空間」一步共用。
+    private func statusIconObscuredNow() -> Bool? {
+        guard let window = item.button?.window else { return nil }
+        let frame = window.frame
+        let screen = window.screen ?? NSScreen.main
+        var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
+        if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
+            notchMinX = sc.frame.minX + l.maxX
+            notchMaxX = sc.frame.minX + r.minX
+        }
+        let visible = window.occlusionState.contains(.visible)
+        return statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
+                                  notchMinX: notchMinX, notchMaxX: notchMaxX)
     }
 
     private func trackCompletion(_ st: RecordStatus?) {
@@ -1030,6 +1071,21 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         if response.actionIdentifier == revealActionID,
            let s = response.notification.request.content.userInfo["session"] as? String, !s.isEmpty {
             DispatchQueue.main.async { revealSessionProduct(s) }
+        }
+        // F3（spec §4.44.3）：「開始錄製」走既有 quick-start（用上次的設定）；「這場不用」本 episode 不再提示
+        if response.notification.request.content.categoryIdentifier == meetingDetectCategoryID {
+            switch response.actionIdentifier {
+            case meetingDetectStartActionID:
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.refresh()
+                    if self.model.canStart { self.startRecording() }
+                }
+            case meetingDetectDismissActionID:
+                DispatchQueue.main.async { [weak self] in self?.meetingDetector?.dismissCurrentEpisode() }
+            default:
+                break
+            }
         }
         completionHandler()
     }
