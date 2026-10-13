@@ -43,7 +43,7 @@ func die(_ msg: String, code: Int32, log: Logger? = nil) -> Never {
 /// 參數解析：只有 booleanFlags 裡的旗標不帶值，其餘 `--x` 一律吃下一個參數當值
 /// （`--window-title ""` 的空字串、以 `-` 開頭的標題都不會被誤判）。
 struct Args {
-    static let booleanFlags: Set<String> = ["json", "ask-automation"]
+    static let booleanFlags: Set<String> = ["json", "ask-automation", "skip-finalize"]
     private var flags: [String: String] = [:]
     let positional: [String]
 

@@ -1075,6 +1075,12 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         manifest.blackIntervals = roundedBlack()
         writeManifest()
         writeMeta()
+        // 內部旗標 --skip-finalize（首次引導試錄；spec R3-§6 第 144 條）：不跑 _record_finalize.py，直接結束
+        if ctx.skipFinalize {
+            log.line("● 依 --skip-finalize 跳過收尾（\(finishedSegments) 段）")
+            complete(finalizeCode: 0, skipped: true)
+            return
+        }
         let n = finishedSegments
         status.update {
             $0.phase = .finalizing
@@ -1125,10 +1131,15 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
 
     /// 最終結果一律由 Core completionOutcome 決定：停止原因（forced）在開頭，收尾失敗附在其後（spec §4.4.7、§4.4.9）。
     /// 收尾被 FinalizeRunner 中止（逾時、取消）時改用 finalizeAbortOutcome：phase=failed、code=5（spec §4.28.6）。
-    private func complete(finalizeCode rc: Int32, aborted: FinalizeAbort? = nil) {
-        let outcome = aborted.map { finalizeAbortOutcome($0, forcedMessage: forced?.message, sessionPath: ctx.session.path) }
+    /// skipped（--skip-finalize）：沒有跑收尾，phase 照 completionOutcome 的非失敗分支（done），code 0 時改寫訊息；
+    /// 不發完成通知（spec R3-§6 第 144 條）。
+    private func complete(finalizeCode rc: Int32, aborted: FinalizeAbort? = nil, skipped: Bool = false) {
+        let base = aborted.map { finalizeAbortOutcome($0, forcedMessage: forced?.message, sessionPath: ctx.session.path) }
             ?? completionOutcome(finalizeCode: rc, forcedCode: forced?.code, forcedMessage: forced?.message,
                                  hadError: hadError, sessionPath: ctx.session.path)
+        let outcome = skipped && base.code == 0
+            ? CompletionOutcome(phase: .done, code: 0, message: "已停止，依 --skip-finalize 跳過收尾：\(ctx.session.path)")
+            : base
         status.update {
             $0.phase = outcome.phase
             $0.code = outcome.code
@@ -1136,6 +1147,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
         try? FileManager.default.removeItem(at: ctx.pidURL)
         log.line(outcome.code == 0 ? "✓ \(outcome.message)" : "✗ \(outcome.message)")
+        // 試錄（--skip-finalize）不發完成通知：暫存場次不是使用者的會議（實機缺陷 F1）
+        guard !ctx.skipFinalize else { exit(outcome.code) }
         Notifier.post(title: outcome.code == 0 ? "會議錄製完成" : "會議錄製結束（有錯誤）",
                       body: outcome.code == 0 ? ctx.session.path : "\(outcome.message)\n\(ctx.session.path)",
                       identifier: completionNotificationID(runId: ctx.runId))
