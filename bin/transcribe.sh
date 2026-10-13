@@ -21,6 +21,33 @@ fi
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
+# ── 模型選擇 ───────────────────────────────────────────────────────────
+# zh 場次預設走 Breeze-ASR-25（MediaTek，台灣華語＋中英混雜微調，原生輸出繁體）；
+# 其他語言或 Breeze 失敗 → whisper-large-v3；無 mlx → openai-whisper medium。
+# 覆寫：MH_ASR_MODEL=<hf repo 或本機路徑>
+HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cfg_model() { # <key>
+  python3 - "$HARNESS_ROOT/config.json" "$1" <<'PYCFG' 2>/dev/null
+import json,sys
+try:
+    m=json.load(open(sys.argv[1]))["transcribe"]["models"]
+    print(m.get(sys.argv[2],""))
+except Exception:
+    print("")
+PYCFG
+}
+MODEL_ZH="$(cfg_model zh)";           MODEL_ZH="${MODEL_ZH:-Kenji8000/Breeze-ASR-25-mlx}"
+MODEL_DEFAULT="$(cfg_model default)"; MODEL_DEFAULT="${MODEL_DEFAULT:-mlx-community/whisper-large-v3-mlx}"
+MODEL_FALLBACK="$(cfg_model fallback)"; MODEL_FALLBACK="${MODEL_FALLBACK:-mlx-community/whisper-large-v3-mlx}"
+
+if [[ -n "${MH_ASR_MODEL:-}" ]]; then
+  MODEL="$MH_ASR_MODEL"
+elif [[ "$LANG_CODE" == "zh" ]]; then
+  MODEL="$MODEL_ZH"
+else
+  MODEL="$MODEL_DEFAULT"
+fi
+
 # 領域術語提示（降低專名誤植；繁中語境）。
 # 預設為通用提示；可用環境變數 MH_TRANSCRIBE_HINT 覆寫成你當場的領域術語以提升準確度。
 HINT="${MH_TRANSCRIBE_HINT:-以下為一場繁體中文的技術演講/會議，內容含中英文混雜的專有名詞、產品名與技術術語。}"
@@ -28,26 +55,43 @@ HINT="${MH_TRANSCRIBE_HINT:-以下為一場繁體中文的技術演講/會議，
 # 講者分離需要段落時間戳 → MH_EMIT_SEGMENTS=1 時輸出 all（含 .json）
 OUTFMT="txt"; [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]] && OUTFMT="all"
 
-echo "[transcribe] engine=mlx-whisper model=large-v3 audio=$AUDIO (output=$OUTFMT)"
-if command -v mlx_whisper >/dev/null 2>&1; then
-  # mlx-whisper console script 輸出 .txt/.srt/.json 到 output-dir
+USED_MODEL="$MODEL"
+echo "[transcribe] engine=mlx-whisper model=$MODEL audio=$AUDIO (output=$OUTFMT)"
+run_mlx() { # <model>
   # --condition-on-previous-text False：關鍵防迴圈（講座有停頓/掌聲易觸發 whisper 重複迴圈）
   mlx_whisper "$AUDIO" \
-    --model mlx-community/whisper-large-v3-mlx \
+    --model "$1" \
     --language "$LANG_CODE" \
     --initial-prompt "$HINT" \
     --condition-on-previous-text False \
     --compression-ratio-threshold 2.4 \
     --output-dir "$WORKDIR" \
     --output-format "$OUTFMT" \
-    --verbose False 2>&1 | tail -8 || {
+    --verbose False 2>&1 | tail -8
+}
+if command -v mlx_whisper >/dev/null 2>&1; then
+  if ! run_mlx "$MODEL"; then
+    if [[ "$MODEL" != "$MODEL_FALLBACK" ]]; then
+      echo "[transcribe] $MODEL 失敗 → 退回 $MODEL_FALLBACK" >&2
+      USED_MODEL="$MODEL_FALLBACK"
+      run_mlx "$MODEL_FALLBACK" || {
+        echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
+        USED_MODEL="openai-whisper medium"
+        whisper "$AUDIO" --model medium --language "$LANG_CODE" \
+          --initial_prompt "$HINT" --condition_on_previous_text False \
+          --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
+      }
+    else
       echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
+      USED_MODEL="openai-whisper medium"
       whisper "$AUDIO" --model medium --language "$LANG_CODE" \
         --initial_prompt "$HINT" --condition_on_previous_text False \
         --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
-    }
+    fi
+  fi
 else
   echo "[transcribe] mlx-whisper 未安裝，使用 openai-whisper medium"
+  USED_MODEL="openai-whisper medium"
   whisper "$AUDIO" --model medium --language "$LANG_CODE" \
     --initial_prompt "$HINT" --condition_on_previous_text False \
     --output_dir "$WORKDIR" --output_format "$OUTFMT" 2>&1 | tail -5
@@ -62,9 +106,9 @@ fi
 
 mkdir -p "$(dirname "$OUT")"
 {
-  echo "# 逐字稿（原始，mlx-whisper large-v3）"
+  echo "# 逐字稿（原始，未經任何後處理）"
   echo
-  echo "> 來源：$(basename "$AUDIO")　語言：$LANG_CODE"
+  echo "> 來源：$(basename "$AUDIO")　語言：${LANG_CODE}　模型：${USED_MODEL}"
   echo
   cat "$RAW"
 } > "$OUT"
@@ -80,16 +124,70 @@ if [[ "${MH_EMIT_SEGMENTS:-0}" == "1" ]]; then
   fi
 fi
 
+# 正體保險栓：Breeze-ASR-25 原生輸出繁體 → 不動；其他引擎（large-v3 / openai-whisper）才轉。
+# 只轉字形，不動內容；raw 逐字稿仍是「該引擎的完整輸出」。
+case "$USED_MODEL" in
+  *Breeze*|*breeze*) : ;;
+  *)
+    python3 "$(dirname "$0")/_to_tw.py" "$OUT" 2>/dev/null || true
+    [[ -s "$(dirname "$OUT")/transcript.segments.json" ]] && \
+      python3 "$(dirname "$0")/_to_tw.py" "$(dirname "$OUT")/transcript.segments.json" 2>/dev/null || true
+    ;;
+esac
+
 # 自我驗證：偵測 whisper 重複迴圈（同一行連續重複過多 = 轉錄失敗）
-# 用 awk 一次算完，避免 head 早關管線在 pipefail 下觸發 SIGPIPE
-MAXREP=$(sort "$RAW" | uniq -c | sort -rn | awk 'NR==1{print $1+0}')
-MAXREP=${MAXREP:-0}
+# 注意要算「連續」重複，不是整份檔案的出現次數——會議裡「好」「對」「是」本來就會出現幾十次，
+# 用總次數判會一直誤報（實測 0908 某場會議：「好」全檔 35 次，但最長連續只有 2 次，是正常對話）。
+MAXREP=$(python3 - "$RAW" <<'PYREP'
+import sys
+lines = [l.strip() for l in open(sys.argv[1], encoding="utf-8")]
+best, cur, txt = 1, 1, ""
+for a, b in zip(lines, lines[1:]):
+    cur = cur + 1 if (a == b and a) else 1
+    if cur > best:
+        best, txt = cur, a
+print(f"{best}\t{txt[:30]}")
+PYREP
+)
+MAXREP_TXT="${MAXREP#*	}"; MAXREP="${MAXREP%%	*}"
+MAXREP=${MAXREP:-1}
 TOTAL=$(grep -cve '^[[:space:]]*$' "$RAW" || true)
 TOTAL=${TOTAL:-1}
-if [[ "${MAXREP:-0}" -ge 30 ]]; then
-  echo "[transcribe] ⚠️  偵測到重複迴圈：某行重複 $MAXREP 次（共 $TOTAL 行非空）。轉錄可能失敗。" >&2
-  echo "[transcribe] 建議：確認已用 --condition-on-previous-text False；必要時重跑或分段轉錄。" >&2
-  echo "REPETITION_LOOP_DETECTED maxrep=$MAXREP total=$TOTAL" > "$OUT.QUALITY_WARNING"
+if [[ "${MAXREP:-0}" -ge 10 ]]; then
+  echo "[transcribe] ⚠️  重複迴圈：同一行連續重複 ${MAXREP} 次（「${MAXREP_TXT}」，共 ${TOTAL} 行非空）" >&2
+  echo "[transcribe] 該段多半是雜訊造成，raw 保留原樣；總結時請標為（聽不清）不要採信。" >&2
+  echo "REPETITION_LOOP_DETECTED consecutive=${MAXREP} text=${MAXREP_TXT} total=${TOTAL}" > "$OUT.QUALITY_WARNING"
+fi
+
+# 行內重複迴圈偵測：上面那段只看「整行重複」，但迴圈也常發生在同一行之內
+# （例：「我們所說的」連續 30 幾次）。這裡只警告、不動 raw，供人工覆核。
+INLINE=$(python3 - "$RAW" <<'PYREP'
+import sys
+from collections import Counter
+worst, where = 1, ""
+for line in open(sys.argv[1], encoding="utf-8"):
+    t = line.strip()
+    if len(t) < 16:
+        continue
+    c = Counter(t[i:i+4] for i in range(len(t) - 3))
+    n, g = c.most_common(1)[0][1], c.most_common(1)[0][0]
+    if n > worst:
+        worst, where = n, f"{g}×{n}：{t[:40]}"
+print(f"{worst}	{where}")
+PYREP
+)
+INLINE_N="${INLINE%%	*}"; INLINE_TXT="${INLINE#*	}"
+if [[ "${INLINE_N:-1}" -ge 8 ]]; then
+  echo "[transcribe] ⚠️  行內重複迴圈：同一段裡有 4 字片語重覆 ${INLINE_N} 次（${INLINE_TXT}）" >&2
+  echo "[transcribe] 該段多半是雜訊/交談重疊造成，raw 保留原樣；總結時請標為（聽不清）不要採信。" >&2
+  echo "INLINE_REPETITION_LOOP n=${INLINE_N} sample=${INLINE_TXT}" >> "$OUT.QUALITY_WARNING"
+fi
+
+# 產物健檢：只有標頭沒有內容 → 視為失敗（否則下游會拿空稿繼續跑）
+BODY=$(grep -cve '^[[:space:]]*$' "$RAW" || true)
+if [[ "${BODY:-0}" -eq 0 ]]; then
+  echo "[transcribe] ERROR: 轉錄結果是空的（${USED_MODEL}）。已保留 ${OUT} 供檢查。" >&2
+  exit 4
 fi
 
 echo "[transcribe] DONE -> $OUT ($(wc -l < "$OUT" | tr -d ' ') lines; max-line-repeat=$MAXREP)"

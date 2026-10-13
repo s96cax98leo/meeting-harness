@@ -47,9 +47,9 @@ def main():
     if not docx_ok:
         print("docx WARN:", r.stderr.strip(), file=sys.stderr)
 
-    # 會議索引一行（一句話摘要取「一句話摘要」段首句，去 wikilink 干擾）
+    # 會議索引一行的一句話：新格式是行內「一句話：…」（_render.py），舊格式是「## 一句話摘要」段首句
     one = ""
-    m = re.search(r"一句話摘要\s*\n+([^\n]+)", summary)
+    m = re.search(r"^一句話[：:]\s*(.+)$", summary, re.M) or re.search(r"一句話摘要\s*\n+([^\n]+)", summary)
     if m:
         one = re.sub(r"[〔\[].*?[〕\]]", "", m.group(1)).strip()[:60]
     idx_path = os.path.join(harness, "vault", "會議索引.md")

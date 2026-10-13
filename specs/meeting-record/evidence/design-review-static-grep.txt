@@ -1,0 +1,74 @@
+# 設計審查靜態量測，HEAD cb417b4，前一輪審查基準 aff7c05
+
+## 1. 畫面相關原始碼自 aff7c05 起是否有改動（git diff --quiet，0＝沒改）
+0 tools/MeetingRecorder/Sources/Trigger/MenuBar.swift
+0 tools/MeetingRecorder/Sources/Trigger/HotKey.swift
+0 tools/MeetingRecorder/Sources/Trigger/QuickStart.swift
+0 tools/MeetingRecorder/Sources/Core/Trigger.swift
+0 tools/MeetingRecorder/Sources/Capture/Notifier.swift
+0 tools/MeetingRecorder/Resources/Info.plist
+0 tools/MeetingRecorder/Tests/TriggerTests.swift
+
+## 2. 反作弊：aff7c05..HEAD 的 Swift 測試檔刪除行數（numstat：新增 刪除 檔）
+48	1	tests/record/test_docs.py
+313	1	tests/record/test_static_rules.py
+143	0	tools/MeetingRecorder/Tests/PreflightTests.swift
+74	0	tools/MeetingRecorder/Tests/RecordsTests.swift
+77	0	tools/MeetingRecorder/Tests/SegmentsTests.swift
+
+## 3. 會流進 menu bar 狀態列（M3／M4／M7）的新字串
+234:/// finalizeCode != 0 → (.failed, 5, 前綴 + "收尾失敗（_record_finalize.py 回 <rc>），段落保留：可執行 meeting record finish <sessionPath>")；
+237:/// 否則 hadError → (.done, 5, "錄製中出過錯（見 record.log），已收尾；段落保留")；
+238:/// 否則 → (.done, 0, "已完成：<sessionPath>")。
+244:                                 message: prefix + "收尾失敗（_record_finalize.py 回 \(finalizeCode)），段落保留：可執行 meeting record finish \(sessionPath)")
+250:        return CompletionOutcome(phase: .done, code: 5, message: "錄製中出過錯（見 record.log），已收尾；段落保留")
+252:    return CompletionOutcome(phase: .done, code: 0, message: "已完成：\(sessionPath)")
+487:        warn(.segmentWriteFailed, "\(name) 寫檔失敗（開檔）：\(why)；檔案保留")
+506:                warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留")
+510:                warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留，已換新段繼續錄")
+514:            warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留")
+519:        forced = forced ?? (5, "段落連續寫檔失敗，已停止並收尾；已落盤段落保留")
+605:    /// SIGTERM、磁碟不足、串流中斷、段落連續寫檔失敗都走這裡（只在 q 上呼叫）。
+
+## 4. truncatedStatusTitle(limit: 40) 套在新字串上的結果（python 以字元計，與 Swift Character 計數在純 CJK＋ASCII 時相同）
+- M3 forced＋收尾失敗：全長 145 字 → 顯示「錄製失敗：段落連續寫檔失敗，已停止並收尾；已落盤段落保留；收尾失敗（_reco…」；含「finish」＝False
+- M3 只有收尾失敗：全長 121 字 → 顯示「錄製失敗：收尾失敗（_record_finalize.py 回 5），段落保留…」；含「finish」＝False
+- M3 磁碟不足停止＋收尾失敗(t6 第三輪 §4.5.5 實況)：全長 109 字 → 顯示「錄製失敗：磁碟可用空間低於 2 GB（剩 1.70 GB），已自動停止並收尾；…」；含「finish」＝False
+- M4 hadError：全長 34 字 → 顯示「錄製失敗：錄製中出過錯（見 record.log），已收尾；段落保留」；含「finish」＝False
+- M7 segment_write_failed：全長 62 字 → 顯示「告警：seg-0003.mov 寫檔失敗：<error.localizedDe…」；含「finish」＝False
+
+## 5. quick-start 路徑 preflight warn 的呈現位置
+tools/MeetingRecorder/Sources/Trigger/QuickStart.swift:15:        Notifier.post(title: "MeetingRecorder 沒有開錄",
+tools/MeetingRecorder/Sources/Trigger/QuickStart.swift:27:        Notifier.post(title: "MeetingRecorder 沒有開錄", body: body, log: log)
+tools/MeetingRecorder/Sources/Trigger/QuickStart.swift:44:        Notifier.post(title: "MeetingRecorder 開錄前檢查", body: "請對麥克風說一句話（約 3 秒）", log: log)
+tools/MeetingRecorder/Sources/Capture/Commands.swift:153:    let warnText = warns.map { "\(preflightItemNames[$0.item] ?? $0.item.rawValue)：\($0.message)" }.joined(separator: "\n")
+tools/MeetingRecorder/Sources/Capture/Commands.swift:159:            $0.message = warns.isEmpty ? "開錄前檢查通過" : "開錄前檢查通過（有提示）\n\(warnText)"
+tools/MeetingRecorder/Sources/Capture/Commands.swift:166:        $0.message = warnText
+tools/MeetingRecorder/Sources/Capture/Commands.swift:169:    if let notice = outcome.stageManagerNotice { log.line("⚠ \(notice)") }
+- Trigger.swift M9（錄製中）statusLine 只用經過時間＋場次名，不讀 message：
+84:    case .recording:          // M9
+85-        let name = (st.session as NSString).lastPathComponent
+86-        let elapsed = elapsedText(from: st.startedAt, now: now).map { " \($0)" } ?? ""
+87-        return model(.recording, "錄製中\(elapsed)・\(name)", start: false, stop: true, open: true)
+
+## 6. activation policy（main.swift 頂層新增；MenuBar 既有）與 LSUIElement
+tools/MeetingRecorder/Sources/main.swift:55:NSApp.setActivationPolicy(.accessory)
+tools/MeetingRecorder/Sources/Trigger/MenuBar.swift:153:    app.setActivationPolicy(.accessory)
+23:	<key>LSUIElement</key>
+24-	<true/>
+
+## 7. 前一輪 N-1、N-2 現況
+11:    private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+12:    private let startItem = NSMenuItem(title: "開始錄製（用上次的設定）", action: #selector(startRecording), keyEquivalent: "r")
+13:    private let stopItem = NSMenuItem(title: "停止錄製", action: #selector(stopRecording), keyEquivalent: "")
+14:    private let openItem = NSMenuItem(title: "打開場次資料夾", action: #selector(openSession), keyEquivalent: "")
+15:    private let quitItem = NSMenuItem(title: "結束 MeetingRecorder 選單", action: #selector(quitMenu), keyEquivalent: "q")
+38:        startItem.keyEquivalentModifierMask = [.control, .option, .command]
+39:        quitItem.keyEquivalentModifierMask = [.command]
+61:        if hotKey == nil {   // 被別的 app 佔用等：menu bar 照常運作，只記一行（spec §4.11.3）
+63:                .line("\(isoNow()) 快捷鍵 ⌃⌥⌘R 註冊失敗（可能被別的 app 佔用），請改用選單或 Shortcuts 捷徑")
+214:「結束 MeetingRecorder 選單」只關掉 menu bar，不會停止正在進行的錄製。錄製中出現的告警，收尾成功後就回到待機；開錄前檢查沒通過、錄製失敗或異常中止的告警狀態會一直留著，直到下次開始錄製（詳細內容在停止時的終端機輸出與 `manifest.json`）。
+
+## 8. 反作弊補充：上面 numstat 的兩行刪除內容（只有模組 docstring 改寫）
+-"""文件與實作一致性（D13；spec §4.8.3、§4.11.4、§4.12）：以 surface.py 比對，不另抄清單。"""
+-"""靜態規則：spec §4.1.5、§4.2.8、§4.9.4、§4.11.3、§4.11.5、§4.11.6、§4.11.8–§4.11.10、§4.1

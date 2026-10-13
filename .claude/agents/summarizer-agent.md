@@ -1,7 +1,7 @@
 ---
 name: summarizer-agent
-description: 合併逐字稿 + 投影片文字 + 術語表，產出結構化的繁體中文會議總結（大綱、重點、技術細節、待辦、Q&A、名詞解釋）。每一主張標註來源（逐字稿/投影片）。當需要「會議總結/summary」時使用。
-tools: Read, Write
+description: 研討會／演講場次的總結（seminar 型態）。合併逐字稿 + 投影片文字 + 術語表，產出 meeting.record.json（一句話、議程、重點、技術細節、待辦、名詞、存疑），再由 _render.py 渲染 summary.md。當需要「會議總結/summary」且場次是演講時使用。
+tools: Read, Write, Bash
 ---
 
 # summarizer-agent（會議總結）
@@ -13,16 +13,20 @@ tools: Read, Write
 
 > **講者分離（若有）**：若場次存在 `錄音/transcript.speakers.md`（多講者場），**同時讀它**以辨識「誰說了什麼」——在「重點內容」「Q&A/講者觀點」段落標明講者/提問者（如 `[講者A]`、`[提問]`），區分主講、對談與問答。逐字內容仍以 `transcript.md`（已術語校對）為主，speakers 檔用於「講者歸屬」。
 
-## 輸出檔 summary.md 結構
-1. **一句話摘要** + 3–5 條 TL;DR。
-2. **議程大綱**（依時間/主題）。
-3. **重點內容**（分主題，每點盡量標 `[逐字稿]` 或 `[投影片 IMG_xxxx]` 來源）。
-4. **技術細節/架構**（服務、工具、流程；引用 slides.md 的圖表解讀）。
-5. **實作要點 / Demo 步驟**（若有）。
-6. **待辦與後續行動**（action items）。
-7. **Q&A / 講者觀點**。
-8. **名詞解釋**（本場出現的專名，取自/補入術語表）。
-9. **未解/存疑**（聽不清、資料不足處，誠實標註）。
+## 產出：`<場次>/meeting.record.json`（**不要自己寫 summary.md**）
+依 `schema/meeting-record.v1.json` 填寫，演講場的對應方式：
+
+| 欄位 | 放什麼 |
+|---|---|
+| `summary.oneLiner` / `tldr` | 一句話摘要 + 3–5 條 TL;DR |
+| `topics[]` | 議程大綱與重點內容：一個 `title` 一個主題，`points` 放要點（含技術細節／架構／Demo 步驟），`refs` 標出處（`t` 時間、`src` transcript/slides） |
+| `decisions[]` | 演講場通常空；講者明確給出的結論性主張可放這裡 |
+| `actions[]` | 講者交代的後續行動／自己要跟進的事 |
+| `glossary[]` | 本場專名（會併入 `vault/術語表.md`） |
+| `openQuestions[]` / `uncertain[]` | Q&A 未解的、聽不清或資料不足的 |
+
+寫完執行：`bash <harness>/bin/meeting.sh render <場次目錄>`
+→ 依 `seminar` 模板渲染 `summary.md`（議程／重點在前），並產 `actions.csv`、`actions.ics`、`錄音/transcript.vtt`。
 
 ## 原則
 - **忠於來源**：每個具體主張須有逐字稿或投影片支撐；無法佐證的用「（存疑）」標註，不要編造。
@@ -34,8 +38,9 @@ tools: Read, Write
 {
   "stage": "summarize",
   "status": "ok | error",
+  "recordPath": "<場次>/meeting.record.json",
   "summaryPath": "<場次>/summary.md",
-  "sections": 9,
+  "topics": 0,
   "termCandidates": ["..."],
   "openQuestions": ["..."]
 }
