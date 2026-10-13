@@ -20,6 +20,12 @@ struct MenuBarModel: Equatable {
     var micMuted: Bool = false
     var canControl: Bool = false
     var levelLine: String = ""
+    // ---- R3（spec §3.20、§4.38.1、§4.38.2）：選單列外觀（U1）；state 與 symbolName 照 R2 不變 ----
+    var appearance: MenuBarAppearance = .idle
+    /// 暫停中（M6b）有告警類 warning 時為 true。
+    var alertBadge: Bool = false
+    /// VoiceOver 讀的口語計時（錄製中與暫停中，例「已錄 2 分 5 秒」）；其他列為 ""。
+    var spokenDuration: String = ""
 }
 
 extension MenuBarModel {
@@ -43,30 +49,34 @@ private func firstLine(_ s: String) -> String {
     s.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
 }
 
-/// 經過時間：mm:ss；≥ 60 分鐘時 h:mm:ss（第一輪：now − startedAt）。
-private func elapsedText(from startedAt: String, now: Date) -> String? {
+/// 經過秒數（第一輪：now − startedAt）。
+private func elapsedSeconds(from startedAt: String, now: Date) -> Int? {
     let f = ISO8601DateFormatter()
     guard let start = f.date(from: startedAt) else { return nil }
-    return clockText(seconds: Int(now.timeIntervalSince(start)))
+    return Int(now.timeIntervalSince(start))
 }
 
-/// spec §3.14.1 M9 的計時：有 recordingStartedAt 時＝clockText(recordedSeconds(...))；沒有時沿用第一輪的 now − startedAt。
-private func recordingTimerText(_ st: RecordStatus, now: Date) -> String? {
+/// spec §3.14.1 M9 的計時秒數：有 recordingStartedAt 時＝recordedSeconds(...)；沒有時沿用第一輪的 now − startedAt。
+/// 計時文字＝clockText(這個秒數)（mm:ss；≥ 60 分鐘時 h:mm:ss）；R3 的 spokenDuration 用同一個秒數。
+private func recordingTimerSeconds(_ st: RecordStatus, now: Date) -> Int? {
     if let rsa = st.recordingStartedAt {
         return recordedSeconds(recordingStartedAt: rsa, pausedSeconds: st.pausedSeconds ?? 0,
-                               pausedAt: st.pausedAt, now: now).map { clockText(seconds: $0) }
+                               pausedAt: st.pausedAt, now: now)
     }
-    return elapsedText(from: st.startedAt, now: now)
+    return elapsedSeconds(from: st.startedAt, now: now)
 }
 
 func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarModel {
-    func model(_ state: MenuBarState, _ line: String, start: Bool, stop: Bool, open: Bool) -> MenuBarModel {
-        MenuBarModel(state: state, symbolName: symbol(for: state), statusLine: line,
-                     canStart: start, canStop: stop, canOpenSession: open, detailText: line)
+    func model(_ state: MenuBarState, _ line: String, start: Bool, stop: Bool, open: Bool,
+               appearance: MenuBarAppearance) -> MenuBarModel {
+        var m = MenuBarModel(state: state, symbolName: symbol(for: state), statusLine: line,
+                             canStart: start, canStop: stop, canOpenSession: open, detailText: line)
+        m.appearance = appearance
+        return m
     }
     // M1
     guard let st = status else {
-        return model(.idle, "MeetingRecorder 待機中", start: true, stop: false, open: false)
+        return model(.idle, "MeetingRecorder 待機中", start: true, stop: false, open: false, appearance: .idle)
     }
     let detail = firstLine(st.message)
     let suffix = detail.isEmpty ? "" : "：\(detail)"
@@ -76,7 +86,7 @@ func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarMo
     func failed(_ head: String, open: Bool) -> MenuBarModel {
         var line = "\(head)\(suffix)"
         if st.message.contains("收尾失敗") { line = "\(head)：收尾失敗，段落保留（滑過看補救方法）" }
-        var m = model(.warning, line, start: true, stop: false, open: open)
+        var m = model(.warning, line, start: true, stop: false, open: open, appearance: .failed)
         m.detailText = "\(head)\(fullSuffix)"
         return m
     }
@@ -88,22 +98,24 @@ func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarMo
     case .done where st.code != 0:   // M4
         return failed("錄製失敗", open: true)
     case .done:               // M5
-        return model(.idle, "MeetingRecorder 待機中", start: true, stop: false, open: true)
+        return model(.idle, "MeetingRecorder 待機中", start: true, stop: false, open: true, appearance: .idle)
     case .preflight, .recording, .stopping, .finalizing:
         break
     }
     // 進行中
     if !pidAlive {            // M6
         return model(.warning, "上一場錄製異常中止，請執行 meeting record finish 收尾",
-                     start: true, stop: false, open: true)
+                     start: true, stop: false, open: true, appearance: .failed)
     }
     let alerts = st.warnings.filter { $0.kind.isAlert }
     if st.phase == .stopping || st.phase == .finalizing, !alerts.isEmpty {   // M6a（D17）：告警數不去重
-        return model(.recording, "收尾中…（告警 \(alerts.count) 則）", start: false, stop: false, open: true)
+        return model(.recording, "收尾中…（告警 \(alerts.count) 則）", start: false, stop: false, open: true,
+                     appearance: .finalizing)
     }
     // 以下 M6b、M7（recording）、M9 是「錄製中且 pid 活著」的列，要帶 R2 欄位（§3.14.1）
     let name = (st.session as NSString).lastPathComponent
-    let timer = st.phase == .recording ? (recordingTimerText(st, now: now) ?? "") : ""
+    let timerSeconds = st.phase == .recording ? recordingTimerSeconds(st, now: now) : nil
+    let timer = timerSeconds.map { clockText(seconds: $0) } ?? ""
     let isPaused = st.paused ?? false
     let isMuted = st.micMuted ?? false
     func withR2(_ m: MenuBarModel) -> MenuBarModel {
@@ -114,25 +126,30 @@ func menuBarModel(status: RecordStatus?, pidAlive: Bool, now: Date) -> MenuBarMo
         m.micMuted = isMuted
         m.canControl = (st.controlVersion ?? 0) >= 1
         m.levelLine = levelIndicatorLine(recent: st.recentLevels, micMuted: isMuted, paused: isPaused, thresholdDBFS: -60)
+        m.spokenDuration = timerSeconds.map { spokenDuration(seconds: $0) } ?? ""
         return m
     }
     if st.phase == .recording, isPaused {   // M6b：排在 M7 前，舊告警不得蓋掉暫停狀態
         let t = timer.isEmpty ? "" : " \(timer)"
         let warn = alerts.isEmpty ? "" : "（告警 \(alerts.count) 則）"
-        return withR2(model(.paused, "已暫停\(t)・\(name)\(warn)", start: false, stop: true, open: true))
+        var m = model(.paused, "已暫停\(t)・\(name)\(warn)", start: false, stop: true, open: true, appearance: .paused)
+        m.alertBadge = !alerts.isEmpty
+        return withR2(m)
     }
     if let latest = alerts.max(by: { $0.t < $1.t }) {   // M7
-        return withR2(model(.warning, "告警：\(latest.message)", start: false, stop: st.phase == .recording, open: true))
+        return withR2(model(.warning, "告警：\(latest.message)", start: false, stop: st.phase == .recording, open: true,
+                            appearance: .recordingAlert))
     }
     switch st.phase {
     case .preflight:          // M8
-        return model(.recording, "開錄前檢查中…", start: false, stop: false, open: true)
+        return model(.recording, "開錄前檢查中…", start: false, stop: false, open: true, appearance: .preparing)
     case .recording:          // M9
         let t = timer.isEmpty ? "" : " \(timer)"
         let muted = isMuted ? "（麥克風靜音中）" : ""
-        return withR2(model(.recording, "錄製中\(t)\(muted)・\(name)", start: false, stop: true, open: true))
+        return withR2(model(.recording, "錄製中\(t)\(muted)・\(name)", start: false, stop: true, open: true,
+                            appearance: isMuted ? .recordingMuted : .recording))
     default:                  // M10：stopping、finalizing
-        return model(.recording, "收尾中…", start: false, stop: false, open: true)
+        return model(.recording, "收尾中…", start: false, stop: false, open: true, appearance: .finalizing)
     }
 }
 

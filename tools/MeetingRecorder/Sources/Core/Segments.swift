@@ -63,8 +63,9 @@ func shouldEmitVideoHeartbeat(samplePTS: Double, lastVideoPTS: Double?, hasLastF
 // 時間一律是 sample PTS 秒數（與 Capture 的 maxEnd 同一把尺）。
 // 呼叫端（Capture）的規則：route ∈ {prevOnly, drop} 時不更新 maxEnd；route ∈ {normal, resumeBoundary} 照第一輪更新。
 
-/// 開新段的原因。自 Capture/RecordingSession.swift 的 private enum 搬來並加 resume。
-enum SwitchReason: String, CaseIterable { case first, periodic, formatChange, writerFailure, resume }
+/// 開新段的原因。自 Capture/RecordingSession.swift 的 private enum 搬來並加 resume；
+/// R3（spec §3.20、§4.36.9、§6 第 127 條）在 resume 之後加 outputDeviceChange。
+enum SwitchReason: String, CaseIterable { case first, periodic, formatChange, writerFailure, resume, outputDeviceChange }
 
 struct PauseGate: Equatable {
     var paused: Bool = false            // 暫停中

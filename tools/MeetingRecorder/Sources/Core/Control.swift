@@ -408,10 +408,10 @@ func loginItemDisplay(_ state: LoginItemState) -> LoginItemDisplay {
 
 // MARK: - 自動前處理與完成通知（spec §3.13、§4.23）
 
-/// 全部成立時回 status.session，否則 nil。
+/// 全部成立時回 status.session，否則 nil。R3（spec §4.42.5）：discarded == true 的結果不觸發。
 func shouldAutoPrep(autoPrep: Bool, status: RecordStatus?, seenInProgressRunIds: Set<String>,
                     lastAutoPrepRunId: String?) -> String? {
-    guard autoPrep, let st = status, st.phase == .done, st.code == 0,
+    guard autoPrep, let st = status, st.phase == .done, st.code == 0, st.discarded != true,
           seenInProgressRunIds.contains(st.runId), st.runId != lastAutoPrepRunId, !st.session.isEmpty else { return nil }
     return st.session
 }
