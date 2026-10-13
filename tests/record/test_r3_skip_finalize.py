@@ -74,7 +74,11 @@ class SkipFinalizeStatic(unittest.TestCase):
         self.assertNotIn('"--harness"', args, "試錄不得帶 --harness")
 
     def test_bin_never_passes_flag(self):
-        hits = [rel(p) for p in sorted(BIN.rglob("*")) if p.is_file() and FLAG.encode() in p.read_bytes()]
+        # 只掃 bin/ 的原始檔：__pycache__／*.pyc 內嵌原始檔的絕對路徑（worktree 目錄名可能含 skip-finalize），不算
+        files = [p for p in sorted(BIN.rglob("*"))
+                 if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"]
+        self.assertTrue(files, "bin/ 底下沒有任何檔案")
+        hits = [rel(p) for p in files if FLAG.encode() in p.read_bytes()]
         self.assertEqual(hits, [], "bin/ 底下不得有檔案含 skip-finalize（只給 app 內部使用）")
 
     def test_flag_not_documented(self):
