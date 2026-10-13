@@ -105,11 +105,15 @@ meeting ingest "<資料夾>" --dry-run  # 先看看會怎麼分
 | `meeting doctor` | 檢查工具鏈（含 ASR 模型與 Neural Engine 狀態） |
 | `meeting help` / `meeting version` | 完整說明／版本（git commit） |
 | `meeting record …` | 錄下會議視窗與雙路音訊，錄製中可暫停、麥克風靜音、加標記（12 種寫法見下方〈錄製會議〉） |
+| `meeting search <根> <關鍵字>` | 跨場次搜尋 summary、逐字稿與 `meeting.record.json`（大小寫不分、照字面；有結果 0、沒有 1） |
+| `meeting sync [off\|reported\|calibrated]` | 看／設定收尾時系統聲音的影音延遲補償（預設 off，下一次收尾起生效） |
+| `meeting reminders <場次> --list <名稱> [--dry-run]` | 把交辦寫進 macOS 提醒事項的指定清單（重跑會去重；清單開 iCloud 同步時內容會離開本機） |
 
 **相容性**：`prep` / `notes` / `status` / `doctor` / `diarize` / `summarize-local` / `local` 的
 用法與語意完全沒變，舊腳本照跑；舊標記檔 `.meeting`（＝internal）與 `.diarize` 也仍然有效。
 參數錯誤一律給明確訊息與非 0 結束碼（缺參數/路徑不存在＝2、找不到場次＝3），方便被其他腳本呼叫。
 `meeting record` 另外用到結束碼 4（開錄前檢查的 hard 項失敗，例如權限）與 5（錄製或收尾出錯，已落盤段落保留）。
+`search`、`sync`、`reminders` 是 `meeting` 頂層的保留字：根目錄剛好叫這些名字時寫 `meeting ./search` 這種 `./` 寫法。
 
 ## 用法（兩步）
 ```bash
@@ -176,6 +180,16 @@ meeting record mark             # 加一個「標記 N」，收尾後在 錄音/
 **錄製中控制**：暫停 ⌃⌥⌘P（暫停的時段在成品裡剪掉）、麥克風靜音 ⌃⌥⌘M（只靜音麥克風，系統聲音照錄）、加標記 ⌃⌥⌘B（收尾後在 `錄音/markers.json`，時間是扣掉暫停後的成品時間），開始錄製是 ⌃⌥⌘R；快捷鍵要 menu bar 開著才有，也可以用上面的終端機寫法或 menu bar 選單。舊版錄製器開的錄製不能暫停／靜音／標記（回 3），重建 app 後下一場才有。
 menu bar 的「錄這個視窗」「存到」、偏好設定（登入時自動開啟、停止後自動跑前處理，都預設關）、完成通知的「在 Finder 顯示」，
 詳見 [`.claude/skills/meeting-record/SKILL.md`](.claude/skills/meeting-record/SKILL.md) 的〈3. 錄製中：暫停、麥克風靜音、標記〉與〈8. 快捷鍵與 menu bar〉。
+
+**R3 的錄製行為**（細節見 [`.claude/skills/meeting-record/SKILL.md`](.claude/skills/meeting-record/SKILL.md)）：
+
+- **同一時間只能有一場錄製**：錄製器持有 `~/.meeting-harness/record.lock` 到結束；鎖被持有時開錄回 2、stderr 說「已有錄製在跑」，不啟動錄製器、不碰正在錄的狀態檔；錄製中跑 preflight 也回 2（「錄製中」），不跑檢查。
+- **stop 只停錄製器**：送訊號前確認鎖被持有、`record.pid` 的 pid 還活著（死掉的順手清掉）、與狀態檔的 pid 相同、程序名稱是 MeetingRecorder；任一不成立回 3、不送訊號。
+- **收尾鎖與逾時**：同一場次同時只能有一個收尾（另一個回 5「這個場次正在收尾」）；每個 ffmpeg／ffprobe 步驟都有逾時，錄製器跑的收尾另有總期限（逾時或在選單按「取消收尾」都回 5、段落保留，再用 finish 收）。讀不到的段落搬到 `錄音/tracks/unreadable/`，不刪。
+- **捨棄這次錄製**：只在 menu bar 的「捨棄這次錄製…」，先確認、預設鍵是「繼續錄製」；確認後不收尾，把 `錄音/` 移到垃圾桶（可放回原處）。CLI 沒有捨棄的寫法，`record` 後面寫 `discard` 會被當成根目錄名稱。
+- **menu bar**：選單列是錄製膠囊（8 種外觀）、選單依待機／錄製中／收尾中／需要處理整份換掉；錄製小窗（HUD）貼在螢幕邊緣、不會被螢幕分享擷取；設定改成 7 個分頁、第一次開有 5 步引導。
+- **會議偵測**：會議 app 開始用麥克風時通知問你要不要錄，只提示、不自動開錄，可在設定關掉；只讀「輸入裝置是否在用」，不打開麥克風。
+- **頂層指令**：`meeting search`（跨場次搜尋）、`meeting sync`（影音延遲補償 off／reported／calibrated，預設 off）、`meeting reminders`（交辦寫進提醒事項，先用 `--dry-run` 看內容；清單開了 iCloud 同步時，內容會離開本機），見上方〈指令一覽〉與 SKILL.md〈10.〉。
 
 > **會議視窗標記**：清單裡 ★ 的列是會議視窗（Teams、Zoom 等原生 app，或作用中分頁是會議網址的 Chrome 視窗）。
 > Chrome 的標記要允許 Apple Events（選用，不授權也能錄），細節、preflight 各項怎麼救、Shortcuts 快捷鍵與 menu bar 見
