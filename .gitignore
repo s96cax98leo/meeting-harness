@@ -9,7 +9,13 @@ transcript.raw.md
 transcript.segments.json
 diarization.json
 transcript.speakers.md
+transcript.vtt
 .audio16k.wav
+.combined.wav
+meeting.record.json
+actions.csv
+actions.ics
+.cleanup-report.json
 
 # 系統/暫存
 .DS_Store
@@ -21,3 +27,27 @@ scratchpad/
 
 # JetBrains IDE
 .idea/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# === AgentWorkFlow run 紀錄 ===
+# 每次執行的信封與證據可能含客戶會議內容，不進版控；目錄結構說明（README.md）保留。
+/_tpm/runs/*
+!/_tpm/runs/README.md
+/_tpm/briefs/*
+!/_tpm/briefs/.gitkeep
+
+# SDLC 的 epic／子任務 worktree
+/.worktrees/
+
+# === 錄製器（meeting record）的媒體——防手滑的第二道防線 ===
+# 錄製段落與影片只放會議資料目錄，不進 repo。
+tracks/
+影片/
+*.mov
+*.wav
+*.m4a
+*.mp4
+*.m4v
+*.mp3

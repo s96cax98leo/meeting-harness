@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>MeetingRecorder</string>
+	<key>CFBundleDisplayName</key>
+	<string>MeetingRecorder</string>
+	<key>CFBundleExecutable</key>
+	<string>MeetingRecorder</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.meetingharness.recorder</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+
+	<!-- 不要 Dock 圖示：CLI 子指令與 menu bar 常駐實例都不需要 -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<!-- 麥克風：SCStreamConfiguration.captureMicrophone 會用到 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>錄製會議時收你的麥克風，與遠端與會者的聲音一起存成會議錄音。只留在這台電腦。</string>
+
+	<!-- 系統聲音：走 Core Audio process tap 時才需要；本方案用 ScreenCaptureKit 不需要，
+	     但先填好，日後若切換錄音路線不會踩到「沒有 usage description 就靜默拒絕」的坑 -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>錄製會議時收電腦播放的聲音（遠端與會者的語音）。只留在這台電腦。</string>
+
+	<!-- 螢幕錄製：這個鍵在官方文件上沒有正式定義（螢幕錄製沒有像麥克風那樣的
+	     usage-description 流程），填了無害，但不要依賴它顯示自訂文案 -->
+	<!-- Apple Events：唯讀查 Google Chrome 各視窗目前分頁的網址，用來在視窗清單標出會議頁（spec §3.8.4；D16）。
+	     hardened runtime 下另需 com.apple.security.automation.apple-events entitlement（MeetingRecorder.entitlements） -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>讀取 Google Chrome 各視窗目前分頁的網址，用來在錄製視窗清單中標出會議頁（例如 M+ Meet、Google Meet）。只讀網址、不操作瀏覽器，也不會傳出這台電腦。</string>
+
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>錄製你指定的會議視窗畫面，用來做投影片與畫面的會議紀錄。只留在這台電腦。</string>
+</dict>
+</plist>

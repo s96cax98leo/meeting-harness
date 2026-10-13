@@ -23,7 +23,7 @@ meeting.json 範例（欄位都可省略）：
   workshop  工作坊（多組、講者多且雜）      3–12、不折疊
   interview 訪談／面談                   鎖 2 人
 """
-import sys, os, json
+import sys, os, json, shlex
 
 # min/max_spk 是給 pyannote 的講者數範圍；fixed 是「真的只可能是這個數字」才填。
 #
@@ -45,6 +45,17 @@ DEFAULT_TYPE = "seminar"
 
 def meeting_json_path(sess):
     return os.path.join(sess, "錄音", "meeting.json")
+
+def harness_config(section):
+    """讀 repo 根的 config.json 的某一段（讀不到回 {}）；環境變數仍優先於這裡的值。"""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = json.load(f).get(section)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
 
 def load(sess):
     """回傳 (meta, profile)。meta 是 meeting.json 內容（含相容推斷的 type）。"""
@@ -71,6 +82,9 @@ def load(sess):
     # 舊 .diarize 標記：強制開分離（型態不變）
     if os.path.exists(os.path.join(rec, ".diarize")):
         prof["diarize"] = 1
+    # config.json 的 diarize.enabled=false：整個關掉（.diarize 標記也不開）；MH_DIARIZE=1 仍可單次強制開
+    if harness_config("diarize").get("enabled") is False:
+        prof["diarize"] = 0
     if os.environ.get("MH_DIARIZE") == "1":
         prof["diarize"] = 1
     # 出席名單只當「上限提示」：把 max 收到名單人數 +1（容許名單外的插話），min 不動。
@@ -108,18 +122,19 @@ def main():
     if "--json" in args:
         print(json.dumps({"meta": meta, "profile": prof}, ensure_ascii=False, indent=2))
         return
-    # 預設 shell 形式，供 bash `eval` 使用
+    # 預設 shell 形式，供 bash `eval` 使用：每個值一律 shlex.quote（meeting.json 是可編輯的，
+    # language／llm 等欄位不得注入指令，ultrareview）
     def sh(v):
-        return "" if v is None else str(v)
-    print(f'MH_TYPE="{meta["type"]}"')
-    print(f'MH_TEMPLATE="{prof["template"]}"')
-    print(f'MH_DO_DIARIZE="{prof["diarize"]}"')
-    print(f'MH_NUM_SPEAKERS="{sh(prof["num_spk"])}"')
-    print(f'MH_MIN_SPEAKERS="{sh(prof["min_spk"])}"')
-    print(f'MH_MAX_SPEAKERS="{sh(prof["max_spk"])}"')
-    print(f'MH_MIN_SPEAKER_SEC="{os.environ.get("MH_MIN_SPEAKER_SEC") or prof["min_speaker_sec"]}"')
-    print(f'MH_LANG="{prof["language"]}"')
-    print(f'MH_LLM_BACKEND="{prof["llm"]}"')
+        return shlex.quote("" if v is None else str(v))
+    print(f'MH_TYPE={sh(meta["type"])}')
+    print(f'MH_TEMPLATE={sh(prof["template"])}')
+    print(f'MH_DO_DIARIZE={sh(prof["diarize"])}')
+    print(f'MH_NUM_SPEAKERS={sh(prof["num_spk"])}')
+    print(f'MH_MIN_SPEAKERS={sh(prof["min_spk"])}')
+    print(f'MH_MAX_SPEAKERS={sh(prof["max_spk"])}')
+    print(f'MH_MIN_SPEAKER_SEC={sh(os.environ.get("MH_MIN_SPEAKER_SEC") or prof["min_speaker_sec"])}')
+    print(f'MH_LANG={sh(prof["language"])}')
+    print(f'MH_LLM_BACKEND={sh(prof["llm"])}')
 
 if __name__ == "__main__":
     main()

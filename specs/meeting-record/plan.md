@@ -470,3 +470,127 @@
 3. **§4.5.5 錄製中磁碟不足（L）**：同 t6 第二輪 7 的做法（35 GB sparse image 為根、開錄後填到 < 2 GB）；60 秒內應自動停止、`record.status.json.code` 5、訊息含磁碟原因；收尾後卸載 image。
 4. **§4.2.12 幕前調度提醒（I）**：需要開啟幕前調度＝改使用者系統設定，**主 session 與 agent 不得代為切換**；留給使用者醒來後自行開啟、跑一次 `meeting record preflight` 看第 12 項 warn、再自行關閉。未做前以 Swift 單元測試與靜態檢查為準，`progress.md` 註明「人工未驗」。
 5. **既有使用者場次的重新收尾**（缺陷 J 影響已出的影片與 wav，spec §7 疑慮 30）：會動到使用者的輸出檔，**不自動做**，列為給使用者的選項。
+
+---
+
+## 9. R2 第二輪（2026-10-12）：靜音、暫停、選單選視窗與位置、計時、標記、偏好設定
+
+- 上游：`intent.md`〈R2 第二輪功能〉〈R2 閘門 1 使用者決定〉（已核准）、`design.md`〈R2 第二輪設計〉、`spec.md` 檔尾〈R2 第二輪〉（§3.9–§3.14、§4.16–§4.25、R2-§6 第 77–97 條、R2-§7 疑慮 35–42）、`adr/adr-r2-*.md` 四則。**本節以上的第一輪計畫一字不改。**
+- 第一輪基準點：本機 tag `meeting-record-r1-baseline`（＝`f084765`）。R2 的 commit 全部疊在它之後，第一輪可單獨核准、單獨拆 PR（R2-Q1 使用者決定）；R2 的拆包規劃見 §9.5（閘門 2 修正輪補寫），不改 §5。
+- **閘門 2 修正輪（2026-10-12）**：依使用者在閘門 2 的四項決定與 skeptic 8 條問題修正本節：§9.1 的「對應 spec」欄逐條列出（不再用範圍），並與派工 JSON 的 `story_ids` 逐條相同；新增驗收 §4.16.11、§4.17.7、§4.17.8、§4.18.8–§4.18.12 分到 r2a、r2b、r2d、r2e、r2g；新增 §9.5 拆 PR 規劃。使用者決定 4：複查沒有新問題就視為閘門 2 核准、直接進 build。
+- R2 各段的紀錄與核准以 `r2-` 前綴的 stage 鍵記在同一個 run 目錄（`r2-design`、`r2-build`、`r2-test`；R2-Q2 使用者決定）。
+- 子任務 id（`r2a`…`r2g`、`r2t7`）只是本節的短代號，**不是任務編號**。分支 `feature/meeting-record--r2a` …，各開 worktree，從本輪 design commit 之後的 `feature/meeting-record` 開出。
+- 約束照舊：不 push、不改 `main`、不改寫歷史、不刪 tag；不得啟動 `~/Applications/MeetingRecorder.app`、不得覆蓋它、不得觸發 TCC 授權框或改使用者系統設定（建置一律 `MH_RECORDER_DEST=$(mktemp -d)`）；public repo 不寫真實名稱，範例用「[Stand-up] 範例專案」；不讀 run 目錄的 `client-names.txt` 內容（只以 `MH_CLIENT_NAMES_FILE` 傳路徑給測試）。
+- 所有子任務 commit 前跑 verify：`bash bin/_lint.sh && bash bin/meeting.sh doctor`；署名行 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`；`progress.md` 由主 session 維護。
+
+### 9.1 子任務
+
+| id | kind | 標題 | 擁有（只能改） | 相依 | 對應 spec |
+|---|---|---|---|---|---|
+| r2a | test | Python 側：R2 紅燈測試、`e2e_check.py` 的暫停／靜音判準與自我測試、替身、§6 第 77 條核准的測試預期修改 | `tests/record/` | — | §4.16.4、§4.16.5、§4.16.6、§4.16.7、§4.16.8、§4.16.9、§4.16.11、§4.17.2、§4.17.5、§4.17.6、§4.17.8、§4.18.2、§4.18.3、§4.18.4、§4.18.5、§4.18.6、§4.18.7、§4.18.11、§4.18.12、§4.19.2、§4.19.3、§4.19.4、§4.20.4、§4.20.5、§4.20.6、§4.20.8、§4.21.3、§4.21.4、§4.21.5、§4.22.2、§4.22.4、§4.22.5、§4.23.2、§4.23.3、§4.23.4、§4.24.1、§4.24.2、§4.24.3、§4.24.4、R2-§6 第 77 條 |
+| r2b | test | Swift 側：R2 Core 紅燈測試 | `tools/MeetingRecorder/Tests/` | — | §3.14、§3.14.1、§4.16.1、§4.16.2、§4.16.3、§4.16.10、§4.17.1、§4.17.3、§4.17.4、§4.17.7、§4.18.1、§4.18.2、§4.18.3、§4.18.8、§4.18.9、§4.18.10、§4.19.1、§4.20.1、§4.20.2、§4.20.3、§4.20.5、§4.20.7、§4.21.1、§4.21.2、§4.22.1、§4.22.3、§4.23.1 |
+| r2c | doc | 文件先寫：SKILL.md、README 的 R2 說明與 12 列 `record-cli` 區塊 | `.claude/skills/meeting-record/SKILL.md`、`README.md` | r2a | §2.4.5、§4.24.2、§4.24.3、§4.24.4 |
+| r2d | code | Swift `Core/`：`Control.swift` 新增；`Records`、`Detectors`、`AudioLevel`、`Trigger`、`Segments` 增補 | `tools/MeetingRecorder/Sources/Core/` | r2b | §3.14、§3.14.1、§4.16.1、§4.16.2、§4.16.3、§4.16.10、§4.17.1、§4.17.3、§4.17.4、§4.17.7、§4.18.1、§4.18.8、§4.18.9、§4.18.10、§4.19.1、§4.20.1、§4.20.2、§4.20.3、§4.20.5、§4.20.7、§4.21.1、§4.21.2、§4.22.1、§4.22.3、§4.23.1 |
+| r2e | code | 錄製端：SIGUSR1、控制檔重設、暫停閘門、mic 歸零、偵測器重設、標記、事件、狀態欄位、完成通知識別碼 | `tools/MeetingRecorder/Sources/Capture/` | r2a、r2b、r2d | §4.16.4、§4.17.2、§4.18.2、§4.18.3、§4.19.2、§4.23.3 |
+| r2f | code | 觸發層：menu bar（變寬計時、收音列、新選單、子選單、控制、完成通知、自動前處理）、HotKey 多組、quick-start `--window`／`--root`、偏好設定與登入項目、無參數啟動 | `tools/MeetingRecorder/Sources/Trigger/`、`tools/MeetingRecorder/Sources/main.swift`、`tools/MeetingRecorder/Resources/`、`tools/MeetingRecorder/build.sh` | r2a、r2b、r2c、r2d | §4.16.4、§4.20.4、§4.20.5、§4.20.6、§4.20.7、§4.20.8、§4.21.3、§4.21.4、§4.21.5、§4.22.2、§4.22.4、§4.22.5、§4.23.2、§4.23.3、§4.23.4 |
+| r2g | code | CLI 與 finalize：`record.sh` 五個子指令、`status`／`stop` 摘要、help；`meeting.sh` usage；finalize 的 `gapStats` 扣暫停與 `markers.json` 複製 | `bin/record.sh`、`bin/meeting.sh`、`bin/_record_finalize.py` | r2a、r2c | R2-§2.2、§4.16.5、§4.16.6、§4.16.7、§4.16.8、§4.16.9、§4.16.11、§4.18.4、§4.19.3、§4.24.2、§4.24.5 |
+| r2t7 | check | 實機 t7（使用者在場）＋設計審查截圖 | （無檔案；結果與截圖寫 run 目錄） | r2e、r2f、r2g | §4.22.6、§4.25.1、§4.25.2、§4.25.3、§4.25.4、§4.25.5 |
+
+「對應 spec」欄＝派工 JSON 的 `story_ids`（每項前加「spec 」，逐條相同、不用範圍）。r2b 收所有「測試」欄有**新增** `swift:` 測試的節（`swift:TriggerTests.swift` 這類既有、不改的不算）；r2a 收所有「測試」欄有 Python 測試（新增或 §6 第 77 條修改）的節；同一節兩邊都有就兩邊都列。只用既有、不改的測試驗收的節，列給完成條件要跑它的子任務：§4.24.4（客戶名稱守門）列 r2a、r2c，§4.24.5（lint 檔數與 verify）列 r2g。
+
+**分層**（`sdlc-build.js` 依相依分層）：Red：r2a＋r2b（平行）→ 第 1 層：r2c＋r2d（平行）→ 第 2 層：r2e＋r2f＋r2g（平行）→（test 段）r2t7。
+
+**拆分理由**（數量最小化）：
+- **r2a／r2b 分開**：兩種語言、兩套執行器，彼此不讀對方的檔；`kind=test` 一律進 Red 層。`e2e_check.py` 的判準修改與自我測試同屬 `tests/record/`（第一輪 p1 先例），由 r2a 一併做，且它在 Red 層就要綠。
+- **r2c 文件先寫（D13 先例）**：CLI 表面 12 寫法的區塊與 R2 說明是 r2f、r2g 的契約；r2c 只相依 r2a（`test_docs.py`、`test_r2_docs.py` 要先存在），不讀 Swift 測試。
+- **Core（r2d）獨立一層**：`Capture/` 與 `Trigger/` 都要用 §3.14 的新名稱；先把 Core 合進整合分支，r2e、r2f 才能各自在 worktree 編得過，並且平行。Core 單獨可驗（`Tests/run.sh` 只編 `Core/` 與測試）。不把 Core 併進 r2e 或 r2f：兩者都要用，併進任一個都會讓另一個等。
+- **Capture（r2e）與 Trigger（r2f）分開、平行**：兩者只經 Core 名稱、狀態檔與控制檔相接（契約在 spec §3.9–§3.14）；檔案不重疊。`main.swift` 歸 r2f（SIGUSR1 忽略、`launchMode` 都是 dispatch 的事）；`Notifier.swift` 歸 r2e（錄製實例的完成通知識別碼），r2f 的可點通知在 `Trigger/` 內自建，不改 `Notifier.post` 的既有簽名。
+- **偏好設定不另拆**：偏好設定視窗、登入項目、自動前處理開關都由 menu bar 程序開啟與讀寫 `menubar.prefs.json`，與 `MenuBar.swift` 的接線分不開；拆出去會讓兩個平行子任務互相等對方的型別才編得過。
+- **r2g 一個子任務**：`record.sh`、`meeting.sh`、`_record_finalize.py` 都是 shell／Python、測試都在 r2a，與 Swift 只經檔案相接；三檔各自小幅修改，拆開沒有收益。
+- **同層靜態檢查不跨界**（第一輪 §1 的教訓）：`test_r2_static.py` 的函式以 `test_capture_`（只掃 `Sources/Capture/`，r2e 轉綠）、`test_trigger_`（只掃 `Sources/Trigger/`，r2f 轉綠）、`test_main_`（只掃 `Sources/main.swift`，r2f 轉綠）開頭；`test_defaults_single_writer` 是守門檢查（掃全部 `Sources/`，Red 時就綠，任何子任務弄紅它都不得合併）。
+
+### 9.2 各子任務要點
+
+#### r2a 要點（tests/record/）
+- **新增測試檔**（函式名照 spec §4.16–§4.24 的「測試」欄，逐字）：`test_r2_cli.py`、`test_r2_finalize.py`、`test_r2_e2e_check.py`、`test_r2_static.py`、`test_r2_docs.py`。全部在沒有 `record/` 的暫存工作目錄、`MH_RECORD_HOME`＝暫存目錄、`MH_RECORD_OPEN`＝替身下跑；不啟動真的 app、不產生任何媒體檔到 repo。
+- **替身**：`fakes/fake_recorder.sh` 加 `FAKE_CONTROL`：`1`＝狀態檔含 `controlVersion` 1 與 `recordingStartedAt`，`trap` SIGUSR1 → 讀 `record.control.json`（`runId` 相符才採信）→ 依 `paused`／`micMuted`／`markerSeq` 更新狀態檔的 `paused`／`pausedAt`／`micMuted`／`markers`，並把收到 SIGUSR1 的次數記進 `<home>/fake_usr1.count`；`ignore`＝`trap '' USR1`、不更新；未設定＝第一輪行為（不裝 SIGUSR1 處理）。`FAKE_PHASE` 可指定狀態檔的 `phase`（preflight／stopping／finalizing）。既有情境的行為一字不改。
+- **閘門 2 修正輪新增的其他 Python 測試**：`test_r2_cli.py::test_stop_summary_pause_markers`（§4.16.11；替身最終狀態要能帶 `markers`，場次 `tracks/record.meta.json` 由測試寫 `pauseEvents`）；`test_r2_static.py::test_capture_uses_core_pause_functions`（§4.18.2、§4.18.3 的實作形狀：`Sources/Capture/` 不得宣告 `enum SwitchReason`、`RecordingSession.swift` 含 §4.18.2／§4.18.3 列的 Core 名稱）；`test_capture_pause_gate_before_maxend` 改為檢查 `pauseRoute(` 在 `maxEnd =` 之前。
+- **`EXIT_CODE_CASES`**（`test_record_sh.py`）：新增 10 筆（五個寫法 × 0／3）；0 用 `setup = "running_controllable"`（以 `FAKE_CONTROL=1` 啟動替身），3 用沒有錄製在跑。既有筆不動。
+- **`e2e_check.py`**：依 spec §4.17.5、§4.17.6、§4.18.5–4.18.7、§4.19.4 修改與新增（`--pause-mute` 選項與 `pause_events`、`pause_cut`、`mic_mute_zero`、`mute_system_kept`、`no_false_silence`、`markers` 六項；`gap`、`segment_cadence`、`stop_tail`、`device_switch`、`hfp` 的暫停／靜音排除）；新增一個公開函式 `record_to_output(t, session)` 供混音軌量測換算（語意同 Core `outputTime`）。**閘門 2 修正輪**：`--pause-mute` 再加 `mute_timing`（§4.17.8）、`no_false_black`（§4.18.11）、`event_output_t`（§4.18.12），共九項，各有自我測試（`test_mute_timing_check`、`test_no_false_black_check`、`test_event_output_t_check`）。合成場次由 `_media.py` 現場產生（含麥克風軌數位 0 的段落、30 秒暫停邊界、`pauseEvents`、`micMuteEvents`、`markers.json`）。
+- **§6 第 77 條核准的修改**（只改列出的斷言與常數，commit 內文寫「spec R2-§6 第 77 條，使用者核准的測試預期修改」）：`surface.py` 的 `SURFACE`；`test_surface_parsers.py:60-63`（§2.4.3 範例由該檔直接讀 spec，不用改）；`test_cli_dispatch.py:63-65`；`test_docs.py:16`、`:172`；`test_record_sh.py:24` 註解。
+- **完成條件**：
+  1. `python3 -m unittest tests.record.test_surface_parsers tests.record.test_e2e_check tests.record.test_r2_e2e_check` 全綠（`e2e_check.py` 是 r2a 自己的工具；既有 `test_e2e_check.py` 一字不改且全綠）；
+  2. `python3 -m unittest discover -s tests/record -t . -k test_defaults_single_writer -k test_no_client_names_in_repo_text` 綠，後者不得 `skipped`；
+  3. 全量 `python3 -m unittest discover -s tests/record -t .` 的失敗與錯誤只出現在 §9.3 表 Red 列「預期仍紅」的模組；輸出中不得出現 `ImportError`、`ModuleNotFoundError`、`SyntaxError`、`NameError`（紅燈原因必須是「功能不存在」：斷言不成立、結束碼不符、找不到字串）；
+  4. `bash bin/_lint.sh && bash bin/meeting.sh doctor` 回 0。
+
+#### r2b 要點（tools/MeetingRecorder/Tests/）
+- 新增 `ControlTests.swift`（§4.16.1–4.16.3、4.16.10、§4.17.1、4.17.3、4.17.4、4.17.7、§4.18.1、4.18.8–4.18.10（§4.18.2、4.18.3 的 swift 欄指向這三條的同一組函式）、§4.19.1、§4.20.1；閘門 2 修正輪新增 `testAppendingMuteEvent`、`testPauseGateAndSwitchReason`、`testPauseEventsAndStatusFields`、`testDetectorFeed`）與 `MenuBarR2Tests.swift`（§4.20.2、4.20.3、4.20.5、4.20.7、§4.21.1、4.21.2、§4.22.1、4.22.3、§4.23.1），函式名照 spec 逐字；兩個 suite 登記進 `Tests/main.swift` 的 `mrtSuites`。測試狀態檔與事件一律用中性範例（場次名「[Stand-up] 範例專案」）。檔案 I/O 測試只用暫存目錄。
+- 既有測試檔（`TriggerTests.swift`、`RecordsTests.swift` 等）一字不改；`Tests/main.swift` 只在 `mrtSuites` 加兩行登記。
+- **完成條件**：`/bin/bash tools/MeetingRecorder/Tests/run.sh` 失敗，且 `error:` 行全部是「找不到 spec §3.14 列的名稱」類的編譯錯誤（`cannot find '…' in scope`、`has no member '…'`、`extra argument '…'`、`incorrect argument label`），每一行都提到 §3.14 的某個名稱；沒有其他種類的錯誤。
+
+#### r2c 要點（文件）
+- SKILL.md：R2 功能說明（spec §4.24.3 列的字樣）、四組快捷鍵、暫停會剪掉並記 `pauseEvents`、靜音只把麥克風變成無聲（系統聲音照錄）、`markers.json` 的位置與 `t` 是成品時間、選單新項目、偏好設定、登入項目要在系統設定允許、自動前處理預設關、舊版錄製器不支援控制、五個保留字的 `./` 寫法；`record-cli` 區塊照 spec §2.4.5 改成 12 列（兩份文件 begin／end 之間逐位元組相同）。只寫 spec 定案的行為（D13）；範例名稱用「[Stand-up] 範例專案」。
+- README.md：錄製段同步 12 列區塊，並加一句 R2 摘要（含「⌃⌥⌘P」「麥克風靜音」「markers.json」）與一行指向 SKILL.md；不得引述 README 既有的任何真實名稱。
+- **完成條件**：`python3 -m unittest tests.record.test_r2_docs` 全綠；`python3 -m unittest tests.record.test_docs -k test_skill_exists_and_sections -k test_readme_updated -k test_docs_cli_block_matches_spec -k test_meeting_tab_marking_documented -k test_shortcuts_instruction -k test_crash_loss_documented -k test_stage_manager_documented` 全綠；`-k test_no_client_names_in_repo_text` 綠且不得 `skipped`；verify 回 0。
+
+#### r2d 要點（Core/）
+- 照 spec §3.14 逐字實作名稱、簽名、預設值；`RecordStatus`／`RecordMeta`／`GapStats` 的新欄位一律 `var x: T? = nil`（合成的 memberwise init 不必改呼叫端；合成的 Codable 對 nil 省略鍵）；`RecentLevels`、`MenuBarPrefs` 自訂 `encode(to:)` 讓 nil 寫 null（沿用 `Records.swift` 既有寫法）。`MenuBarState` 加 `paused`、`symbol(for:)` 加一列；`menuBarModel` 依 §3.14.1 加 M6b 與 R2 欄位，第一輪各列的行為不變。`requestControl`／`resetControl` 用 `flock`（同 `acquireMenuBarLock` 的寫法）＋`writeJSONAtomically`。**閘門 2 修正輪**：`Segments.swift` 加 `SwitchReason`（含 `resume`）、`PauseGate`、`PauseSampleRoute`、`pausing`、`resuming`、`pauseRoute`、`segmentOpened`、`openReason`；`Control.swift` 加 `appendingPauseEvent`、`PauseStatusFields`、`pauseStatusFields`、`applyingPauseFields`、`appendingMuteEvent`；`Detectors.swift` 加 `DetectorFeed`、`detectorFeed`。Capture 原本的 private `SwitchReason` 會遮蔽 Core 的同名型別，所以 r2d 合併後既有 Capture 仍編得過；刪除是 r2e 的事。
+- 不改 `Capture/`、`Trigger/`、`main.swift`（新增的 Optional 與 enum case 不會讓既有呼叫端編不過；若會，以 `needs_decision` 回報，不得順手改別人的檔）。
+- **完成條件**：(1) `/bin/bash tools/MeetingRecorder/Tests/run.sh` 全綠（含第一輪全部 suite）；(2) `MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 成功（既有的 Capture／Trigger 對新 Core 編得過）；(3) `python3 -m unittest discover -s tests/record -t . -k test_defaults_single_writer` 綠；(4) verify 回 0。
+
+#### r2e 要點（Capture/）
+- 照 design R2-D2–R2-D6：`installSignalHandlers` 加 SIGUSR1；`start()` 順序 `installSignalHandlers()` → `resetControl(` → 寫 `record.pid`；`phase` 轉 `recording` 時寫 R2 狀態欄位與 `pauseEvents`／`micMuteEvents` 空陣列；SIGUSR1 → `readControl` → `controlActions` → 套用（靜音、暫停／繼續、標記，順序：靜音 → 暫停／繼續 → 標記）；`ingest` 的暫停閘門在 `maxEnd` 更新之前；`SwitchReason` 加 `resume`；mic 回呼在 `rmsDBFS` 之前歸零；`closeLevels` 暫停中不餵偵測器、靜音中不餵 `micSilence`、每秒最多寫一次 `recentLevels`；繼續與取消靜音時重設偵測器；標記寫 `tracks/markers.json`；完成通知以 `completionNotificationID(runId:)` 為識別碼（`Notifier.post` 加 `identifier: String? = nil` 參數，既有呼叫端不改）。
+- **閘門 2 修正輪**：刪掉 `RecordingSession.swift:28` 的 private `SwitchReason`，改用 Core 的；`ingest` 先算 `pauseRoute(`（在 `maxEnd =` 之前），prevOnly／drop 不更新 `maxEnd`，開段原因一律由 `openReason(` 決定（定期與格式變更換段的既有判斷不動），開段後 `segmentOpened(`；暫停／繼續以 `pausing(`／`resuming(` 轉移；事件與狀態欄位一律經 `appendingPauseEvent(`、`pauseStatusFields(`、`applyingPauseFields(`、`appendingMuteEvent(`；偵測器餵送依 `detectorFeed(`（`closeLevels` 與影格處理兩處）。
+- 不改 `Core/`、`Trigger/`、`main.swift`。
+- **完成條件**：(1) `run.sh` 全綠；(2) `python3 -m unittest discover -s tests/record -t . -k test_capture_` 全綠（含 `test_capture_uses_core_pause_functions`），`tests.record.test_static_rules` 全綠；(3) 以 `MH_RECORDER_DEST=$(mktemp -d)` 建 app 成功，`codesign -d --entitlements - <app>` 仍恰為兩項（§4.2.8 不變）；**不得覆蓋** `~/Applications/MeetingRecorder.app`、不得啟動 app；(4) verify 回 0。
+
+#### r2f 要點（Trigger/、main.swift、Resources/、build.sh）
+- 照 design R2-D7–R2-D10：status item 變寬與計時、四態圖示與紅點、`mic.slash`、收音指示列、§4.20.6 的選單與快速鍵、`HotKey` 多組（建構子加 `id:` 參數，handler 比對 id）、`TriggerDebouncer`、控制送出（`controlAvailability` → `requestControl` → `kill(pid, SIGUSR1)`）、「錄這個視窗 ▸」（`open -n -a … windows --json --log`）、「存到 ▸」（`NSOpenPanel`、`menubar.prefs.json`）、quick-start 的 `--window`／`--root`（`explicitWindowDecision`、`quickStartRoot`、`resolveWindow`）、`Preferences.swift`（設定視窗、`SMAppService.mainApp` 只在勾選動作內 `register()`／`unregister()`）、完成通知 category 與 delegate、「顯示上一場成品」、自動前處理（`shouldAutoPrep`、`terminationHandler`、`autoprep.log`、排隊）；`main.swift` 在 `switch` 前 `signal(SIGUSR1, SIG_IGN)`、以 `launchMode(arguments:)` 分派。`Info.plist` 與 entitlements 原則上不改（`SMAppService`、`NSOpenPanel`、通知在非 sandbox app 不需要新 entitlement，`cc:` §3）；若實作發現需要，以 `needs_decision` 回報，不自行加。
+- 不改 `Core/`、`Capture/`。文件是契約：`--args` 子指令與行為以 r2c 的 SKILL.md 為準，不一致改程式不改文件。
+- **完成條件**：(1) `run.sh` 全綠；(2) `python3 -m unittest discover -s tests/record -t . -k test_trigger_ -k test_main_` 全綠，`tests.record.test_static_rules` 全綠，`python3 -m unittest tests.record.test_docs -k test_docs_app_args_exist_in_sources` 綠；(3) 以 `MH_RECORDER_DEST=$(mktemp -d)` 建 app 成功、entitlements 仍恰為兩項；**不得**覆蓋或啟動 app、不得註冊登入項目、不得觸發 TCC 授權框；(4) verify 回 0。
+
+#### r2g 要點（bin/）
+- `record.sh`：`*)` 之前加 `pause|resume|mute|unmute|mark`，共用 `cmd_control`（`check_unknown "" ""`、多餘參數回 2、同一段 Python 做 `controlAvailability` 同語意的前提檢查、`fcntl.flock` 取 `record.control.lock`、`requestControl` 同語意的寫入、`kill -USR1 <record.pid>`、最多 5 秒輪詢狀態反映）；`usage_help` 照更新後的 §2.4.3（12 行寫法、說明段加保留字的 `./` 寫法）；`cmd_status` 照 §4.16.9、`stop_summary` 照 §4.16.11（閘門 2 修正輪補的驗收；第一輪的摘要行不動）。`meeting.sh`：`usage()` 照 §2.4.6 改 12 行（`record_cmd` 不改）。`_record_finalize.py`：照 design R2-D12（`markers.json` 複製在 `already_done` 之前、`gapStats` 扣暫停、`pausedTotal`）。不新增 `bin/` 檔；`$VAR` 緊接全形字與雙引號內反引號兩個坑照 `_lint.sh` 守。
+- **完成條件**：(1) `python3 -m unittest tests.record.test_r2_cli tests.record.test_r2_finalize tests.record.test_record_sh tests.record.test_cli_dispatch tests.record.test_docs tests.record.test_finalize tests.record.test_concurrency tests.record.test_regression` 全綠（`test_docs` 依賴第 1 層已合併的 r2c 文件）；(2) `bash bin/_lint.sh` 通過且檔數 26；(3) verify 回 0。
+
+#### r2t7 要點（test 段，使用者在場）
+- 順序：(1) 主 session 先問使用者是否以新版覆蓋 `~/Applications/MeetingRecorder.app`（不可代為決定），覆蓋後由使用者重開 menu bar；(2) spec §4.25.1 劇本＋`e2e_check.py --segment-writer --pause-mute --status …`（`--pause-mute` 九項，含閘門 2 修正輪新增的 `mute_timing`、`no_false_black`、`event_output_t`）；(3) §4.25.2 選單與截圖（淺色、深色）；(4) §4.25.3 選視窗、換位置；(5) §4.25.4 偏好設定、登入自動開（使用者自己登出再登入）、自動前處理、通知動作；(6) §4.25.5 第一輪剩下的實機項目；(7) test 段平行派 `dev-design-reviewer`（`has_ui=true`，§6 第 92 條）。結果寫 run 目錄，截圖不進 repo（§4.14.1）。
+
+**design commit 之後、Red 層合併之前的已知紅燈**：spec §2.4 已就地更新為 12 寫法，而 `tests/record/surface.py` 的 `SURFACE` 要到 r2a 才更新，所以這段期間 `test_surface_parsers.py::test_parse_help_accepts_spec_example` 在 `feature/meeting-record` 上是紅的（spec 先行，屬預期）；Red 層合併後必須轉綠（§9.3 Red 列）。
+
+### 9.3 每層整合後的測試指令（integrator 照此跑，一律加 `TMPDIR="$(mktemp -d)" LC_ALL=en_US.UTF-8 MH_CLIENT_NAMES_FILE=/Users/yuktang/Documents/Agent/meeting-harness/_tpm/runs/20261010-sdlc-meeting-record/client-names.txt`）
+
+| 層 | 合併後必須回 0 的指令 | 預期仍紅、只記錄不阻擋 |
+|---|---|---|
+| Red（r2a＋r2b） | `python3 -m unittest tests.record.test_surface_parsers tests.record.test_e2e_check tests.record.test_r2_e2e_check`；`python3 -m unittest discover -s tests/record -t . -k test_defaults_single_writer -k test_no_client_names_in_repo_text`（後者不得 `skipped`）；`bash bin/_lint.sh && bash bin/meeting.sh doctor` | 全量 Python：失敗只在 `test_r2_cli`、`test_r2_finalize`、`test_r2_static`（`test_defaults_single_writer` 除外）、`test_r2_docs`、`test_docs`、`test_cli_dispatch`、`test_record_sh`；`run.sh`（只因缺 §3.14 名稱而編譯失敗） |
+| 第 1 層（r2c＋r2d） | `/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest tests.record.test_r2_docs tests.record.test_surface_parsers tests.record.test_e2e_check tests.record.test_r2_e2e_check`；`python3 -m unittest discover -s tests/record -t . -k test_defaults_single_writer -k test_no_client_names_in_repo_text`（不得 `skipped`）；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh`；verify | 全量 Python：失敗只在 `test_r2_cli`、`test_r2_finalize`、`test_r2_static`、`test_docs` 的程式側三支（`test_docs_cli_block_matches_help`、`test_docs_flags_match_behavior`、`test_docs_exit_codes_match_behavior`）、`test_cli_dispatch`、`test_record_sh` |
+| 第 2 層（r2e＋r2f＋r2g） | `python3 -m unittest discover -s tests/record -t .`；`/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest discover -s tests/record -t . -k test_no_client_names_in_repo_text`（不得 `skipped`）；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 並以 `codesign -d --entitlements -` 確認恰為兩項；`python3 .claude/teams/tools/check_rules.py --git . meeting-record-r1-baseline..feature/meeting-record`；verify | 無；任何一支不綠就停下交人 |
+
+### 9.4 不屬於任何子任務、需要主 session 或使用者做的事（R2）
+
+| 事項 | 時點 | 理由 |
+|---|---|---|
+| 以 `save_run.py approve` 記 `r2-design` 核准 | 使用者核准本輪 spec＋plan 後 | R2-Q2 使用者決定；不覆寫第一輪的 `design` 鍵 |
+| 維護 `progress.md` 的 R2 節 | 每層合併後、每個閘門後 | 同第一輪 §4 |
+| 覆蓋安裝 `~/Applications/MeetingRecorder.app` | r2t7 開始前 | 會改使用者的 app，要使用者當下同意 |
+| 登入項目、通知權限、快捷鍵、選單互動的實機操作與截圖 | r2t7 | 派工約束：agent 不得啟動 app、不得改系統設定 |
+| R2 的拆包（§9.5）與推送前客戶名稱掃描 | deliver 段 | 照 §9.5 與 §5.1；推送與開 PR 要使用者當下同意 |
+
+### 9.5 拆 PR 規劃（R2；修改既有檔超過 15 個，閘門 2 修正輪補寫）
+
+R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不計）：
+- 錄製器 app：`Core/Records.swift`、`Detectors.swift`、`AudioLevel.swift`、`Trigger.swift`、`Segments.swift`；`Capture/RecordingSession.swift`、`PreflightRunner.swift`、`Notifier.swift`；`Trigger/MenuBar.swift`、`HotKey.swift`、`QuickStart.swift`；`Sources/main.swift`；`Tests/main.swift`＝**13**（`build.sh`、`Resources/` 原則上不改；若經核准要改，最多 15）。
+- CLI、finalize、測試、文件、specs：`bin/record.sh`、`bin/meeting.sh`、`bin/_record_finalize.py`；`.claude/skills/meeting-record/SKILL.md`、`README.md`；`tests/record/surface.py`、`test_surface_parsers.py`、`test_cli_dispatch.py`、`test_docs.py`、`test_record_sh.py`、`e2e_check.py`、`fakes/fake_recorder.sh`、`_media.py`（`_helpers.py`／`_fixtures.py` 視需要再 +2）；`specs/meeting-record/` 的 `intent.md`、`design.md`、`spec.md`、`plan.md`、`progress.md`＝**18–20**。
+- 合計 31–35 個，超過 `rules.md`〈專案規則〉審查規則的 15 檔門檻。R2 排在第一輪三包（§5）之後，分兩包，**合併順序 R2-1 → R2-2**：
+
+| 包 | 內容 | 範圍（依檔案揀 commit） | 修改既有檔 |
+|---|---|---|---|
+| R2-1 | 錄製器 app（Swift） | r2b、r2d、r2e、r2f 的 commit（`tools/MeetingRecorder/`） | 13（≤ 15） |
+| R2-2 | CLI、finalize、Python 測試與 e2e 工具、文件、specs | R2 的 specs commit（intent、design、spec、plan、progress、ADR，含本修正輪）＋ r2a、r2c、r2g 的 commit；主 session 更新 `progress.md` 的 commit 也歸這包 | 18–20（PR 說明標 important） |
+
+**理由**：
+- **R2-1 先合**：R2-2 的 CLI 寫法要錄製器有 `controlVersion` 才能控制（§4.16.3）、`test_r2_static.py` 掃 R2-1 的 `Sources/`、SKILL.md 描述 R2-1 的 menu bar 行為——都是執行期或檢查期依賴 R2-1。R2-1 單獨進 `main` 時：既有 7 個 CLI 寫法與結束碼不變，舊 `record.sh` 照常開錄（新 app 只是多寫選用欄位、多聽 SIGUSR1，§3.10 nil 省略鍵讓舊讀者不受影響），menu bar 的新功能自成一體，不會讓其他 session 看到半套的對外介面（`CLAUDE.md`〈對外介面〉）。
+- **R2-2 不再細拆**：spec §2.4（封閉清單）、`surface.py`、`test_surface_parsers.py`（直接讀 spec 的 §2.4.3 範例）、`record.sh` 的 help、`meeting.sh` 的 usage、SKILL.md／README 的 `record-cli` 區塊互相一致性檢查（§4.24.1、§4.24.2；第一輪 §5「t5 與 t4、t1 必須同一包」同一理由）；拆開時先合的那包在 `main` 上一定有紅燈。specs 放 R2-2 而不是 R2-1，也是因為 spec §2.4 已更新而 `surface.py` 在 R2-2，放 R2-1 會讓 `test_parse_help_accepts_spec_example` 在兩包之間紅。
+- **代價**：R2-1 審查時 spec 還不在 `main`，PR 說明要附 `feature/meeting-record` 上 `specs/meeting-record/spec.md` R2 節的連結（推送後才有）；R2-1 的 Capture／Trigger 靜態檢查（`test_r2_static.py`）在 R2-2 才進 `main`，R2-2 合併前在整合分支全量跑時一併驗。若要少一次 PR，可兩包合一（31–35 檔，標 important），本 plan 預設分開。
+- **做法**：分支 `feature/meeting-record-r2-app`（從已含第一輪三包的 `main` 開出，揀 r2b、r2d、r2e、r2f）、`feature/meeting-record-r2-cli`（從 R2-1 開出，揀 specs 與 r2a、r2c、r2g）；子任務的 `owns` 不重疊，依檔案範圍揀 commit 不會衝突。每包推送前照 §5.1 做客戶名稱掃描（範圍加上這兩個分支）。推送與開 PR 都是不可逆節點，由使用者當下同意後主 session 執行；本規劃不構成同意。

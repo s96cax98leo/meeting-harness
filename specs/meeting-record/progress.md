@@ -136,3 +136,37 @@
 
 ## deliver 後（主 session）
 - [ ] `~/.claude/skills/meeting-record` symlink（§4.12.5）
+
+## R2 第二輪（2026-10-12；plan §9）
+
+### R2 Design
+- [x] intent R2 節與閘門 1（`a93f2ac`、`975971b`；`run.json` 的 `r2-plan` 已核准）；本機 tag `meeting-record-r1-baseline`＝`f084765`
+- [x] design.md〈R2 第二輪設計〉、spec.md §2.4 就地更新＋檔尾〈R2 第二輪〉（§3.9–§3.14、§4.16–§4.25、§6 第 77–97 條、§7 疑慮 35–42）、plan §9、ADR 四則（`adr-r2-*.md`）
+- [x] skeptic 一致性檢查（第一次：8 條問題，run 目錄 `r2-design-issues.json`）
+- [x] 閘門 2 使用者決定（2026-10-12）：(1) 時間軸選項 A；(2) 自動前處理先不讓路、t7 觀察；(3) 新欄位 nil 省略鍵、`RecordsTests` 不改；(4) skeptic 問題全部修正，複查沒有新問題就視為閘門 2 核准、直接進 build
+- [x] 閘門 2 修正輪：spec §3.12 範例、§3.14（`Segments.swift` 的 `PauseGate`／`SwitchReason`、`Control.swift` 的事件 append 與狀態欄位、`detectorFeed`）、新增 §4.16.11、§4.17.7–§4.17.8、§4.18.8–§4.18.12，改 §4.18.2、§4.18.3、§4.25.1、R2-§5、R2-§6（第 79、95、96 條依據；新增第 98、99 條）、§7 疑慮 38；design R2-D3a 等；plan §9.1 story 逐條、§9.2、新增 §9.5 拆 PR；對照表 run 目錄 `design-revise-對照.md`〈R2 閘門 2 修正輪〉
+- [ ] skeptic 複查（使用者決定 4：沒有新問題即視為閘門 2 核准）
+- [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r2-design`；含 §6 第 77 條的測試預期修改）
+
+### R2 Build（plan §9.1、§9.3）
+- [ ] Red：r2a（tests/record/）
+- [ ] Red：r2b（tools/MeetingRecorder/Tests/）
+- [ ] Red 層整合＋測試指令（plan §9.3）
+- [ ] 第 1 層：r2c（SKILL.md、README）
+- [ ] 第 1 層：r2d（Core/）
+- [ ] 第 1 層整合＋測試指令
+- [ ] 第 2 層：r2e（Capture/）
+- [ ] 第 2 層：r2f（Trigger/、main.swift）
+- [ ] 第 2 層：r2g（bin/）
+- [ ] 第 2 層整合＋全量 Python、Swift、建置（暫存目錄）、`check_rules.py --git`、verify、名稱掃描
+- [ ] deliver：照 plan §9.5 拆 R2-1（app）、R2-2（CLI、測試、文件、specs）兩包；推送前照 §5.1 掃描
+
+### R2 Test（r2t7，使用者在場）
+- [ ] 使用者同意後覆蓋安裝、重開 menu bar
+- [ ] §4.25.1 4 分鐘劇本＋`e2e_check.py --segment-writer --pause-mute`（九項，含 `mute_timing`、`no_false_black`、`event_output_t`）
+- [ ] §4.25.2 選單、計時、收音指示＋截圖（淺色／深色）
+- [ ] §4.25.3 選單選視窗、換存檔位置
+- [ ] §4.25.4 偏好設定、登入自動開（重新登入）、自動前處理、通知「在 Finder 顯示」
+- [ ] §4.25.5 第一輪剩下的實機項目（§4.9.1 重錄、§4.3.5、§4.2.3、§4.11.1）
+- [ ] 設計審查（`has_ui=true`，§6 第 92 條）
+- [ ] 閘門 3（R2；與第一輪閘門 3 分開記錄）
