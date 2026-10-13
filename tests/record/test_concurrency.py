@@ -1,4 +1,6 @@
 """spec §4.4.2、§4.6.5、§4.7：錄製中與 finalize 中，場次不得被 meeting status／prep 列出。"""
+import json
+import os
 import subprocess
 import time
 import unittest
@@ -12,6 +14,16 @@ AUDIO_EXTS = (".m4a", ".mp3", ".wav", ".mov", ".mp4", ".m4v")
 def first_level_audio(sess):
     rec = sess / "錄音"
     return sorted(p.name for p in rec.iterdir() if p.is_file() and p.name.lower().endswith(AUDIO_EXTS))
+
+
+def published(sess, audio):
+    """spec §6 第 140 條：finalize.json 已有 finishedAt、且 outputs.audio 就是看到的音檔，才算已發佈（發佈後程序結束前的空窗不算違規）。"""
+    try:
+        fin = json.loads((sess / "錄音" / "tracks" / "finalize.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    out = os.path.basename(((fin.get("outputs") or {}).get("audio")) or "")
+    return bool(fin.get("finishedAt")) and audio == [out]
 
 
 class TestConcurrency(unittest.TestCase):
@@ -39,7 +51,7 @@ class TestConcurrency(unittest.TestCase):
         while p.poll() is None and time.monotonic() < deadline:
             st = sb.meeting("status", sb.root)
             audio = first_level_audio(sess)
-            if p.poll() is None:
+            if p.poll() is None and not published(sess, audio):
                 polls += 1
                 if m.SESSION_NAME in st.stdout:
                     violations.append("status 列出了 finalize 中的場次")
