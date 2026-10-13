@@ -179,12 +179,12 @@
 - [x] Claude Design 出稿 → 使用者挑稿（U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A；設計語言「暗房」）→ 存 `design-r3/`（`README.md`＋9 個原始稿；存前後掃名稱：沒有）
 - [x] 補 spec 的 UI 外觀條文（§3.20 `DesignTokens.swift`、§4.38.3／5–8、§4.40.4／7–8、§4.41.2–5／7、§4.42.2、§4.43.5–7／9、§4.44.3–4）、§6 第 129、130 條的新舊字面、新增第 134、135 條、§7 疑慮 52–56；design.md R3-D21（設計稿定案）、R3-D22（字型不打包）
 - [x] 使用者決定（閘門 2，2026-10-13）：疑慮 52 採 (a) 14pt bold、53 用 `NSAlert`、54 字型不打包、57 選 (b) 現在加行事曆 entitlement（§6 第 138 條生效，entitlements 恰為三項）
-- [ ] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45）
+- [x] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45；第 3 層合併後解決，`NSRemindersFullAccessUsageDescription`＋舊鍵並存）
 - [x] skeptic 一致性檢查（兩個 skeptic；修正輪 A–J 已改，`design.md` R3-D30）
 - [x] 修正輪複查：改由 integrator 合併後驗證（層檢查 0 問題、verify、相關 unittest、check_rules、名稱掃描）取代，使用者於閘門 2 核准
 - [x] 閘門 2 使用者核准（2026-10-13；`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–139 條的既有測試修改，撤回的 117、122、125 除外；第 136、137、139 條核准，第 138 條依疑慮 57 生效）
 
-### R3 Build（plan §10.1、§10.3；修正輪 6 層）
+### R3 Build（plan §10.1、§10.3；修正輪 6 層）——已完成（2026-10-13）
 
 | 層 | 子任務 | 狀態 | 合併 commit |
 |---|---|---|---|
@@ -204,14 +204,24 @@
 | 3 | `r3-finalize-runner` | 已合併 | `9149dcd` |
 | 3 | `r3-hud` | 已合併 | `c8ebd9c` |
 | 3 | `r3-reminders` | 已合併（entitlement 依疑慮 57 選 (b)） | `ea14cb0` |
-| 4 | `r3-discard` | 未開始 | |
-| 5 | `r3-segment-scheduler` | 未開始 | |
-| 5 | `r3-menu-stages` | 未開始 | |
-| 6 | `r3-sync-compensate` | 未開始 | |
-| 6 | `r3-onboarding-settings` | 未開始（併入原 r3-meeting-detect） | |
+| 4 | `r3-discard` | 已合併 | `8174033` |
+| 4–5 之間 | test_concurrency 判斷條件修正（§6 第 140 條） | 已合併 | `02e547c` |
+| 5 | `r3-segment-scheduler` | 已合併 | `82d0996` |
+| 5 | `r3-menu-stages` | 已合併 | `2c9dcad` |
+| 6 | `r3-sync-compensate` | 已合併 | `54ceee1` |
+| 6 | `r3-onboarding-settings` | 已合併（併入原 r3-meeting-detect） | `3478f69` |
 
-- [ ] 每層整合＋plan §10.3 的測試指令
-- [ ] 第 6 層：全量 Python、Swift、建置（暫存目錄）、entitlements 項數（依疑慮 57）、`check_rules.py --git`、verify、名稱掃描
+- [x] 每層整合＋plan §10.3 的測試指令（第 4–6 層與 §6 第 140 條修正都已合併，`3478f69`）
+- [x] 第 6 層（於 `3478f69` 加本次文件 commit 實跑）：
+  - [x] 全量 Python：304 項 OK（`TMPDIR` 暫存、`LC_ALL=en_US.UTF-8`、`MH_CLIENT_NAMES_FILE` 指向 run 目錄清單）
+  - [x] Swift：123 項 OK（`tools/MeetingRecorder/Tests/run.sh`，失敗 0）
+  - [x] 建置：`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 回 0
+  - [x] entitlements 恰為 3 項（依疑慮 57 選 (b)、§6 第 138 條）
+  - [x] verify：`bash bin/_lint.sh`（26 個檔）＋`bash bin/meeting.sh doctor` 回 0
+  - [x] `check_rules.py`（`specs/meeting-record/*.md`、`adr/*.md`）與 `--git . 3478f69..HEAD` 通過
+  - [x] 名稱掃描（樹與 commit 訊息）：沒有
+- [x] build 收尾補記（2026-10-13）：各子任務自行決定、spec 未寫的事項補進 spec（R3 段開頭逐條紀錄、§6 第 141 條、§7 疑慮 60–63、§4.47.12–13）與 `design.md` R3-D13
+- **R3 Build 完成（2026-10-13）**。下一步：`sdlc-test`（R3 Test；閘門 3 一併追認 §6 第 141 條、決定 §7 疑慮 61）。
 
 ### R3 Test（`r3-field-check`，使用者在場；spec §4.47）
 - [ ] 使用者同意後覆蓋安裝、重開 menu bar

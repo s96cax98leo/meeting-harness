@@ -828,7 +828,8 @@ brief:32 的範圍外清單（開錄倒數、選麥克風裝置、會議自動�
 
 - 只在選單的錄製階段提供「捨棄這次錄製…」；**不加 CLI 對等子指令**（R3-Q2：避免其他 session 刪資料；沒有 tty 的路徑一律不存在）。
 - 流程：確認對話框（F2-A：系統 `NSAlert`，預設按鈕是「繼續錄製」，破壞性按鈕「捨棄並移到垃圾桶」要明確點、沒有快捷鍵；文字說明「會停止錄製、不收尾，這場的錄音資料夾會移到垃圾桶，可從垃圾桶復原」；字面見 `spec.md` §4.42.2）→ 使用者確認後 menu bar 寫 `<home>/record.discard.json` `{schemaVersion:1, runId, requestedAt}`（tmp＋rename）→ 照 R3-D2 的 pid 確認送 SIGTERM。
-- 錄製實例收到 SIGTERM 時讀 `record.discard.json`：`runId` 相符且 `requestedAt` 在 30 秒內 → 停止擷取、取消 writer、**跳過收尾**，用 `FileManager.trashItem(at:resultingItemURL:)` 把 `<場次>/錄音/` 移到垃圾桶；之後 `<場次>` 若只剩 `meeting.json`（與 `.DS_Store`），把 `<場次>` 也移到垃圾桶。**從不硬刪**。狀態 `phase=done`、`code=0`、message「已捨棄，錄音已移到垃圾桶」，新選用欄位 `discarded: true`（nil 省略鍵）。移到垃圾桶失敗 → `phase=failed`、`code=5`、檔案原地保留。`runId` 不符或過期的 `record.discard.json` 當作沒有，照一般停止收尾；開錄時（`resetControl` 同一處）刪掉殘留的 `record.discard.json`。
+- 錄製實例收到 SIGTERM 時讀 `record.discard.json`：`runId` 相符且 `requestedAt` 在 30 秒內 → 停止擷取、照一般停止把目前段與 prev 收完、**跳過收尾**，用 `FileManager.trashItem(at:resultingItemURL:)` 把 `<場次>/錄音/` 移到垃圾桶；之後 `<場次>` 若只剩 `meeting.json`（與 `.DS_Store`），把 `<場次>` 也移到垃圾桶。**從不硬刪**。
+  - build 收尾補記（2026-10-13，`r3-discard`；`spec.md` §4.42.3）：原寫的「取消 writer」改為「照常收完」——捨棄**不** `cancelWriting`，因為 `cancelWriting` 會刪掉正在寫的段落檔，等於硬刪；段落收完、整個 `錄音/` 移到垃圾桶後都還能放回原處。`<場次>` 只在第一層包含 `meeting.json` 且只有 `meeting.json`（可再加 `.DS_Store`）時才一起移；已經是空資料夾或有其他檔時留在原地（§7 疑慮 51）。狀態 `phase=done`、`code=0`、message「已捨棄，錄音已移到垃圾桶」，新選用欄位 `discarded: true`（nil 省略鍵）。移到垃圾桶失敗 → `phase=failed`、`code=5`、檔案原地保留。`runId` 不符或過期的 `record.discard.json` 當作沒有，照一般停止收尾；開錄時（`resetControl` 同一處）刪掉殘留的 `record.discard.json`。
 - `shouldAutoPrep` 對 `discarded` 為 true 的結果不觸發前處理。
 
 ### R3-D14 首次引導、設定分頁、app 圖示（U4、U5、U7、D7；ADR `adr-r3-defaults-writers.md`）
