@@ -1,5 +1,6 @@
 // Capture/Notifier.swift —— 系統通知（quick-start 不開錄的原因、錄製完成的場次路徑；design §8、spec §4.11.1、§4.11.7）
 // R3（spec §4.39.1、§4.39.3）：可帶 NotificationPolicy，套用 interruptionLevel 與 threadIdentifier（通知分級）。
+// R3（spec §4.44.3）：可帶 categoryIdentifier 與 userInfo（F3 會議偵測提示的「開始錄製」「這場不用」兩個動作）。
 import Foundation
 import UserNotifications
 
@@ -8,8 +9,10 @@ enum Notifier {
     /// identifier：指定時以它為通知識別碼（同識別碼的新通知取代舊的，例如完成通知 completionNotificationID(runId:)，
     /// spec §3.13、§4.23.3）；nil 時用隨機 UUID（第一輪行為）。
     /// policy：notificationPolicy(kind:runId:timeSensitiveAllowed:) 的結果；nil 時照系統預設（第一、二輪行為）。
+    /// categoryIdentifier：通知的動作類別（已由 menu bar 以 setNotificationCategories 註冊）；nil＝沒有動作。
     static func post(title: String, body: String, log: Logger? = nil, identifier: String? = nil,
-                     policy: NotificationPolicy? = nil) {
+                     policy: NotificationPolicy? = nil, categoryIdentifier: String? = nil,
+                     userInfo: [String: String] = [:]) {
         log?.line("通知：\(title)｜\(body)")
         guard Bundle.main.bundleIdentifier != nil else { return }   // 不在 .app 裡（例如測試）就不送
         let center = UNUserNotificationCenter.current()
@@ -20,6 +23,8 @@ enum Notifier {
             content.title = title
             content.body = body
             if let policy { apply(policy, to: content) }
+            if let categoryIdentifier { content.categoryIdentifier = categoryIdentifier }
+            if !userInfo.isEmpty { content.userInfo = userInfo }
             let req = UNNotificationRequest(identifier: identifier ?? UUID().uuidString, content: content, trigger: nil)
             center.add(req) { _ in done.signal() }
         }
