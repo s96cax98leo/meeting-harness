@@ -175,14 +175,15 @@
 
 ### R3 Plan／Design
 - [x] intent〈R3 第三輪〉與閘門 1（`56aacca`；`run.json` 的 `r3-plan` 已核准；R3-Q1＝A、R3-Q8＝B，其餘預設）
-- [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md §2.4 就地更新（`record sync`）＋檔尾〈R3 第三輪〉（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
+- [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md 檔尾〈R3 第三輪〉（修正輪起 §2.4 不再就地更新，`sync` 改頂層 `meeting sync`）（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
 - [ ] Claude Design 出稿（D1–D12、F2 確認框、F3 通知）→ 使用者挑稿 → 存 `design-r3/`（存前掃名稱）
 - [ ] 補 spec 的 UI 外觀 `<待定>` 與 §6 第 129、130 條的新舊字面
 - [ ] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45）
-- [ ] skeptic 一致性檢查
+- [x] skeptic 一致性檢查（兩個 skeptic；修正輪 A–J 已改，`design.md` R3-D30）
+- [ ] 修正輪複查（兩個 skeptic）
 - [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–133 條的既有測試修改）
 
-### R3 Build（plan §10.1、§10.3）
+### R3 Build（plan §10.1、§10.3；修正輪 6 層）
 
 | 層 | 子任務 | 狀態 | 合併 commit |
 |---|---|---|---|
@@ -194,25 +195,22 @@
 | 1 | `r3-finalize-guard` | 未開始 | |
 | 1 | `r3-sync-measure` | 未開始 | |
 | 1 | `r3-docs` | 未開始 | |
-| 2 | `r3-lock` | 未開始 | |
-| 2 | `r3-menubar-states` | 未開始（外觀等稿） | |
+| 2 | `r3-lock` | 未開始（併入原 r3-latency-log） | |
+| 2 | `r3-menubar-states` | 未開始（併入原 r3-notify；外觀等稿） | |
 | 2 | `r3-search` | 未開始 | |
 | 2 | `r3-transcript-vad` | 未開始 | |
 | 2 | `r3-annotations` | 未開始 | |
 | 3 | `r3-finalize-runner` | 未開始 | |
-| 3 | `r3-notify` | 未開始 | |
-| 3 | `r3-reminders` | 未開始 | |
-| 4 | `r3-latency-log` | 未開始 | |
-| 4 | `r3-hud` | 未開始（外觀等稿） | |
-| 5 | `r3-discard` | 未開始（確認框等稿） | |
-| 6 | `r3-menu-stages` | 未開始（外觀等稿） | |
-| 6 | `r3-segment-scheduler` | 未開始 | |
-| 7 | `r3-onboarding-settings` | 未開始（外觀等稿） | |
-| 7 | `r3-sync-compensate` | 未開始 | |
-| 8 | `r3-meeting-detect` | 未開始（通知文字等稿） | |
+| 3 | `r3-hud` | 未開始（外觀等稿） | |
+| 3 | `r3-reminders` | 未開始（entitlement 依疑慮 57） | |
+| 4 | `r3-discard` | 未開始（確認框等稿） | |
+| 5 | `r3-segment-scheduler` | 未開始 | |
+| 5 | `r3-menu-stages` | 未開始（外觀等稿） | |
+| 6 | `r3-sync-compensate` | 未開始 | |
+| 6 | `r3-onboarding-settings` | 未開始（併入原 r3-meeting-detect；外觀等稿） | |
 
 - [ ] 每層整合＋plan §10.3 的測試指令
-- [ ] 第 8 層：全量 Python、Swift、建置（暫存目錄）、entitlements 兩項、`check_rules.py --git`、verify、名稱掃描
+- [ ] 第 6 層：全量 Python、Swift、建置（暫存目錄）、entitlements 項數（依疑慮 57）、`check_rules.py --git`、verify、名稱掃描
 
 ### R3 Test（`r3-field-check`，使用者在場；spec §4.47）
 - [ ] 使用者同意後覆蓋安裝、重開 menu bar

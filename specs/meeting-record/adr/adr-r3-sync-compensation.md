@@ -2,7 +2,7 @@
 
 - 狀態：提議（待 R3 閘門 2 核准）
 - 日期：2026-10-13
-- 範圍：`bin/_record_finalize.py`、`bin/record.sh`（`record sync`）、`tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`（輸出裝置變更提前換段）、`Core/SyncLatency.swift`、`tests/record/e2e_check.py`
+- 範圍：`bin/_record_finalize.py`、`bin/meeting.sh` 與 `bin/lib/_record_lib.py`（`meeting sync`；修正輪由 `meeting record sync` 改為頂層）、`tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`（輸出裝置變更提前換段）、`Core/SyncLatency.swift`、`tests/record/e2e_check.py`
 - 關係：依賴 `adr-r3-concat-then-mix.md`（混音流程）；沿用 `adr-segment-writer.md` 的段落模型
 
 ## 背景
@@ -26,7 +26,7 @@
 採 **A**。理由：只有 A 能處理中途換裝置（依時段），而且不動 raw 段落（重跑 `meeting record finish` 可以換 mode 比較）；預設 off 符合「先量測、E2／E4 證實後才開」。
 
 - 延遲值：`reported`＝(Latency＋SafetyOffset＋stream Latency＋BufferFrameSize) ÷ NominalSampleRate（S-B 記在 `record.meta.json.outputLatencies`）；`calibrated`＝`~/.meeting-harness/sync-calibration.json` 依輸出 uid 查表（查不到用 0）；一律夾在 [0, 0.5] 秒。
-- 開關：`record.defaults.json.syncCompensation`（`meeting record sync <mode>` 寫，合併寫入，`adr-r3-defaults-writers.md`）；`MH_SYNC_COMPENSATION` 優先。不用純環境變數的理由：menu bar 停止時由 app 啟動收尾，讀不到使用者 shell 的環境變數。
+- 開關：`record.defaults.json.syncCompensation`（`meeting sync <mode>` 寫，合併寫入，`adr-r3-defaults-writers.md`）；`MH_SYNC_COMPENSATION` 優先。不用純環境變數的理由：menu bar 停止時由 app 啟動收尾，讀不到使用者 shell 的環境變數。
 - 記錄：`finalize.json.syncCompensation` 記每段套用的延遲與來源，`e2e_check.py --sync-player` 讀它報告。
 
 ## 後果
