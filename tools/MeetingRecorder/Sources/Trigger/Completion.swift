@@ -1,5 +1,6 @@
 // Trigger/Completion.swift —— menu bar 的共用小工具：menubar.prefs.json 讀改寫、選資料夾、
 // 在 Finder 顯示成品、停止後自動前處理（spec §3.13、§4.21.5、§4.23）。
+// R3：前處理通知帶通知分級（spec §4.39.1）；捨棄的場次（discarded）不自動前處理由 Core 的 shouldAutoPrep 擋（§4.42.5）。
 import AppKit
 
 /// menubar.prefs.json 的讀改寫。只有 menu bar 程序寫（含偏好設定視窗）；每次都從檔案讀最新再改，
@@ -97,7 +98,8 @@ func revealSessionProduct(_ session: String) {
 /// stdout／stderr append 到 <home>/autoprep.log；以 terminationHandler 等結束（主執行緒不等）；同時只跑一個、其餘排隊。
 final class AutoPrepRunner {
     private let home: URL
-    private var pending: [String] = []
+    /// 排隊中的（場次目錄, runId）；runId 給通知的 threadIdentifier 用
+    private var pending: [(session: String, runId: String?)] = []
     private var running: Process?
 
     init(home: URL) {
@@ -106,8 +108,8 @@ final class AutoPrepRunner {
 
     private var logURL: URL { home.appendingPathComponent("autoprep.log") }
 
-    func enqueue(_ session: String) {
-        pending.append(session)
+    func enqueue(_ session: String, runId: String? = nil) {
+        pending.append((session, runId))
         startNext()
     }
 
@@ -126,14 +128,15 @@ final class AutoPrepRunner {
 
     private func startNext() {
         guard running == nil, !pending.isEmpty else { return }
-        let session = pending.removeFirst()
+        let (session, runId) = pending.removeFirst()
         let name = (session as NSString).lastPathComponent
         let handle = openLog()
         appendLog(handle, "── \(isoNow()) 自動前處理：\(session)")
         guard let harness = RecordDefaults.load(home.appendingPathComponent("record.defaults.json"))?.harness else {
             appendLog(handle, "✗ record.defaults.json 沒有 harness 路徑，沒辦法跑前處理")
             try? handle?.close()
-            post(title: "前處理沒有執行", body: "\(name)：找不到 meeting-harness 路徑，詳見 autoprep.log")
+            post(title: "前處理沒有執行", body: "\(name)：找不到 meeting-harness 路徑，詳見 autoprep.log", kind: .failure,
+                 runId: runId)
             startNext()
             return
         }
@@ -157,7 +160,7 @@ final class AutoPrepRunner {
             DispatchQueue.main.async {
                 self?.appendLog(handle, "── \(isoNow()) 結束（結束碼 \(code)）")
                 try? handle?.close()
-                self?.finished(name: name, code: code)
+                self?.finished(name: name, code: code, runId: runId)
             }
         }
         do {
@@ -166,22 +169,24 @@ final class AutoPrepRunner {
         } catch {
             appendLog(handle, "✗ 啟動失敗：\(error.localizedDescription)")
             try? handle?.close()
-            post(title: "前處理失敗", body: "\(name)：啟動失敗，詳見 autoprep.log")
+            post(title: "前處理失敗", body: "\(name)：啟動失敗，詳見 autoprep.log", kind: .failure, runId: runId)
             startNext()
         }
     }
 
-    private func finished(name: String, code: Int32) {
+    private func finished(name: String, code: Int32, runId: String?) {
         running = nil
         if code == 0 {
-            post(title: "前處理完成", body: name)
+            post(title: "前處理完成", body: name, kind: .completion, runId: runId)
         } else {
-            post(title: "前處理失敗", body: "\(name)：結束碼 \(code)，詳見 \(logURL.path)（autoprep.log）")
+            post(title: "前處理失敗", body: "\(name)：結束碼 \(code)，詳見 \(logURL.path)（autoprep.log）", kind: .failure,
+                 runId: runId)
         }
         startNext()
     }
 
-    private func post(title: String, body: String) {
-        DispatchQueue.global(qos: .utility).async { Notifier.post(title: title, body: body) }
+    private func post(title: String, body: String, kind: NotificationKind, runId: String?) {
+        let policy = notificationPolicy(kind: kind, runId: runId, timeSensitiveAllowed: false)
+        DispatchQueue.global(qos: .utility).async { Notifier.post(title: title, body: body, policy: policy) }
     }
 }
