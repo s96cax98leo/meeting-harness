@@ -25,6 +25,9 @@ struct RunContext {
     var tracksDir: URL { recordingDir.appendingPathComponent("tracks", isDirectory: true) }
 }
 
+/// 本程序持有的 <home>/record.lock fd（spec §3.15）：取到後持有到程序結束，不主動 close。
+var recordLockFD: Int32?
+
 /// record.status.json 的寫者：tmp＋rename 原子寫入；呼叫端自行序列化。
 final class StatusWriter {
     let url: URL
@@ -138,8 +141,19 @@ enum PreflightRunner {
         let (powerOK, powerMsg) = checkPower()
         set(.power, powerOK, powerMsg)
 
-        // 11 已有錄製在跑（hard 2）
-        if let pid = readPid(ctx.pidURL), pid != getpid(), pidAlive(pid) {
+        // 11 已有錄製在跑（hard 2）：以 record.lock 為準（spec §3.15、§4.26.2）。呼叫端應已持有；
+        // 沒有（例如日後新的進入點忘了取）就在這裡補取，被持有即判失敗。record.pid 的檢查照舊保留。
+        var lockHeldByOther = false
+        if recordLockFD == nil {
+            switch acquireRecordLock(home: ctx.home) {
+            case .acquired(let fd): recordLockFD = fd
+            case .heldByOther: lockHeldByOther = true
+            case .unavailable: break
+            }
+        }
+        if lockHeldByOther {
+            set(.already_running, false, "已有錄製在跑（record.lock 被持有）：先 meeting record stop，或用 meeting record status 確認")
+        } else if let pid = readPid(ctx.pidURL), pid != getpid(), pidAlive(pid) {
             set(.already_running, false, "已有錄製在跑（pid \(pid)）：先 meeting record stop，或用 meeting record status 確認")
         } else {
             set(.already_running, true, "")

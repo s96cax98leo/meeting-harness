@@ -101,12 +101,30 @@ func runContext(from args: Args, log: Logger) -> (RunContext?, String) {
     return (ctx, "")
 }
 
+/// 開錄鎖（spec §3.15、§4.26.2；design R3-D2）：start／quick-start／preflight 在建立 StatusWriter 與寫 record.pid
+/// 之前取 <home>/record.lock，fd 存在 recordLockFD 持有到程序結束（O_CLOEXEC，不傳給收尾子程序）。
+/// 被持有 → 不寫狀態檔、不寫 record.pid，record.log 記「已有錄製在跑」後以結束碼 2 結束。
+/// 開不了鎖檔（.unavailable）→ 記一行後照常進行：home 有問題時之後寫狀態檔也會失敗，由原路徑回報。
+/// 已持有（cmdPreflight 取過、runPreflightThenRecord 再呼叫）時直接返回：flock 以開檔為單位，同程序重取會撞到自己。
+func holdRecordLock(home: URL, log: Logger) {
+    guard recordLockFD == nil else { return }
+    switch acquireRecordLock(home: home) {
+    case .acquired(let fd):
+        recordLockFD = fd
+    case .heldByOther:
+        die("✗ 已有錄製在跑（record.lock 被持有）：先 meeting record stop，或用 meeting record status 確認", code: 2, log: log)
+    case .unavailable(let e):
+        log.line("⚠ 開不了 record.lock（errno \(e)），照常進行")
+    }
+}
+
 /// preflight：只檢查（通過 → phase=done code=0；hard 失敗 → preflight_failed）。
 /// start：先跑同一套 preflight，通過才開錄。
 func cmdPreflight(_ args: Args, start: Bool) async {
     let home = recordHome(args)
     let log = Logger(path: home.appendingPathComponent("record.log").path, append: true)
     log.line("── \(start ? "start" : "preflight") \(isoNow()) ──")
+    holdRecordLock(home: home, log: log)
     let (ctxOpt, why) = runContext(from: args, log: log)
     guard let ctx = ctxOpt else {
         // 沒有場次也要讓 record.sh 看得到結果（runId 相符的 preflight_failed，code 2）
@@ -127,6 +145,7 @@ func runPreflightThenRecord(_ ctx: RunContext, start: Bool, defaults: RecordDefa
                             notifyWarnings: Bool = false,
                             beforeRecording: (() throws -> Void)?) async {
     let log = ctx.log
+    holdRecordLock(home: ctx.home, log: log)   // quick-start 從這裡進來；start／preflight 已在 cmdPreflight 取過
     let sw = StatusWriter(ctx: ctx)
     sw.update { $0.phase = .preflight; $0.message = "開錄前檢查中" }
     let outcome = await PreflightRunner.run(ctx)
