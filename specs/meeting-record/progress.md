@@ -178,11 +178,11 @@
 - [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md 檔尾〈R3 第三輪〉（修正輪起 §2.4 不再就地更新，`sync` 改頂層 `meeting sync`）（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
 - [x] Claude Design 出稿 → 使用者挑稿（U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A；設計語言「暗房」）→ 存 `design-r3/`（`README.md`＋9 個原始稿；存前後掃名稱：沒有）
 - [x] 補 spec 的 UI 外觀條文（§3.20 `DesignTokens.swift`、§4.38.3／5–8、§4.40.4／7–8、§4.41.2–5／7、§4.42.2、§4.43.5–7／9、§4.44.3–4）、§6 第 129、130 條的新舊字面、新增第 134、135 條、§7 疑慮 52–56；design.md R3-D21（設計稿定案）、R3-D22（字型不打包）
-- [ ] 使用者決定 §7 疑慮 52（膠囊白字對比）、53（F2 用 `NSAlert`）、54（字型要不要打包）、57（行事曆 entitlement，連動 §6 第 138 條）；預設照 spec
+- [x] 使用者決定（閘門 2，2026-10-13）：疑慮 52 採 (a) 14pt bold、53 用 `NSAlert`、54 字型不打包、57 選 (b) 現在加行事曆 entitlement（§6 第 138 條生效，entitlements 恰為三項）
 - [ ] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45）
 - [x] skeptic 一致性檢查（兩個 skeptic；修正輪 A–J 已改，`design.md` R3-D30）
-- [ ] 修正輪複查（兩個 skeptic）
-- [ ] 閘門 2 核准記錄（`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–139 條的既有測試修改，撤回的 117、122、125 除外）
+- [x] 修正輪複查：改由 integrator 合併後驗證（層檢查 0 問題、verify、相關 unittest、check_rules、名稱掃描）取代，使用者於閘門 2 核准
+- [x] 閘門 2 使用者核准（2026-10-13；`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–139 條的既有測試修改，撤回的 117、122、125 除外；第 136、137、139 條核准，第 138 條依疑慮 57 生效）
 
 ### R3 Build（plan §10.1、§10.3；修正輪 6 層）
 

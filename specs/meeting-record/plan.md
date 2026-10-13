@@ -684,7 +684,7 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 ### 10.4 不屬於任何子任務、需要主 session 或使用者做的事（R3）
 
 - **閘門 2 前**（已完成，2026-10-13）：Claude Design 出稿 → 使用者挑稿（`r3-design-choices.md`）→ 存 `specs/meeting-record/design-r3/`（存前後掃名稱：沒有）→ spec 的外觀條文、§6 第 129、130、134、135 條補完（`design.md` R3-D21、R3-D22）。
-- **閘門 2**：使用者核准 spec §6 第 118–139 條（第 117、122、125 條已撤回；含既有測試修改與第 136、137、139 條），並決定 §7 疑慮 52–54 的預設選項（膠囊字放大、F2 用 `NSAlert`、字型不打包）與疑慮 57（entitlement，§6 第 138 條是否生效），`save_run.py approve`，stage 鍵 `r3-design`。
+- **閘門 2**（2026-10-13 已核准：第 118–139 條全部核准；疑慮 52 (a)、53 `NSAlert`、54 不打包、57 (b) 現在加 entitlement，凡「恰為兩項」讀作「恰為三項」）：使用者核准 spec §6 第 118–139 條（第 117、122、125 條已撤回；含既有測試修改與第 136、137、139 條），並決定 §7 疑慮 52–54 的預設選項（膠囊字放大、F2 用 `NSAlert`、字型不打包）與疑慮 57（entitlement，§6 第 138 條是否生效），`save_run.py approve`，stage 鍵 `r3-design`。
 - `r3-reminders` 開工前查 Apple 文件確認提醒事項權限的 plist 鍵名（§7 疑慮 45）。
 - **test 段 `r3-field-check`**（使用者在場）：`spec.md` §4.47 全部；結果寫 run 目錄；S-C 預設由使用者依 §4.47.2 決定（改預設要另列 §6）。
 - 推送前照 `plan.md §5.1` 的做法掃 `origin/main..feature/meeting-record-r3`（只回報有／沒有）；推送、開 PR 一律等使用者當下同意。
