@@ -51,6 +51,9 @@ meeting — 會議錄音/錄影 → 逐字稿 → 會議紀錄（本機、離線
                                       把「你確認過」的講者存進聲紋庫，之後每場自動認出同一個人
   meeting voiceprint list | remove <姓名>
                                       看／刪聲紋庫（存在 vault/voiceprints/，本機、不進版控）
+  meeting search <會議根目錄> <關鍵字>  搜各場次的 summary／逐字稿／meeting.record.json（大小寫不分、照字面）
+  meeting sync [off|reported|calibrated]
+                                      看／設定系統聲音的延遲補償模式（預設 off；下一次收尾起生效）
   meeting doctor                      檢查工具鏈（ASR 模型、講者分離環境與模型授權）
   meeting version                     顯示版本（git commit）
 
@@ -478,6 +481,18 @@ case "$cmd" in
   summarize-local) sess="$(need_dir "${2:-}" "場次目錄")" || exit $?; shift 2 || true; bash "$BIN/summarize-local.sh" "$sess" "$@" ;;
   local)  local_pipeline "${2:-}" "${3:-}" ;;
   record) shift; record_cmd "$@"; exit $? ;;
+  # R3 頂層子指令（spec R3-§2.2、§3.19）：search、sync、reminders 是保留字，不再當成根目錄
+  # （名為 search 的根目錄要寫 meeting ./search；§7 疑慮 46）。
+  search) shift; python3 "$BIN/lib/_search.py" "$@"; exit $? ;;
+  sync)   shift; python3 "$BIN/lib/_record_lib.py" sync "$@"; exit $? ;;
+  reminders)
+    shift
+    if [[ -f "$BIN/lib/_reminders.py" ]]; then
+      python3 "$BIN/lib/_reminders.py" "$@"; exit $?
+    fi
+    echo "✗ meeting reminders 尚未提供（bin/lib/_reminders.py 不存在）。" >&2
+    echo "  名為 reminders 的根目錄請寫： meeting.sh ./reminders" >&2
+    exit 2 ;;
   "")     usage; exit 1 ;;
   -*)     echo "✗ 未知的選項：$cmd" >&2; echo "  指令說明： meeting.sh help" >&2; exit 2 ;;
   *)
