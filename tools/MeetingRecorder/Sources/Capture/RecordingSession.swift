@@ -220,8 +220,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             let mon = AudioDeviceMonitor(queue: q) { [weak self] kind, from, to in self?.deviceChanged(kind, from, to) }
             mon.start(initial: devices)
             deviceMonitor = mon
+            // S-B 輸出延遲唯讀記錄（spec §3.17、§4.35.7）：開錄時一筆 t=0，之後每筆輸出裝置 deviceEvents 一筆
+            meta.outputLatencies = [outputLatencySnapshot(t: 0)]
+            writeMeta()
             levelsTimer = repeating(0.5) { [weak self] in self?.closeLevels() }
             timers.append(repeating(30) { [weak self] in self?.checkDisk() })
+            // 暫停心跳（spec §4.26.6）：暫停中每 pausedHeartbeatSeconds 秒重寫狀態檔，讓 menu bar／CLI 看得出實例還活著
+            timers.append(repeating(pausedHeartbeatSeconds) { [weak self] in self?.pausedHeartbeat() })
         }
     }
 
@@ -647,9 +652,18 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         status.update { $0.recentLevels = RecentLevels(windowSeconds: 3, system: sys, mic: mic) }
     }
 
+    /// 暫停心跳（spec §4.26.6）：只在暫停中重寫 record.status.json，只有 updatedAt 改變（鍵集合不變）。
+    private func pausedHeartbeat() {
+        guard controlEnabled, !stopping, gate.paused else { return }
+        status.update { _ in }
+    }
+
     private func deviceChanged(_ kind: DeviceKind, _ from: AudioDeviceInfo?, _ to: AudioDeviceInfo?) {
         let t = round3(now())
         meta.deviceEvents.append(DeviceEvent(t: t, kind: kind, from: from, to: to))
+        if kind == .output {   // S-B：與這筆 deviceEvents 同一個 t（spec §3.17）
+            meta.outputLatencies = (meta.outputLatencies ?? []) + [outputLatencySnapshot(t: t)]
+        }
         writeMeta()
         let what = kind == .input ? "輸入" : "輸出"
         let name = to.map { "\($0.name)（\($0.transport)）" } ?? "（無）"

@@ -15,6 +15,8 @@
 # 本檔不改使用者的預設輸入／輸出裝置。
 # 控制（R2）：在 record.control.lock 的 flock 下改 record.control.json，再送 SIGUSR1 給錄製實例，
 # 等 record.status.json 在 5 秒內反映；舊版錄製器（狀態檔沒有 controlVersion）一律不送訊號。
+# R3（spec §3.15、§4.26、§4.27）：開錄與 preflight 前試鎖 <home>/record.lock（被持有回 2）；stop 送訊號前確認四項
+# （鎖被持有、record.pid 活著、狀態檔 pid 相符、程序名是 MeetingRecorder），任一不成立回 3、不送訊號。
 set -uo pipefail
 
 HARNESS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -139,6 +141,46 @@ running_pid() { # 有錄製在跑就印 pid
   pid="$(tr -cd '0-9' < "${PID_FILE}")"
   pid_alive "${pid}" && { echo "${pid}"; return 0; }
   return 1
+}
+
+# <home>/record.lock 的試鎖（spec §3.15、§4.26.5）：open(O_CREAT|O_RDWR|O_CLOEXEC, 0600) 後以 LOCK_NB 試鎖，
+# 1 秒內每 100 ms 重試；拿到立刻放掉（程序結束即關 fd）。只試鎖，不讀不寫內容。
+# 結束碼：0＝沒人持有（已放掉）、1＝被持有、2＝開不了鎖檔。
+record_lock_state() {
+  mkdir -p "${REC_HOME}" 2>/dev/null
+  python3 - "${REC_HOME}/record.lock" <<'PY' 2>/dev/null
+import fcntl, os, sys, time
+try:
+    fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+except OSError:
+    sys.exit(2)
+deadline = time.monotonic() + 1.0
+code = 1
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = 0
+        break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    except OSError:
+        code = 2
+        break
+os.close(fd)
+sys.exit(code)
+PY
+}
+
+# stop 第 (4) 項要比對的程序名結尾（spec §3.19、§6 第 136 條）：MH_RECORDER_COMM 只在 MH_RECORD_OPEN 也有設時
+# （測試替身環境）採用，否則一律是 MeetingRecorder。
+recorder_comm() {
+  if [[ -n "${MH_RECORDER_COMM:-}" && -n "${MH_RECORD_OPEN:-}" ]]; then
+    echo "${MH_RECORDER_COMM}"
+  else
+    echo "MeetingRecorder"
+  fi
 }
 
 # 讀狀態檔；runId 不符（或檔案不存在、解析失敗）時什麼都不印。
@@ -289,6 +331,12 @@ cmd_preflight() {
   wid="$(window_arg "$@")" || return 2
   need_app || return 2
   if [[ -z "${wid}" ]]; then err "✗ 要帶 --window <id>（從 meeting record windows 取得）"; return 2; fi
+  # 錄製中不跑 13 項、不啟動 app、不碰狀態檔（spec §4.26.4、R3-§2.2、§6 第 119 條）
+  record_lock_state
+  if [[ $? -eq 1 ]]; then
+    err "✗ 錄製中（record.lock 被持有），不跑開錄前檢查。先 meeting record stop，或用 meeting record status 確認。"
+    return 2
+  fi
   root="$(defaults_get root)"
   [[ -n "${root}" && -d "${root}" ]] || root="$(pwd)"
   session="${root}/$(date +%Y%m%d)/$(date +%H%M) 會議"
@@ -327,16 +375,22 @@ PY
 }
 
 write_defaults() { # <根> <型態> <出席者 JSON> <minFreeBytes>
-  python3 - "${DEFAULTS_FILE}" "$1" "$2" "$3" "$4" "${HARNESS}" "$(command -v python3)" "${MH_FFMPEG:-$(command -v ffmpeg)}" <<'PY'
-import json, os, sys
-path, root, mtype, attendees, minfree, harness, py, ff = sys.argv[1:9]
-data = {"root": root, "type": mtype, "attendees": json.loads(attendees or "[]"), "harness": harness,
-        "python3": py, "ffmpeg": ff, "minFreeBytes": int(minfree)}
-os.makedirs(os.path.dirname(path), exist_ok=True)
-tmp = path + ".tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-os.replace(tmp, path)
+  # 經 bin/lib/_record_lib.py 的 merge_defaults 合併寫入（spec §3.15、§3.19、§4.43.2；ADR adr-r3-defaults-writers）：
+  # 取 record.defaults.lock（最多 5 秒）→ 讀 → 合併（不認得的鍵保留）→ mkstemp＋rename。
+  # 檔案不是 JSON 物件或取鎖逾時：不寫、stderr 報錯；defaults 只是記憶，不擋開錄（一律回 0）。
+  python3 -B - "${BIN}/lib" "${REC_HOME}" "$1" "$2" "$3" "$4" "${HARNESS}" "$(command -v python3)" \
+    "${MH_FFMPEG:-$(command -v ffmpeg)}" <<'PY' || true
+import json, sys
+lib, home, root, mtype, attendees, minfree, harness, py, ff = sys.argv[1:10]
+sys.path.insert(0, lib)
+from _record_lib import DefaultsError, merge_defaults
+updates = {"root": root, "type": mtype, "attendees": json.loads(attendees or "[]"), "harness": harness,
+           "python3": py, "ffmpeg": ff, "minFreeBytes": int(minfree)}
+try:
+    merge_defaults(home, updates)
+except (DefaultsError, OSError) as e:
+    print(f"⚠ 寫不進 record.defaults.json（只是上次設定的記憶，不影響這次錄製）：{e}", file=sys.stderr)
+    sys.exit(1)
 PY
 }
 
@@ -376,6 +430,12 @@ cmd_start() {
   need_app || return 2
   if running_pid >/dev/null; then
     err "✗ 已有錄製在跑（pid $(running_pid)）。先 meeting record stop，或用 meeting record status 確認。"
+    return 2
+  fi
+  # 開錄鎖（spec §4.26.3）：被持有就不啟動 app、不碰狀態檔
+  record_lock_state
+  if [[ $? -eq 1 ]]; then
+    err "✗ 已有錄製在跑（record.lock 被持有）。先 meeting record stop，或用 meeting record status 確認。"
     return 2
   fi
 
@@ -546,26 +606,66 @@ PY
 cmd_stop() {
   check_unknown "" "" "$@" || return 2
   if [[ $# -gt 0 ]]; then err "✗ stop 不接參數：$*"; return 2; fi
-  local pid
-  if ! pid="$(running_pid)"; then
+  # 送訊號前的四項確認（spec §4.27.2、R3-§2.2）：任一不成立回 3、不送任何訊號，stderr 說明是哪一項
+  local pid spid comm want lrc
+  pid="$(tr -cd '0-9' < "${PID_FILE}" 2>/dev/null)"
+  if [[ -z "${pid}" ]]; then
     err "沒有錄製在跑。"
     return 3
   fi
-  local started limit t0 got phase code logf lines=0 n
+  if ! pid_alive "${pid}"; then
+    rm -f "${PID_FILE}"
+    err "沒有錄製在跑：record.pid 的 pid ${pid} 已經結束（已刪掉過時的 record.pid）。"
+    return 3
+  fi
+  record_lock_state
+  lrc=$?
+  if [[ "${lrc}" -ne 1 ]]; then
+    err "✗ 不送停止訊號：record.lock 沒有被錄製實例持有（pid ${pid} 不像正在錄製）。用 meeting record status 確認。"
+    return 3
+  fi
+  spid="$(python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null
+import json, sys
+try:
+    v = json.load(open(sys.argv[1], encoding="utf-8")).get("pid")
+except Exception:
+    v = None
+print(v if isinstance(v, int) and not isinstance(v, bool) else "")
+PY
+)"
+  if [[ "${spid}" != "${pid}" ]]; then
+    err "✗ 不送停止訊號：record.status.json 的 pid（${spid:-沒有}）與 record.pid（${pid}）不同。用 meeting record status 確認。"
+    return 3
+  fi
+  comm="$(ps -o comm= -p "${pid}" 2>/dev/null | sed 's/[[:space:]]*$//')"
+  want="$(recorder_comm)"
+  if [[ -z "${comm}" || "${comm}" != *"${want}" ]]; then
+    err "✗ 不送停止訊號：pid ${pid} 的程序（${comm:-讀不到}）不是 ${want}。"
+    return 3
+  fi
+  # 等待上限（spec §4.27.5）：3 × 已錄秒數 ＋ 630（finalizeDeadline 的 ×3＋600，再加 30 秒給中止收尾與寫狀態檔）
+  local limit t0 got phase code logf lines=0 n
   limit="$(python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null || echo 7200
 import json, sys, time, datetime
 try:
     st = json.load(open(sys.argv[1], encoding="utf-8"))
     t = datetime.datetime.strptime(st["startedAt"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
-    print(int(2 * max(0, time.time() - t) + 120))
+    print(int(3 * max(0, time.time() - t) + 630))
 except Exception:
     print(7200)
 PY
 )"
   logf="${REC_HOME}/record.log"
   [[ -f "${logf}" ]] && lines="$(wc -l < "${logf}" | tr -d ' ')"
-  kill -TERM "${pid}" 2>/dev/null
-  echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+  # 已在停止或收尾中：不再送 SIGTERM（再送會中止收尾），照 R2 方式等結果（spec §4.27.3）
+  got="$(status_of_run '*')"
+  phase="${got% *}"
+  if [[ "${phase}" == "stopping" || "${phase}" == "finalizing" ]]; then
+    echo "錄製器已在收尾，等結果（不再送停止訊號）…"
+  else
+    kill -TERM "${pid}" 2>/dev/null
+    echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+  fi
   t0="$(date +%s)"
   while :; do
     if [[ -f "${logf}" ]]; then  # 把收尾進度（例「正規化 12/95」）轉印出來
