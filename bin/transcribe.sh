@@ -59,12 +59,13 @@ USED_MODEL="$MODEL"
 echo "[transcribe] engine=mlx-whisper model=$MODEL audio=$AUDIO (output=$OUTFMT)"
 run_mlx() { # <model>
   # --condition-on-previous-text False：關鍵防迴圈（講座有停頓/掌聲易觸發 whisper 重複迴圈）
+  # 壓縮比門檻參數已移除（spec §4.29.4）：mlx_whisper CLI 只用單一溫度解碼、不做溫度回退，
+  # 那個門檻不會觸發重解碼，帶了也沒有作用；疑似迴圈的段落由下方的重複偵測標記。
   mlx_whisper "$AUDIO" \
     --model "$1" \
     --language "$LANG_CODE" \
     --initial-prompt "$HINT" \
     --condition-on-previous-text False \
-    --compression-ratio-threshold 2.4 \
     --output-dir "$WORKDIR" \
     --output-format "$OUTFMT" \
     --verbose False 2>&1 | tail -8

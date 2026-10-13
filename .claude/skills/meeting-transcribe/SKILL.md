@@ -21,6 +21,8 @@ bash "$MH/bin/transcribe.sh" "<音檔或影片>" "<輸出.md>" zh
 | 無 mlx 環境 | `openai-whisper medium` |
 
 單次換模型：`export MH_ASR_MODEL="<hf repo>"`。
+防迴圈的實際做法：`--condition-on-previous-text False`（不拿前文當提示），加上轉完後的重複偵測（見下方 `*.QUALITY_WARNING`）。
+`--compression-ratio-threshold` 已移除：mlx-whisper CLI 的溫度只有單一值、沒有溫度回退，這個門檻沒有作用。
 領域術語提示（降低專名誤植）：`export MH_TRANSCRIBE_HINT="以下為一場關於 … 的繁體中文會議"`。
 
 > 為什麼不用通用 whisper：同一場 60 分鐘會議實測，large-v3 有 **23.7% 簡體字**、在靜音段吐
