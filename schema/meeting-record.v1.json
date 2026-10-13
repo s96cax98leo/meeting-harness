@@ -158,6 +158,20 @@
           "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
         }
       }
+    },
+    "markers": {
+      "type": "array",
+      "description": "選用（R3）：錄製中加的標記。t＝成品時間（秒，扣掉暫停），與 錄音/markers.json 相同；summary.md 依此產生「## 標記」。",
+      "items": {
+        "type": "object",
+        "required": ["label", "t"],
+        "properties": {
+          "label": { "type": "string" },
+          "t": { "type": "number", "minimum": 0, "description": "成品秒數" },
+          "speaker": { "type": "string", "description": "有依據才填（不確定的姓名不掛）" },
+          "note": { "type": "string" }
+        }
+      }
     }
   },
   "$defs": {
