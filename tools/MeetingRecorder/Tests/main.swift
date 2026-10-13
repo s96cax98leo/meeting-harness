@@ -68,6 +68,13 @@ let mrtSuites: [(String, [MRTCase])] = [
     ("SegmentsTests", mrtSegmentsTests),
     ("TriggerTests", mrtTriggerTests),
     ("WindowListTests", mrtWindowListTests),
+    // R3（spec §3.20、§4.26–§4.44 的 swift: 測試欄）
+    ("R3LockTests", mrtR3LockTests),
+    ("R3MenuBarTests", mrtR3MenuBarTests),
+    ("R3SegmentSchedulerTests", mrtR3SegmentSchedulerTests),
+    ("R3SyncTests", mrtR3SyncTests),
+    ("R3RecordLibVectorTests", mrtR3RecordLibVectorTests),
+    ("R3DesignTokenTests", mrtR3DesignTokenTests),
 ]
 
 let mrtFilter = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""

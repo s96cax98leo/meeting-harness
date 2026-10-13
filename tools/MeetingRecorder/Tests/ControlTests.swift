@@ -421,8 +421,8 @@ func testPausedTotalAndOutputTime() throws {
 // §4.18.8（§4.18.2 的行為）：SwitchReason、PauseGate 與 pausing／resuming／pauseRoute／segmentOpened／openReason。
 func testPauseGateAndSwitchReason() throws {
     let reasons: [SwitchReason] = SwitchReason.allCases
-    let expectedReasons: [SwitchReason] = [.first, .periodic, .formatChange, .writerFailure, .resume]
-    mrtEqual(reasons, expectedReasons, "SwitchReason 恰為五個")
+    let expectedReasons: [SwitchReason] = [.first, .periodic, .formatChange, .writerFailure, .resume, .outputDeviceChange]
+    mrtEqual(reasons, expectedReasons, "SwitchReason 恰為六個")
     let g0 = PauseGate()
     mrtEqual(g0, PauseGate(paused: false, cutPoint: nil, resumePending: false), "預設值")
     mrtEqual(pauseRoute(g0, sampleStart: 5), PauseSampleRoute.normal)
