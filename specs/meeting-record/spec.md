@@ -1411,6 +1411,7 @@ agent 不得啟動 `~/Applications/MeetingRecorder.app`、不得觸發 TCC 授�
 - **第 1 層合併後對齊（2026-10-13）**：只對齊字面，不改行為。逐條：
   - 第 1 層合併後對齊（2026-10-13）：§4.28.8 耗時行的 `<對象>` 對原始段落只寫主檔名，範例改為 `耗時 normalize（seg-0001）：1.2 秒`（既有 `test_finalize.py:330` 規定 stdout 不得出現完整段落檔名，`r3-finalize-guard` 已照此實作）；`.claude/skills/meeting-record/SKILL.md` 的同一範例一起改。
   - 第 1 層合併後對齊（2026-10-13）：`design.md` R3-D8 的 `--sync-player` 對 `syncCompensation` 延遲改為「只列出，不再加減」，與 §4.35.2 一致（收尾時延遲已套用到成品上，再扣一次會重複）。
+- **第 3 層合併後（2026-10-13）**：§7 疑慮 45 標為已解決：提醒事項權限鍵依 Apple 官方文件為 `NSRemindersFullAccessUsageDescription`，並保留舊鍵 `NSRemindersUsageDescription`；本機 SDK 標頭沒有這個字串；權限框是否實際出現由 §4.47.5 確認。不改行為。
 
 ### R3-§2.2 結束碼語意（接續 §2.2、R2-§2.2）
 
@@ -1939,7 +1940,8 @@ func meetingPromptDecision(_ ep: MeetingEpisode, inputRunning: Bool, frontmostBu
 
 43. **試鎖與 app 取鎖之間的空窗**：兩個 `record.sh` 幾乎同時開錄時都會過試鎖，由 app 的鎖決定勝負；落敗的 `record.sh` 等不到本次 `runId` 的狀態，照 §4.1.6 回 4（訊息是「沒有狀態」而不是「已有錄製在跑」）。要完全消除得讓 `record.sh` 持鎖並交給 app，但 `open` 啟動的 app 不能繼承 fd；本輪接受這個退化（§4.26.7 只保證不會有兩個實例在錄）。
 44. **Time Sensitive 需要 entitlement**：`UNUserNotificationCenter.h:31` 註明要 time-sensitive entitlement；§4.2.8 規定 entitlements 恰為 2 項，自簽下加 entitlement 可能讓 app 無法啟動。本輪只設 `interruptionLevel`，系統不給時退回一般通知；實機驗收場確認（§4.47.4）。若沒有效果，選項：(a) 接受，告警靠 HUD；(b) 加 entitlement 並改 §4.2.8（要使用者核准、實機驗啟動）。
-45. **提醒事項權限的 Info.plist 鍵名未一手確認**：本機 SDK 標頭只有 `requestFullAccessToRemindersWithCompletion:`，沒有 plist 鍵名；`NSRemindersFullAccessUsageDescription` 來自調研的二手資料。`r3-reminders` 開工前要查 Apple 文件確認，若不同就改用正確鍵名並在本條記錄。
+45. **提醒事項權限的 Info.plist 鍵名未一手確認**（2026-10-13 已解決）：本機 SDK 標頭只有 `requestFullAccessToRemindersWithCompletion:`，沒有 plist 鍵名；`NSRemindersFullAccessUsageDescription` 來自調研的二手資料。`r3-reminders` 開工前要查 Apple 文件確認，若不同就改用正確鍵名並在本條記錄。
+   **解決（2026-10-13，第 3 層合併後）**：鍵名依 Apple 官方文件為 `NSRemindersFullAccessUsageDescription`（macOS 14 起 `requestFullAccessToRemindersWithCompletion:` 讀這個鍵），`Info.plist` 同時保留舊鍵 `NSRemindersUsageDescription`（`r3-reminders`）。本機 SDK 標頭（`EventKit.framework` 在內的整個 `Frameworks/`）沒有這個字串，所以只能以 Apple 文件為準；權限框實際是否出現，由實機驗收場 §4.47.5 確認。
 46. **`sync`、`search`、`reminders` 成為 `meeting` 頂層保留字**（`sync` 為修正輪新增）：名為 `sync`／`search`／`reminders` 的根目錄要寫 `./search` 這類寫法；`meeting <根>` 的預設分支（`bin/meeting.sh:468`）原本會把它們當根目錄。SKILL.md 與 README 要寫明。
 47. **S-C 的方向與大小未實測**：`reported` 依 Core Audio 回報值，A2DP 與 HFP 的實測與回報方向可能相反（intent R3-5 第 1 點）；預設 off，實機驗收場 E2／E4 之後才決定（§4.37.8）。
 48. **`SegmentScheduler` 重構的回歸面**：熱路徑改動只有 Core 行為測試＋實機 e2e 保護；`RecordingSession` 的 AVFoundation 呼叫本身沒有自動測試。實機驗收場的全套 e2e（§4.47.10）是唯一的端到端證據。

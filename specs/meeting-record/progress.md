@@ -197,13 +197,13 @@
 | 1 | `r3-sync-measure` | 已合併 | `cb6f933` |
 | 1 | `r3-docs` | 已合併 | `6fd631a` |
 | 2 | `r3-lock` | 已合併（併入原 r3-latency-log） | `db49336` |
-| 2 | `r3-menubar-states` | 已合併（併入原 r3-notify；entitlements 3 項的驗收待第 3 層 r3-reminders 合併後確認） | `8f0ccc4` |
+| 2 | `r3-menubar-states` | 已合併（併入原 r3-notify；entitlements 已於第 3 層確認 3 項） | `8f0ccc4` |
 | 2 | `r3-search` | 已合併 | `34f6766` |
 | 2 | `r3-transcript-vad` | 已合併 | `004c83d` |
 | 2 | `r3-annotations` | 已合併 | `79d5b0c` |
-| 3 | `r3-finalize-runner` | 未開始 | |
-| 3 | `r3-hud` | 未開始 | |
-| 3 | `r3-reminders` | 未開始（entitlement 依疑慮 57） | |
+| 3 | `r3-finalize-runner` | 已合併 | `9149dcd` |
+| 3 | `r3-hud` | 已合併 | `c8ebd9c` |
+| 3 | `r3-reminders` | 已合併（entitlement 依疑慮 57 選 (b)） | `ea14cb0` |
 | 4 | `r3-discard` | 未開始 | |
 | 5 | `r3-segment-scheduler` | 未開始 | |
 | 5 | `r3-menu-stages` | 未開始 | |
