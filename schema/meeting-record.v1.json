@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/meeting-harness/schema/meeting-record.v1.json",
+  "title": "meeting-record v1",
+  "description": "一場會議的正規化結果。總結階段只產這一份，所有對外產物（summary.md / docx / actions.csv / actions.ics）都由它渲染，避免同一件事寫很多次而彼此不同步。欄位命名參考 Microsoft Graph callAiInsight（title/text/owner），另補齊 decisions / dependencies / risks。",
+  "type": "object",
+  "required": ["schemaVersion", "meeting", "summary"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "meeting": {
+      "type": "object",
+      "required": ["title", "date", "type"],
+      "properties": {
+        "id": { "type": "string", "description": "YYYYMMDD-slug，與 下游知識庫專案 meetings/ 檔名一致" },
+        "title": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "durationMin": { "type": "number" },
+        "type": { "enum": ["seminar", "internal", "client", "1on1", "workshop", "interview"] },
+        "org": { "type": "string" },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "org": { "type": "string" },
+              "role": { "type": "string" },
+              "speakerTag": { "type": "string", "description": "對應逐字稿的 SPEAKER_xx" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "sources": { "type": "array", "items": { "type": "string" }, "description": "錄音/影片/投影片檔名" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["oneLiner"],
+      "properties": {
+        "oneLiner": { "type": "string", "description": "一句話；會渲染成 下游知識庫專案 解析的『一句話：』" },
+        "tldr": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "points": { "type": "array", "items": { "type": "string" } },
+          "speakers": { "type": "array", "items": { "type": "string" } },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "by": { "type": "string", "description": "誰拍板" },
+          "rationale": { "type": "string" },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "description": "交辦事項。owner/due 只能從逐字稿抽取，抽不到就留空（渲染成「（未指定）」），不得編造。",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "owner": { "type": "string" },
+          "due": { "type": "string", "description": "YYYY-MM-DD；不確定留空" },
+          "status": { "enum": ["待辦", "進行中", "已完成", "已排定", "常態", "建議"] },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "跨團隊／跨角色的等待關係（最常被漏掉的一類）。",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "from": { "type": "string", "description": "誰在等" },
+          "to": { "type": "string", "description": "等誰" },
+          "needBy": { "type": "string" },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "severity": { "enum": ["高", "中", "低"] },
+          "owner": { "type": "string" },
+          "mitigation": { "type": "string" },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    },
+    "openQuestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "owner": { "type": "string" },
+          "by": { "type": "string" }
+        }
+      }
+    },
+    "glossary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["term"],
+        "properties": {
+          "term": { "type": "string" },
+          "definition": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "uncertain": {
+      "type": "array",
+      "description": "低信心項目：聽錯的人名、專名、日期。逐字稿一定會有，誠實列出勝過猜。",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "heardAs": { "type": "string" },
+          "guess": { "type": "string" },
+          "refs": { "type": "array", "items": { "$ref": "#/$defs/ref" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "description": "出處。t=逐字稿時間（秒或 m:ss），speaker=講者標籤，src=來源檔（transcript/slides）。",
+      "properties": {
+        "t": { "type": ["string", "number"] },
+        "speaker": { "type": "string" },
+        "src": { "type": "string" }
+      }
+    }
+  }
+}

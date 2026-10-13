@@ -1,0 +1,19 @@
+# HEAD cb417b4；TMPDIR=mktemp -d、LC_ALL=en_US.UTF-8、MH_CLIENT_NAMES_FILE=<run 目錄清單，內容未讀出>
+$ python3 -m unittest discover -s tests/record -t . -v -k test_no_global_event_monitor -k test_hotkey_uses_carbon -k test_hotkey_failure_logged -k test_start_item_shows_hotkey -k test_status_title_uses_label_color -k test_menubar_refresh_while_menu_open -k test_menubar_lock_only_in_menubar -k test_menubar_uses_template_image -k test_menubar_sets_accessibility_label -k test_windowserver_connection_initialized_on_main_thread -k test_preflight_system_audio_two_stage -k test_completion_uses_outcome -k test_stage_manager_read_only -k test_stage_manager_documented -k test_no_client_names_in_repo_text
+test_stage_manager_documented ... ok
+test_completion_uses_outcome ... ok
+test_hotkey_failure_logged ... ok
+test_hotkey_uses_carbon ... ok
+test_menubar_lock_only_in_menubar ... ok
+test_menubar_refresh_while_menu_open ... ok
+test_menubar_sets_accessibility_label ... ok
+test_menubar_uses_template_image ... ok
+test_no_client_names_in_repo_text ... ok
+test_no_global_event_monitor ... ok
+test_preflight_system_audio_two_stage ... ok
+test_stage_manager_read_only ... ok
+test_start_item_shows_hotkey ... ok
+test_status_title_uses_label_color ... ok
+test_windowserver_connection_initialized_on_main_thread ... ok
+Ran 15 tests in 0.060s
+OK

@@ -1,0 +1,20 @@
+{
+  "_說明": "agent-workflow hooks 與 .claude/teams/tools 共用的設定（init.sh 由 workflow.config 產生）。清單欄位可寫 JSON 陣列或逗號分隔字串；空字串＝不設定。",
+  "project_name": "meeting-harness",
+  "runs_dir": "_tpm/runs",
+  "briefs_dir": "_tpm/briefs",
+  "repos_dir": "",
+  "upstream_repos": "",
+  "fork_repo": "s96cax98leo/meeting-harness",
+  "forbidden_paths": "/Users/yuktang/Documents/Agent/PersonalAgent,/Users/yuktang/Documents/Agent/AgentWorkFlow",
+  "allowed_branch_prefixes": "feature/,bugfix/,hotfix/,release/,merge/",
+  "writer_dirs": ["_tpm/runs", "_tpm/briefs", "docs"],
+  "main_session_git_rules": true,
+  "task_id_prefix": "",
+  "task_authority": "使用者",
+  "backlog_file": "_tpm/tasks/backlog.md",
+  "internal_id_patterns": [],
+  "attribution_line": "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+  "forbidden_trailers": [],
+  "team_agent_prefixes": ["tpm-", "dev-"]
+}
