@@ -26,6 +26,8 @@ struct MenuBarModel: Equatable {
     var alertBadge: Bool = false
     /// VoiceOver 讀的口語計時（錄製中與暫停中，例「已錄 2 分 5 秒」）；其他列為 ""。
     var spokenDuration: String = ""
+    // ---- R3x（spec §3.26、§4.54.1）：applyBackgroundFinalize 疊成「背景收尾中」階段時為 true ----
+    var backgroundFinalizing: Bool = false
 }
 
 extension MenuBarModel {

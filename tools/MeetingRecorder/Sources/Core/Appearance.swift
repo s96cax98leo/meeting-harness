@@ -19,13 +19,13 @@ func spokenDuration(seconds: Int) -> String {
 }
 
 /// 選單的階段（U6）。
-enum MenuStage: String, Equatable { case idle, recording, finalizing, failed }
+enum MenuStage: String, Equatable { case idle, recording, finalizing, backgroundFinalizing, failed }
 
 func menuStage(_ m: MenuBarModel) -> MenuStage {
     switch m.appearance {
     case .idle: return .idle
     case .preparing, .recording, .recordingMuted, .recordingAlert, .paused: return .recording
-    case .finalizing: return .finalizing
+    case .finalizing: return m.backgroundFinalizing ? .backgroundFinalizing : .finalizing   // R3x §4.54.2
     case .failed: return .failed
     }
 }
@@ -50,6 +50,8 @@ func menuGroups(stage: MenuStage) -> [[MenuItemID]] {
                 [.preferences, .quit]]
     case .finalizing:
         return [[.status], [.cancelFinalize], [.openSession], [.preferences, .quit]]
+    case .backgroundFinalizing:   // R3x §4.54.3（Q4 (a)：只剩背景收尾時可以取消、也可以開錄）
+        return [[.status], [.start, .recordWindow, .saveTo], [.cancelFinalize], [.openSession, .showLast], [.preferences, .quit]]
     case .failed:
         return [[.status], [.failureDetail, .copyDiagnostics], [.start, .recordWindow, .saveTo], [.openSession, .showLast],
                 [.preferences, .quit]]
