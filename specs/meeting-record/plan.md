@@ -699,7 +699,7 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 
 ## 11. R3 補充輪（R3x，2026-10-17）：背景收尾與收尾平行化
 
-- 上游：run 目錄 `r3x-intent-draft.md`（閘門 1 已核准，2026-10-17）、`design.md`〈R3x 設計〉R3x-D1–R3x-D14、`spec.md`〈R3 補充輪（R3x）〉（R3x-§2.2、§3.21–§3.27、§4.48–§4.58、§6 第 145–155 條、§7 疑慮 64–74）。
+- 上游：run 目錄 `r3x-intent-draft.md`（閘門 1 已核准，2026-10-17）、`design.md`〈R3x 設計〉R3x-D1–R3x-D15、`spec.md`〈R3 補充輪（R3x）〉（R3x-§2.2、§3.21–§3.27、§4.48–§4.58、§6 第 145–157 條、§7 疑慮 64–77；修正輪對照見 design R3x-D15）。
 - 併進 R3 交付（intent Q1）：子任務分支 `feature/meeting-record-r3--x-<名稱>`、worktree `.worktrees/meeting-record-r3--x-<名稱>`，整合到 `feature/meeting-record-r3`。`<名稱>` 是描述性 slug，**不是任務編號**。
 - 子任務定義檔：run 目錄 `r3x-subtasks.json`（格式同 `r3-subtasks.json`，另加 `layer`、`branch`）；build 段的共同規則沿用 run 目錄 `r3-build-common.md`（契約來源改讀本節與 spec〈R3x〉；基準 commit 以派工單為準）。
 - 大小只寫相對大小 S／M／L（不寫人天、工時）。
@@ -712,11 +712,11 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 |---|---|---|---|---|---|---|---|
 | Red | `r3x-red-py` | test | Python 紅燈測試與兩支新替身 | `tests/record/test_r3x_background.py`、`test_r3x_parallel_finalize.py`、`test_r3x_app_static.py`、`test_r3x_docs.py`（新）、`tests/record/fakes/fake_bg_finalizer.sh`、`fakes/parallel_ffmpeg.py`（新） | — | §3.27；§4.48–§4.57 的 Python 測試欄 | M |
 | Red | `r3x-red-swift` | test | Swift 紅燈測試 | `tools/MeetingRecorder/Tests/R3xBackgroundTests.swift`（新）、`Tests/main.swift`（只加一列，§6 第 154 條） | — | §3.26；§4.48–§4.54 的 `swift:` 測試欄 | S |
-| 1 | `r3x-core` | code | Core 純函式與型別（`BackgroundFinalize.swift`、`RecordStatus`／`MenuStage`／`MenuBarModel` 的增補） | `tools/MeetingRecorder/Sources/Core/` | — | §3.26；§4.48.1–3、§4.49.1–2、§4.50.4、§4.53.2–3、§4.54.1–3 | M |
-| 1 | `r3x-parallel-finalize` | code | B：分析與正規化平行、`MH_FINALIZE_JOBS`、錄製中降為 2、libx264 串行、依賴鏈、最小段號失敗、SIGTERM、進度行 | `bin/_record_finalize.py` | — | §3.25；§4.55；§6 第 152、153 條 | M |
-| 1 | `r3x-cli` | code | `record.sh` 的 stop／status／finish 與文件 | `bin/record.sh`、`README.md`、`.claude/skills/meeting-record/SKILL.md` | — | §4.48.7、§4.49.5–6、§4.50.3、§4.51、§4.52、§4.53.1、§4.56；§6 第 146、147 條 | M |
-| 2 | `r3x-capture` | code | 錄製實例的背景收尾協定與條件式寫入 | `tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`、`Capture/PreflightRunner.swift`、`Capture/Commands.swift`、`Capture/FinalizeRunner.swift` | `r3x-core` | §3.23、§3.24；§4.48.4–6、§4.49.3–4、§4.50.1–2、§4.50.6；§6 第 145、153 條 | M |
-| 2 | `r3x-menubar` | code | menu bar：疊加、新階段、取消、自動前處理、會議偵測 | `tools/MeetingRecorder/Sources/Trigger/MenuBar.swift` | `r3x-core` | §4.50.5、§4.54.4–7；§6 第 149、150、151、155 條 | S–M |
+| 1 | `r3x-core` | code | Core 純函式與型別（`BackgroundFinalize.swift`、`RecordStatus`／`MenuStage`／`MenuBarModel` 的增補；修正輪的 `backgroundEntryDecision`、`queueWaitStep`、`autoPrepCandidates`、`backgroundJobLabel`、`backgroundCancelPrompt`、`.orphaned`） | `tools/MeetingRecorder/Sources/Core/` | — | §3.26；§4.48.1–3、§4.48.8、§4.49.1–2、§4.50.4、§4.50.7–8、§4.53.2–3、§4.54.1–3、§4.54.5 | M |
+| 1 | `r3x-parallel-finalize` | code | B：分析與正規化平行（`run_ordered`、中止派工、`SegmentAborted`、只由 worker 回收）、`MH_FINALIZE_JOBS`、錄製中降為 2、libx264 串行、依賴鏈、最小段號失敗、SIGTERM 重掃、`say` 加鎖、`MH_FINALIZE_WAIT_LOCK`、進度行 | `bin/_record_finalize.py` | — | §3.25；§4.55（含 §4.55.18–22）；§6 第 152、153、156 條 | M–L |
+| 1 | `r3x-cli` | code | `record.sh` 的 stop／status／finish 與文件 | `bin/record.sh`、`README.md`、`.claude/skills/meeting-record/SKILL.md` | — | §4.48.7、§4.49.5–6、§4.50.3、§4.51（含 §4.51.9–13）、§4.52（含 §4.52.8–9）、§4.53.1、§4.56（§4.56.2 視決定 5）；§6 第 146、147 條 | M |
+| 2 | `r3x-capture` | code | 錄製實例的背景收尾協定與條件式寫入 | `tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`、`Capture/PreflightRunner.swift`、`Capture/Commands.swift`、`Capture/FinalizeRunner.swift` | `r3x-core` | §3.23、§3.24；§4.48.4–6、§4.49.3–4、§4.50.1–2、§4.50.6、§4.53.4；§6 第 145、153、156 條（傳 `MH_FINALIZE_WAIT_LOCK`） | M |
+| 2 | `r3x-menubar` | code | menu bar：疊加、新階段、取消（確認框、對象與顯示同一場）、自動前處理去重、會議偵測 | `tools/MeetingRecorder/Sources/Trigger/MenuBar.swift` | `r3x-core` | §4.50.5、§4.50.9、§4.54.4–7；§6 第 149、150、151、155、157 條 | M |
 
 **同層 `owns` 不重疊、同檔必有相依路徑**：以 run 目錄的 `r3-check-layers.py` 驗（`python3 <run 目錄>/r3-check-layers.py <run 目錄>/r3x-subtasks.json`；設計段實跑：Red、1、2 三層，問題數 0）。
 
@@ -748,6 +748,6 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 
 ### 11.4 不屬於任何子任務、需要主 session 或使用者做的事（R3x）
 
-- **閘門 2**：使用者核准 spec §6 第 145–155 條，並決定 `design.md` R3x-D13 的四項（Q3 的「失敗」解讀、app 路徑的 `MH_FINALIZE_JOBS`、`stop` 等全部或最晚一場、每場狀態檔的保留）；`save_run.py approve`，stage 鍵由主 session 定。決定若不是建議選項，回 `sdlc-design-revise` 修 spec 後再進 build。
+- **閘門 2**：使用者核准 spec §6 第 145–157 條，並決定 `design.md` R3x-D13 的五項（Q3 的「失敗」解讀、app 路徑的 `MH_FINALIZE_JOBS`、`stop` 等全部或最晚一場、每場狀態檔的保留、開錄前磁碟檢查要不要扣背景收尾用量），確認主 session 代選的 I5 (A) 與 I7 在 `.failed` 時的行為；`save_run.py approve`，stage 鍵由主 session 定。決定若不是建議選項，回 `sdlc-design-revise` 修 spec 後再進 build。
 - **test 段實機驗收**（`spec.md` §4.58，使用者在場）：前置的覆蓋安裝、**harness 改指 R3 版**、建立 `keep-segments`，每一步都要先問使用者、當下同意才做；harness 是使用者的實機設定，不屬於任何子任務的程式範圍。結果寫 run 目錄，只寫 run 代號與數字。
 - 推送與開 PR：照 `plan.md §10.5` 的 R3 拆包規劃（R3x 的 `bin/`、`tests/`、文件歸 R3-1，`tools/MeetingRecorder/` 歸 R3-2），推送前掃名稱，一律等使用者當下同意。
