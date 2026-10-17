@@ -93,6 +93,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private var writersDrained = false                 // 已對目前與舊 writer 呼叫收尾
     private var finalizeStarted = false
     private var finalizeRunner: FinalizeRunner?         // 收尾執行器（spec §4.28.6）；beginFinalize 建立，只在 q 上讀寫
+    private var queueLockFD: Int32?                    // 排隊鎖 <home>/finalize.queue.lock（spec R3x §3.22）；取得後持有到程序結束
     private var discarding = false                     // 這次停止是 F2 捨棄（spec §4.42.3）：跳過收尾、移到垃圾桶
     private var hadError = false
     private var forced: (code: Int32, message: String)?
@@ -1081,22 +1082,106 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             complete(finalizeCode: 0, skipped: true)
             return
         }
+        // 第 1 步
         let n = finishedSegments
-        status.update {
-            $0.phase = .finalizing
-            $0.segments = n
-            $0.message = "收尾中"
+        // 第 2 步：runId 合格才試每場鎖；判斷交 Core backgroundEntryDecision（spec R3x §3.23、§3.26）
+        let runIdOK = backgroundRunIdAllowed(ctx.runId)
+        let perRunLock: MenuBarLockResult? = runIdOK ? tryFlock(at: backgroundLockURL(home: ctx.home, runId: ctx.runId)) : nil
+        let entry = backgroundEntryDecision(runIdAllowed: runIdOK, lock: perRunLock)
+        let background: Bool
+        if entry == .background, case .acquired(let fd)? = perRunLock {
+            backgroundLockFD = fd
+            background = true
+        } else {
+            if case .foreground(let reason) = entry {
+                log.line("⚠ 不能進背景收尾（\(reason)），改在前景收尾")
+            }
+            background = false
         }
-        log.line("● 收尾中（\(n) 段）")
+        if background {
+            // 第 3、4 步：之後的寫入照 §3.24；這一次仍持有 record.lock，共用狀態檔一定寫入
+            status.enterBackground(home: ctx.home)
+            status.update {
+                $0.phase = .finalizing
+                $0.segments = n
+                $0.message = "收尾排隊中"
+                $0.background = true
+                $0.queued = true
+            }
+            // 第 5 步：record.pid 內容是自己才刪（此時仍持有 record.lock）
+            let pidText = try? String(contentsOf: ctx.pidURL, encoding: .utf8)
+            if shouldRemoveRecordPid(pidFileContents: pidText, ownPid: getpid()) {
+                try? FileManager.default.removeItem(at: ctx.pidURL)
+            }
+            // 第 6 步：清掉過期的終態與孤兒（§3.21 清理 (1)）
+            let fm = FileManager.default
+            for job in loadBackgroundJobs(home: ctx.home)
+            where prunableBackgroundJob(job, now: Date()) && backgroundRunIdAllowed(job.status.runId) {
+                try? fm.removeItem(at: backgroundStatusURL(home: ctx.home, runId: job.status.runId))
+                try? fm.removeItem(at: backgroundLockURL(home: ctx.home, runId: job.status.runId))
+            }
+            // 第 7 步：放開開錄鎖，從這裡起下一場可以開錄
+            releaseRecordLock()
+            log.line("● 已放開開錄鎖：收尾改在背景跑，可以開始下一場（\(n) 段）")
+        } else {
+            // 前景收尾：照 R3 現行流程（不放 record.lock、不寫每場狀態檔）
+            status.update {
+                $0.phase = .finalizing
+                $0.segments = n
+                $0.message = "收尾中"
+            }
+            log.line("● 收尾中（\(n) 段）")
+        }
+        // 第 8 步：收尾中（含排隊中）的停止訊號照 §4.28.6 轉成 runner.cancel()
         let runner = FinalizeRunner(recordedSeconds: recordedSecondsAtStop(), log: log)
         finalizeRunner = runner
         DispatchQueue.global(qos: .userInitiated).async {
+            if background {
+                // 第 9 步：排隊；排隊中被取消 → 不啟動 _record_finalize.py
+                guard self.waitFinalizeQueue(runner) else {
+                    self.q.async { self.complete(finalizeCode: 5, aborted: .cancelled) }
+                    return
+                }
+                // 第 10 步
+                self.status.update {
+                    $0.queued = nil
+                    $0.message = "收尾中"
+                }
+                self.log.line("● 收尾中（\(n) 段）")
+            }
             let result = self.runFinalize(runner)
             self.q.async {
                 switch result {
                 case .exited(let rc): self.complete(finalizeCode: rc)
                 case .aborted(let reason): self.complete(finalizeCode: 5, aborted: reason)
                 }
+            }
+        }
+    }
+
+    /// 背景收尾排隊（spec R3x §3.22、§3.23 第 9 步）：每 finalizeQueuePollSeconds 以 tryFlock 試排隊鎖一次，
+    /// 每一輪由 Core queueWaitStep 決定（先看取消、再試鎖）；不用阻塞的 flock，排隊中收到取消才能立刻離開。
+    /// 取得 → 持有到程序結束、回 true；開不了鎖檔 → 記一行、不排隊、回 true；被取消 → 回 false。不得在 q 上呼叫。
+    private func waitFinalizeQueue(_ runner: FinalizeRunner) -> Bool {
+        let lockURL = finalizeQueueLockURL(home: ctx.home)
+        var announced = false
+        while true {
+            switch queueWaitStep(cancelRequested: runner.isCancelRequested, tryLock: { tryFlock(at: lockURL) }) {
+            case .acquired(let fd):
+                queueLockFD = fd
+                return true
+            case .retry:
+                if !announced {
+                    announced = true
+                    log.line("● 等上一場收尾完成（排隊中）")
+                }
+                usleep(useconds_t(finalizeQueuePollSeconds * 1_000_000))
+            case .unavailable(let e):
+                log.line("⚠ 開不了排隊鎖 finalize.queue.lock（errno \(e)），不排隊、直接收尾")
+                return true
+            case .cancelled:
+                log.line("● 排隊中收到取消，不啟動收尾")
+                return false
             }
         }
     }
@@ -1125,6 +1210,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let ff = defaults?.ffmpeg, !ff.isEmpty { env["MH_FFMPEG"] = ff }
+        // 收尾子程序讀同一個 home（spec R3x §3.23 第 10 步）；背景路徑才等收尾鎖（§3.25、§6 第 156 條），前景不設
+        env["MH_RECORD_HOME"] = ctx.home.path
+        if backgroundLockFD != nil {
+            env["MH_FINALIZE_WAIT_LOCK"] = "1"
+        } else {
+            env.removeValue(forKey: "MH_FINALIZE_WAIT_LOCK")
+        }
         return runner.run(executable: URL(fileURLWithPath: defaults?.python3 ?? "/usr/bin/python3"),
                           arguments: [script.path, ctx.session.path], environment: env)
     }
@@ -1145,7 +1237,11 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             $0.code = outcome.code
             $0.message = outcome.message
         }
-        try? FileManager.default.removeItem(at: ctx.pidURL)
+        // record.pid 內容是自己才刪：背景收尾時它可能已是下一場的（spec R3x §3.23 第 11 步、§4.49.4）
+        let pidText = try? String(contentsOf: ctx.pidURL, encoding: .utf8)
+        if shouldRemoveRecordPid(pidFileContents: pidText, ownPid: getpid()) {
+            try? FileManager.default.removeItem(at: ctx.pidURL)
+        }
         log.line(outcome.code == 0 ? "✓ \(outcome.message)" : "✗ \(outcome.message)")
         // 試錄（--skip-finalize）不發完成通知：暫存場次不是使用者的會議（實機缺陷 F1）
         guard !ctx.skipFinalize else { exit(outcome.code) }

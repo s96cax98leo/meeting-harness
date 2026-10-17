@@ -44,13 +44,52 @@ final class StatusWriter {
                               segments: 0, preflight: [], warnings: [])
     }
 
+    /// 進背景收尾之後的 home（spec R3x §3.24）；nil＝還沒進背景，照 R3 無條件寫共用狀態檔。
+    private var backgroundHome: URL?
+
+    /// 進背景收尾（spec R3x §3.23 第 3 步）：之後每次 update 一定寫每場狀態檔，共用狀態檔改為條件式寫入。
+    func enterBackground(home: URL) {
+        lock.lock(); defer { lock.unlock() }
+        backgroundHome = home
+    }
+
     func update(_ change: (inout RecordStatus) -> Void) {
         lock.lock(); defer { lock.unlock() }
         change(&status)
         status.updatedAt = isoNow()
-        try? writeJSONAtomically(status, to: url)
+        guard let home = backgroundHome else {
+            try? writeJSONAtomically(status, to: url)
+            return
+        }
+        // §3.24 第 1 點：每場狀態檔一定寫（background: true）
+        var own = status
+        own.background = true
+        try? writeJSONAtomically(own, to: backgroundStatusURL(home: home, runId: status.runId))
+        writeSharedIfOwned(home: home)
+    }
+
+    /// §3.24 第 2 點：仍持有 record.lock → 直接寫；否則短暫取鎖（1 秒重試），
+    /// 共用狀態檔不存在或 runId 還是自己（sharedStatusWritable）才寫，寫完立刻放鎖。取不到鎖就不寫。
+    private func writeSharedIfOwned(home: URL) {
+        if recordLockFD != nil {
+            try? writeJSONAtomically(status, to: url)
+            return
+        }
+        switch acquireRecordLock(home: home, retrySeconds: 1.0) {
+        case .acquired(let fd):
+            if sharedStatusWritable(lockAcquired: true, current: readStatus(url), runId: status.runId) {
+                try? writeJSONAtomically(status, to: url)
+            }
+            close(fd)
+        case .heldByOther, .unavailable:
+            break
+        }
     }
 }
+
+/// 本程序持有的每場鎖 <home>/finalizing/<runId>.lock fd（spec R3x §3.22、§3.23 第 2 步）：
+/// 進背景收尾時取得，持有到程序結束（O_CLOEXEC，收尾子程序不繼承）；nil＝不在背景路徑。
+var backgroundLockFD: Int32?
 
 let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "mov", "mp4", "m4v"]
 
