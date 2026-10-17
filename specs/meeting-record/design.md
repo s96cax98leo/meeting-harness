@@ -968,3 +968,174 @@ Resources/                         Info.plist（提醒事項權限說明、CFBun
 - I-1（ADR `adr-r3-menu-stages.md` 背景）：拿掉沒有出處的「t7 時在灰色項目裡找停止」，改成 intent R3-1 第 3 點有出處的敘述（18 項扁平清單、全部灰掉不隱藏；t7 的實測是圖示看不到、快捷鍵連按 9 次）。
 - I-2（首次引導的試錄）：試錄改放暫存目錄、錄完直接刪，不移垃圾桶、不加確認框（`spec.md` §6 第 139 條，覆寫 §4.43.5 與 R3-D14 的「走 F2 的捨棄路徑」；閘門 2 待核准）。理由：試錄是引導為驗權限產生的暫存，不是使用者資料、不在使用者的根目錄；每次引導往垃圾桶丟一個資料夾只增加雜訊；確認框對使用者沒有保護作用。刪除範圍限定在本程序剛建立的 `temporaryDirectory/meeting-harness-trial-<runId>/`。
 - J（地端 summary）：`bin/summarize-local.py` 也接上「## 標記」「## 錄製註記」，歸 `r3-annotations`（`spec.md` §4.31.9）。
+
+## R3x 設計（2026-10-17）：背景收尾與收尾平行化
+
+- 性質：R3 的補充輪，併進 R3 一起交付（intent Q1）。**本節以上的內容一字不改**；取代或補充既有定案的地方逐條記在 `spec.md`〈R3x-§6〉第 145 條起。
+- 上游：run 目錄 `r3x-intent-draft.md`（閘門 1 已核准，2026-10-17；Q2、Q3、Q4 都選 (a)；Q5 實機驗收時再改 harness；Q6 不做）。調研沿用簡寫：`bg`＝`r3x-research-background-finalize.md`、`pf`＝`r3x-research-parallel-finalize.md`。
+- 程式行號以 `ac88ad4` 為準。Swift 的新名稱只以 `spec.md` §3.26 為準；Python 的新名稱以 §3.25 為準。
+- 範例名稱一律用「[Stand-up] 範例專案」。
+
+### R3x-D1 元件與改動總覽
+
+```
+停止訊號 ─▶ 錄製實例 A（RecordingSession）
+             │ stopCapture → 排空佇列 → 收 writer（R3 不變）
+             │ beginFinalize 前段：levels、deviceMonitor、manifest、meta（R3 不變）
+             │ --skip-finalize？──是──▶ R3 原路徑（持鎖到結束）
+             │ 取每場鎖 <home>/finalizing/<A>.lock（取不到 → R3 前景收尾）
+             │ StatusWriter.enterBackground → 寫每場狀態檔＋共用狀態檔（finalizing、background、queued）
+             │ record.pid 是自己才刪；清掉過期的每場狀態檔
+             │ releaseRecordLock()  ◀── 從這裡起 B 可以開錄
+             │ 排隊：每 0.5 秒試 <home>/finalize.queue.lock（期間可被取消）
+             │ FinalizeRunner.run（期限從這裡起算）──▶ _record_finalize.py（B：分析與正規化平行）
+             │ complete：每場狀態檔（一定）＋共用狀態檔（runId 還是 A 才寫）＋通知 → exit
+             ▼
+record.sh stop／status／finish ──讀──▶ record.status.json ＋ <home>/finalizing/*.status.json（試每場鎖，不建檔）
+menu bar refresh ──讀──▶ 同上 → menuBarModel → applyBackgroundFinalize → 階段、canStart、trackCompletion
+```
+
+| 元件 | 改動 | spec |
+|---|---|---|
+| `Core/BackgroundFinalize.swift`（新） | 路徑、`tryFlock`、job 讀取與狀態、條件式寫入判斷、pid 守門、清理判斷、取消判斷、menu bar 疊加 | §3.26 |
+| `Core/Records.swift`、`Appearance.swift`、`Trigger.swift` | `background`、`queued`；`MenuStage.backgroundFinalizing`；`MenuBarModel.backgroundFinalizing` | §3.26、§6 第 148 條 |
+| `Capture/RecordingSession.swift` | `beginFinalize` 的背景協定、`waitFinalizeQueue`、`complete` 的 pid 守門、`runFinalize` 傳 `MH_RECORD_HOME` | §3.23 |
+| `Capture/PreflightRunner.swift` | `StatusWriter.enterBackground` 與條件式寫入；`backgroundLockFD` | §3.24 |
+| `Capture/Commands.swift`、`FinalizeRunner.swift` | `releaseRecordLock()`；`isCancelRequested` | §3.26 |
+| `Trigger/MenuBar.swift` | 讀 job、疊加、階段、取消、`trackCompletion`、會議偵測 | §4.54 |
+| `bin/record.sh` | `stop`、`status`、`finish` | §4.51–§4.53 |
+| `bin/_record_finalize.py` | 平行度、排程、失敗與 SIGTERM 處理、進度行 | §3.25、§4.55 |
+| `FinalizeRunner` 的取消與期限、`_record_finalize.py` 的收尾鎖與逐步逾時、HUD、`SegmentScheduler` | **不改** | — |
+
+### R3x-D2 時序：停止 → 放鎖 → 背景收尾 → 完成時條件式寫入
+
+```
+時間 →
+A 錄製實例 : [錄製]─SIGTERM─[stopping：停擷取、收 writer]─[取每場鎖、寫狀態、刪自己的 pid]─放 record.lock─[排隊]─[收尾 Python]─[complete：每場檔＋（條件）共用檔]─exit
+B 錄製實例 :                                                                   └─(幾秒後) 取 record.lock─寫共用狀態、record.pid─[錄製]……
+共用狀態檔 : A:recording ─ A:stopping ─ A:finalizing(background,queued) ──────── B:preflight ─ B:recording ……（A 的 complete 看到 runId≠A，不寫）
+record.pid : A ──────────────────────── （刪）────────────────────────────────── B ……（A 的 complete 看到內容不是自己，不刪）
+每場檔 A   :                              finalizing(queued) ─ finalizing ─────────────────── done／failed
+```
+
+- 放鎖點選在 manifest 與 meta 寫完之後、`finalizing` 之前（`bg` §1：`RecordingSession.swift:1076` 與 `:1084` 之間）。這時 SCK 已停、writer 全部到終態、`deviceMonitor` 已停，錄製實例不再用任何擷取資源。`O_CLOEXEC`（`Core/Lock.swift:24`）保證收尾子程序沒有繼承 `record.lock`，`close` 就真的放開。
+- 放鎖前做三件事，**都在仍持有 `record.lock` 時**完成，所以不會跟 B 搶：寫共用狀態檔（最後一次無條件）、刪 `record.pid`（內容是自己才刪）、取每場鎖並寫每場狀態檔。順序上先取每場鎖、再寫每場狀態檔：任何人看到每場狀態檔時，每場鎖必然已被持有，旁觀者因此可以「試一次、不重試」。
+- B 開錄的條件與 R3 相同：`record.sh` 的 `running_pid`（`bin/record.sh:431`）看不到 A 的 pid、試鎖拿得到；錄製實例的 preflight 第 11 項（`PreflightRunner.swift:146-162`）也一樣。A 在 `stopping` 期間（幾秒）仍持鎖，這段時間開錄照 R3 回 2。
+
+### R3x-D3 每場狀態檔與每場鎖（`spec.md` §3.21、§3.22）
+
+- 為什麼不用 `.finalize.lock` 當依據：沒有索引、只有 Python 子程序持有（排隊與 Python 前後都有空窗）、`meeting record finish` 也會持有、捨棄不經過它、旁觀者試鎖會在使用者的場次目錄建檔（`bg` §3）。改在 `<home>/finalizing/` 放每場一份狀態檔與一把鎖，旁觀者只讀 home。
+- 每場狀態檔沿用 `RecordStatus` 型別，`shouldAutoPrep`、`menuBarModel`、`record.sh` 的 `status_of_run` 邏輯都能直接用；只加兩個選用欄位（nil 省略鍵，R2-Q10 與 R3 `discarded` 的先例），既有鍵集合測試不受影響。
+- 旁觀者試每場鎖**不帶 `O_CREAT`**：檔不存在就是沒人持有，不會為了查狀態而建檔。
+- 清理：終態保留 24 小時（夠 `status`、`stop`、menu bar 讀到結果），由下一個進背景的錄製實例清；當掉的留給 `meeting record finish`。不另開常駐清理者。
+
+### R3x-D4 共用狀態檔的條件式寫入（`spec.md` §3.24）
+
+- 規則只有一條：**持有 `record.lock` 而且共用狀態檔的 runId 還是自己（或檔不存在）才寫**。持有鎖保證此刻沒有別的錄製實例在寫；runId 檢查保證 B 碰過以後 A 就不再覆寫，連 B 已結束、鎖已放的情況也成立。
+- A 自己還持有 `record.lock` 時直接寫：`flock` 以開檔為單位，同程序再開一次會撞到自己（`Commands.swift:109` 的註解），所以不能每次都重新取鎖。
+- 取鎖用 `acquireRecordLock(home:retrySeconds: 1.0)`，和其他取鎖者同一套 1 秒重試，不會讓 B 的開錄判成「已有錄製在跑」。
+- `record.pid` 的守門同理：`complete` 只在內容是自己的 pid 時刪；進背景時已經刪過，所以正常情況下 `complete` 不會刪任何東西（`bg` §2 的「A 刪掉 B 的 `record.pid`」因此消失）。
+
+### R3x-D5 背景收尾排隊與取消（Q4 (a)）
+
+- 排隊鎖 `<home>/finalize.queue.lock`：一次只跑一場 `_record_finalize.py`。理由：兩場收尾同時跑會疊加硬體編碼器的負載（`pf` §5：收尾開到 4 路就讓即時編碼落後），也會讓錄製中降為 2 失去意義。
+- 等待用 0.5 秒輪詢 `tryFlock`，不用阻塞的 `flock`：排隊中收到取消（menu bar「取消收尾」送 SIGTERM → `requestStop` → `runner.cancel()`）時要能立刻離開，阻塞的 `flock` 做不到。
+- `FinalizeRunner` 在排隊前就建好，讓 R3 的取消路徑（`RecordingSession.swift:906-913`）不用改；排隊中被取消時不啟動 Python，直接 `complete(… aborted: .cancelled)`，結果與 R3「收尾已取消」相同。
+- 收尾總期限從 `FinalizeRunner.run` 起算（R3 現行就是如此，`FinalizeRunner.swift:106`）；排隊時間不算進 A 的期限，`record.sh stop` 等 B 時也把 B 的排隊時間排除（§4.51.7）。
+- **取消規則（Q4 (a)）**：只有「沒有錄製在跑」時，選單才提供「取消收尾」（新階段 `.backgroundFinalizing` 的分組有它；`.recording` 階段沒有）；`backgroundCancelDecision` 在 `record.lock` 被持有時一律拒絕。對象：正在跑的那一場，沒有就最早排隊的那一場（`backgroundCancelCandidate`）。CLI 不新增取消寫法。
+
+### R3x-D6 `record.sh`：`stop`、`status`、`finish`（Q2 (a)、Q3 (a)）
+
+- **`stop`**：
+  1. `record.pid` 存在且活著 → 四項確認照 R3（`bin/record.sh:606-650`），送訊號前從共用狀態檔記下目標 runId。等待時依 runId 讀：共用狀態檔的 runId 相符就用它，否則讀 `finalizing/<runId>.status.json`。目標排隊中把起算點重設。目標的每場鎖沒人持有而 phase 仍是 `finalizing` → 5（當掉）。摘要（`stop_summary`）改成可以傳狀態檔路徑，預設仍是共用狀態檔。
+  2. 沒有 `record.pid`（或 pid 已死、照 R3 刪掉）→ 列出活著的背景收尾：沒有 → 照 R3 回 3；有 → 不送訊號、等全部結束，全成功 0、否則 5。
+  3. `cmd_stop` 內仍只有一個 `limit="$(python3 … <<'PY'` 區塊（`test_r3_lock.py:186-189`）；讀每場狀態檔、等背景收尾的邏輯寫在 `cmd_stop` 之外的新函式。
+- **`status`**：R3 的主體不變，在它要結束前補上背景收尾的行（§4.52）；結束碼只在兩種新情況改變：錄製中＋上一場當掉（0，加 ⚠）、沒有錄製＋背景收尾當掉（5）。
+- **`finish`**：Python 回 0 之後，清掉同一場次的孤兒每場狀態檔（每場鎖沒人持有、phase `finalizing`）。只碰 `<home>/finalizing/` 內、`session` 欄位相符的檔，與 R3 刪過時 `record.pid` 同一類操作。
+
+### R3x-D7 menu bar：階段、附註、自動前處理
+
+- `menuBarModel` 不改（M1–M10 的表與既有測試都不動）。另加純函式 `applyBackgroundFinalize`，在 `refresh` 裡套在 `menuBarModel` 的結果上：
+  - 共用狀態檔就是活著的背景收尾（`background: true`、`appearance == .finalizing`）→ 新階段 `.backgroundFinalizing`：外觀仍是收尾中（處理紫）、`canStart` true、狀態列「背景收尾中…・<場次名>」，選單有「開始錄製」「錄其他視窗」「存到」「取消收尾」。
+  - 其他情況（例如 B 錄製中）→ 只在狀態列與 toolTip 結尾附註「（上一場收尾中）」或「（上一場收尾異常中止）」，其餘欄位不動；所以錄製中的選單項目、HUD、快捷鍵行為都不變。
+- 為什麼加新階段，不直接改 `.finalizing` 的分組：改 `.finalizing` 會動到 `TriggerTests.swift:123-125`（M10 `canStart:false`）與 `R3MenuBarTests.swift:137`、`:148` 的既有斷言（`bg` §7 (a) 末段）；新階段與新欄位都有預設值，既有斷言零修改。舊版錄製器寫的 `finalizing`（沒有 `background`）仍走 `.finalizing`，不會誤開「開始」。
+- 自動前處理與完成通知：`trackCompletion` 對共用狀態檔與每一個每場狀態檔各跑一次（`bg` §6 第 1 點：不這樣做，下一場開錄後上一場的 `done` 只在每場檔，前處理與「在 Finder 顯示」都不會觸發）。同一 runId 只觸發一次，沿用 `completionPosted`、`lastAutoPrepRunId`。
+- 會議偵測：背景收尾不算錄製中（`MenuBar.swift:196-199` 的閉包不含新階段），因為此時已經可以開下一場。
+
+### R3x-D8 失敗與當機的恢復路徑
+
+| 當機或失敗的時點 | 共用狀態檔／`record.pid`／鎖 | 下一場 | `meeting record status` | 補救 |
+|---|---|---|---|---|
+| A 在放鎖**之前**當掉（stopping、取每場鎖之前） | 共用＝A 的 `stopping`、pid 已死；`record.pid` 留著（pid 已死）；`record.lock` 由核心放開 | 可以開錄（`running_pid` 看到死 pid 不擋；鎖拿得到） | R3 現行：5「上次錄製異常中止」 | `meeting record finish <A>`（R3 不變） |
+| A 在放鎖之後、排隊中當掉 | 共用＝A 的 `finalizing`（沒有 B）或 B 的；每場檔＝`finalizing`、`queued`；每場鎖、排隊鎖由核心放開 | 不受影響 | 沒有 B：R3 現行路徑回 5，另加「上一場收尾異常中止」行（stderr）；有 B：0＋⚠ 行 | `finish <A>`；成功後清 A 的孤兒每場檔 |
+| A 在 Python 收尾中當掉（Python 被 SIGKILL 一起帶走與否都一樣） | 同上；`.finalize.lock` 由核心放開；`錄音/tracks/.finalize/` 可能殘留 | 不受影響 | 同上 | `finish <A>`（`finalize_locked` 一開始就 `rmtree` 暫存目錄，`bin/_record_finalize.py:1172`） |
+| Python 回非 0（收尾失敗、逾時、取消） | A 照 R3 寫 `failed`／5 到每場檔；共用檔條件成立才寫 | 不受影響 | 沒有 B 而共用檔是 A：R3「上次錄製出錯」回 0；有 B：0＋「上一場收尾失敗」⚠ 行 | `finish <A>` |
+| A 寫完每場檔、寫共用檔之前當掉 | 每場檔已是終態；共用檔停在 A 的 `finalizing`（沒有 B 時） | 不受影響 | 沒有 B：R3 路徑回 5（共用檔看起來像當掉）；`finish <A>` 回「已完成（不重做）」 | 下一場開錄後自然恢復；不另處理（窗口只有一次檔案寫入） |
+| B 錄製中當掉 | 共用＝B 的 `recording`、pid 已死 | — | R3 現行：5 | A 不寫共用檔（runId 是 B），B 的補救照 R3 |
+| menu bar 當掉或沒開 | 不影響 A、B | — | — | 重開後 `trackCompletion` 依每場檔補發（看過進行中才會觸發，與 R3 相同的限制） |
+
+- `meeting record finish <A>` 在 A 還活著時：A 正在跑 Python → 回 5「這個場次正在收尾」（§4.28.1）；A 還在排隊 → `finish` 先收完，A 之後得到「已完成（不重做）」（`spec.md` §7 疑慮 72）。
+
+### R3x-D9 錄製中降為 2：怎麼偵測「有錄製在跑」
+
+候選與取捨（`pf` §7「偵測方式要在 design 決定」）：
+
+| 做法 | 優點 | 缺點 | 採用 |
+|---|---|---|---|
+| (1) app 在 spawn 收尾時以環境變數告訴 Python | 簡單 | 只反映啟動那一刻；B 常在 A 收尾**途中**開錄（正是 R3x 要的情境），之後就不準；`meeting record finish` 也沒有人傳 | 不採 |
+| (2) 試 `flock` `record.lock` | 最準 | 拿到鎖的瞬間會讓 B 的開錄被判成「已有錄製在跑」（`pf` §7 的警告），而且每派一段就試一次 | 不採 |
+| (3) **讀 `record.pid` ＋ `kill -0` ＋ 共用狀態檔的 pid 相符且 phase 為 `recording`** | 只讀不寫、不取鎖；每派一段前重算，B 途中開錄也跟得上；`finish` 直接跑也適用；A 自己在放鎖前已刪了 `record.pid`，不會把自己算進去 | pid 重用的極小誤判（要同時對上狀態檔的 pid 與 phase）；B 在 preflight、stopping 時不算（這兩段不做即時編碼，影響小） | **採用** |
+
+- `MH_RECORD_HOME` 由 app 傳給收尾子程序（§3.23 第 10 步），`--home` 與預設不同時 Python 也看得到同一個 `record.pid`。
+
+### R3x-D10 平行正規化的排程（`spec.md` §3.25）
+
+- 執行緒：`concurrent.futures.ThreadPoolExecutor`，每個 worker 跑現行的 `normalize`（內部照舊經 `run_step` 開子程序；子程序有自己的 process group）。主執行緒負責派工與收結果，用 `wait(..., timeout=0.2)` 的迴圈等，讓 SIGTERM 的 Python handler 能在主執行緒上執行（`pf` §4.2）。
+- 派工順序＝段號順序。第 k 段沒有影片時依賴第 k−1 段的 `norm`（`normalize_deps`），要等它成功才派；依賴的段失敗時不派。
+- 平行度每派一段前重算（錄製中、libx264 退回）；降低時不中止在跑的段。
+- **失敗**：第 i 段失敗（`FinalizeError` 或 `StepTimeout`）→ 停止派工；段號 > i 的在跑段以 `kill_group` 整組結束；段號 < i 的讓它跑完（它們可能也失敗）；最後回報段號最小的失敗。因為段號 < i 的都已在 i 之前派出，這個規則回報的段與串行時「第一個失敗的段」相同。逾時與 R3 一樣寫 `finalize.json.timedOut` 並回 5。
+- **SIGTERM**：`on_sigterm` 設 `_STOPPING`、對 `_ACTIVE` 的快照逐一 `killpg(SIGKILL)`、再 `os._exit(5)`（R3 現行）；不取 `_ACTIVE_LOCK`（handler 在主執行緒上執行，主執行緒可能正持有那把鎖）。worker 在 `Popen` 之前與加入 `_ACTIVE` 之後都檢查 `_STOPPING`，已設就不啟動或立刻結束該群組，縮小「`Popen` 之後、加入 `_ACTIVE` 之前」的空窗（`pf` §4.2）。驗收看可觀察的結果：結束後沒有殘留子程序（§4.55.12）。
+- **libx264**：`encode` 的 x264 嘗試在 `_X264_LOCK` 內做，同時最多一個；第一次退回後平行度降為 1（x264 本身就吃滿約 10 核，`pf` §3）。
+- **分析一步**也平行（同一個平行度），`skipped` 依段號排序後才印與寫檔。
+- **不平行的部分**：串接、解碼驗證、兩次 `packet_dts`、抽 wav、S-C 補償。`pf` §7 估串接後的檢查同時跑可再省 3–5 秒，但錯誤回報順序要另外定、收益小，本輪不做（衍生工作，不編號）。
+- `MH_FINALIZE_JOBS=1`：不建 thread pool，跑現行的串行迴圈，只有進度行字面換新（§6 第 152 條）。
+
+### R3x-D11 方案取捨：(a) 同一實例放鎖後自己收尾 vs (b) 交棒給獨立的收尾程序
+
+| 面向 | (a) 同一實例（採用） | (b) 交棒給新的 app 子指令 `finalize` |
+|---|---|---|
+| 改動 | `RecordingSession.beginFinalize`／`complete`、`StatusWriter`、`Commands`（放鎖）、`FinalizeRunner`（一個屬性） | (a) 的全部，加 `main.swift` 子指令與 helpText、新檔 `Capture/FinalizeCommand.swift`、`Support.swift` 的參數、取消對象改成收尾實例的 pid |
+| 既有測試 | 斷言零修改（新階段、新欄位、新函式都有預設值） | `test_r3_app_static.py:154`「`RecordingSession.swift` 應以 FinalizeRunner 執行收尾」與 spec §4.28.6 都要改；`test_r3_skip_finalize.py:117-124` 的形狀可能要調 |
+| 風險 | 錄製實例活得比擷取久（只剩收尾子程序的保母）；當掉時要靠每場鎖判斷 | 交棒空窗（`open` 的啟動延遲；對方沒起來要退回自己收尾）；多一個 app 程序；`open -n` 對 Dock／權限的影響未實測；`record.sh stop` 的「錄製器結束了但 phase 不是 finalizing」判斷（`bin/record.sh:677-680`）要改成追收尾實例的 pid |
+| 責任切分 | 一個程序從開錄到收尾，取消、逾時、完成通知全部沿用 R3 | 錄製實例壽命＝擷取，比較乾淨 |
+
+- 採 (a)。理由：放鎖點與資源釋放點已經存在且清楚、`O_CLOEXEC` 讓 `close` 就是放鎖、`FinalizeRunner` 與取消／逾時／通知全部不動、既有斷言零修改；(b) 至少要改一支既有靜態測試與 spec 一條，還多一個未實測的交棒空窗。(c) 由 menu bar 收尾不採：純 CLI 使用時沒有人收尾，也和 R3-D3「錄製實例收尾」衝突（`bg` §7 (c)）。
+- 這是可逆的選擇：日後真要改 (b)，每場狀態檔、每場鎖、排隊鎖、條件式寫入都可以原樣沿用，只換「誰持有每場鎖」。
+
+### R3x-D12 測試策略
+
+- Python：`test_r3x_background.py`（`record.sh` 的 stop／status／finish，用新替身 `fake_bg_finalizer.sh` 當協定參考，B 用既有 `fake_recorder.sh`）、`test_r3x_parallel_finalize.py`（純函式＋用 `parallel_ffmpeg.py` 記錄事件，量平行度、依賴、失敗、SIGTERM、判準相同）、`test_r3x_app_static.py`（`BackgroundCaptureStatic`、`StatusWriterStatic`、`MenuBarBackgroundStatic`）、`test_r3x_docs.py`。
+- Swift：`R3xBackgroundTests.swift`（§3.26 的純函式與 `tryFlock`、`loadBackgroundJobs` 的檔案行為），登記在 `Tests/main.swift`。
+- 不改任何既有測試斷言、不改既有替身（`fake_recorder.sh`、`slow_ffmpeg.sh`、`failing_ffmpeg.sh`、`fake_open.sh` 都不動）。
+- app 端的條件式寫入與 pid 守門，自動測試只到「Core 判斷表＋靜態形狀＋協定參考替身」；真正的 A／B 交錯只有實機（§4.58）能驗，這是 R3 起的同一個限制（`spec.md` §7 疑慮 48 同類）。
+- `has_ui`：本輪的 UI 改動只有選單的一個新階段與狀態列附註，沿用 R3 的設計語言（不新增色、字、尺寸）；test 段由使用者在實機看（§4.58.2）。
+
+### R3x-D13 閘門 2 要使用者決定的事
+
+1. **Q3 的「失敗」怎麼讀**（`spec.md` §7 疑慮 73）
+   - 選項 A（本 spec 的寫法，建議）：「失敗」＝當掉（每場檔停在 `finalizing`、沒人持有每場鎖）。當掉時沒有錄製回 5、錄製中回 0 加 ⚠；正常寫了 `failed`／5 的，結束碼照 R3（0），只多一行 ⚠。代價：錄製中上一場收尾失敗，只有一行 ⚠，結束碼看不出來。
+   - 選項 B：正常失敗也算——沒有錄製時回 5。代價：同樣是「上次收尾失敗」，前景收尾（R3）回 0、背景收尾回 5，呼叫端要分辨兩種來源；要再加一條 §6。
+2. **app 路徑的 `MH_FINALIZE_JOBS`**（疑慮 69）
+   - 選項 A（建議）：只認環境變數；app 跑的收尾用預設（錄製中 2），要退回串行用 `launchctl setenv` 或 `MH_FINALIZE_JOBS=1 meeting record finish`。代價：app 路徑的退路不直覺。
+   - 選項 B：`_record_finalize.py` 另讀 `record.defaults.json` 的 `finalizeJobs`（環境變數優先）。代價：`record.defaults.json` 多一個鍵（要寫進 §3.16、說明誰寫、`meeting sync` 那類 CLI 要不要跟著加），範圍變大。
+3. **只剩背景收尾、而且不只一場時，`stop` 等誰**（疑慮 67）
+   - 選項 A（建議）：等全部，全成功回 0。代價：最壞要等兩場收尾。
+   - 選項 B：只等最晚停止的那一場。代價：`flock` 不保證先到先得，最晚停止的不一定最後完成；回 0 時可能還有別場在跑。
+4. **每場狀態檔的保留**（疑慮 70）
+   - 選項 A（建議）：終態保留 24 小時，下一個進背景的錄製實例清；當掉的等 `finish` 成功才清。代價：`<home>/finalizing/` 會留著最後幾場的小檔。
+   - 選項 B：A 收尾結束、共用狀態檔也寫成功時，立刻刪自己的每場檔。代價：B 錄製中時 A 的結果只在每場檔，刪了就沒有「上一場收尾完成／失敗」可看，所以實際上只有沒有 B 時能刪，規則變成兩種。
+
+### R3x-D14 不在範圍、衍生工作（不編號）
+
+- 不在範圍（intent〈不做〉）：補尾複製幀膨脹（`_record_finalize.py:1005-1006`）、拿掉 VT 的 `-maxrate/-bufsize`、串接改 `aac_at`、試錄選錯 app（F2）、`record.log` 每行加 runId 前綴。
+- 衍生工作（不編號）：串接後的解碼驗證、`packet_dts`、抽 wav 同時跑（約省 3–5 秒，R3x-D10）；`record.sh stop` 等待迴圈每 0.2 秒 spawn 一次 python 的負擔（`bg` §9，背景收尾拉長等待後更明顯）；疑慮 38 的觀察範圍擴大到「背景收尾＋錄製＋前處理」三方（`spec.md` §7 疑慮 68）；`launchctl setenv` 以外的 app 設定入口（看閘門 2 決定 2）。
