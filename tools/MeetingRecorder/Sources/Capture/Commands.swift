@@ -119,6 +119,14 @@ func holdRecordLock(home: URL, log: Logger) {
     }
 }
 
+/// 放開開錄鎖（spec R3x §3.22、§3.23 第 7 步、§6 第 145 條）：recordLockFD 非 nil 時 close 並設 nil。
+/// 只有 RecordingSession.beginFinalize 在進背景收尾時呼叫；--skip-finalize、捨棄、開錄前失敗、前景收尾照 R3 持有到程序結束。
+func releaseRecordLock() {
+    guard let fd = recordLockFD else { return }
+    close(fd)
+    recordLockFD = nil
+}
+
 /// preflight：只檢查（通過 → phase=done code=0；hard 失敗 → preflight_failed）。
 /// start：先跑同一套 preflight，通過才開錄。
 func cmdPreflight(_ args: Args, start: Bool) async {

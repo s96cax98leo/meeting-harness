@@ -59,6 +59,13 @@ final class FinalizeRunner {
         abort(.cancelled)
     }
 
+    /// 是否已收到取消（spec R3x §3.22、§3.23 第 9 步）：背景收尾排隊時每一輪先看它，為 true 就不再等、不啟動收尾子程序。
+    var isCancelRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelRequested
+    }
+
     /// 同步執行（不得在錄製實例的 q 上呼叫）。
     func run(executable: URL, arguments: [String], environment: [String: String]) -> FinalizeRunResult {
         let p = Process()
