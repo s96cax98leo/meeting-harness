@@ -17,6 +17,9 @@
 //   設定視窗的「重新執行首次設定…」也從這裡開。
 // R3（spec §4.44；F3-A）：會議偵測提示（Trigger/MeetingDetect.swift）——設定的 meetingDetect 打開、且不在錄製中才提示；
 //   通知的「開始錄製」走既有 quick-start（startRecording），「這場不用」讓本 episode 不再提示。
+// R3x（spec §4.50.5、§4.50.9、§4.54.4–§4.54.7；design R3x-D7）：refresh 另讀每場狀態檔（loadBackgroundJobs），
+//   以 applyBackgroundFinalize 疊上「背景收尾中」階段與附註；取消收尾在該階段走 backgroundCancelDecision（確認框只寫場次代號）；
+//   自動前處理以 autoPrepCandidates 去重；會議偵測不把背景收尾算成錄製中。
 import AppKit
 import Carbon
 import UserNotifications
@@ -80,6 +83,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 本次執行期間看過處於進行中（recording／stopping／finalizing）的 runId（spec §4.23.3）
     private var seenInProgress = Set<String>()
     private var completionPosted = Set<String>()
+    /// 本次 menu bar 程序已排過前處理的 runId（spec §3.26、§4.54.5；修正輪 B1）
+    private var autoPrepEnqueued = Set<String>()
     /// 選單列圖示是否被瀏海擋住或被系統藏起來（錄製中每 obscuredCheckSeconds 檢查一次；nil＝這次錄製還沒檢查過；
     /// spec §4.40.3、§6 第 121 條）
     private var iconObscured: Bool?
@@ -252,7 +257,12 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         var st = raw
         let pid = st?.pid ?? readPid(pidURL) ?? 0
         let alive = pidAlive(pid)
+        // R3x（spec §4.54.4、§4.54.5）：每場狀態檔 <home>/finalizing/*.status.json；完成通知與自動前處理
+        // 對共用狀態檔與每一個每場狀態檔都看（同一 runId 只發一次、只排一次）
+        let jobs = loadBackgroundJobs(home: home)
         trackCompletion(raw)
+        for job in jobs { trackCompletion(job.status) }
+        enqueueAutoPrep([raw].compactMap { $0 } + jobs.map { $0.status })
         scheduleFirstObscuredCheck(raw)
         // 點下「停止錄製」後立即顯示「收尾中…」，不等錄製實例寫出 stopping（spec §4.11.7）
         if var s = st, s.runId == stopRequestedRunId, s.phase == .recording {
@@ -260,7 +270,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             st = s
         }
         status = st
-        let m = menuBarModel(status: st, pidAlive: alive, now: Date())
+        // 背景收尾（spec §4.54.1、§6 第 155、157 條）：menuBarModel 不變，結果再疊上每場狀態檔
+        let base = menuBarModel(status: st, pidAlive: alive, now: Date())
+        let m = applyBackgroundFinalize(base, status: raw, jobs: jobs)
         model = m
         updateButton(m)
         if !hudEligible(m) { iconObscured = nil }   // 這次錄製結束：下一場重新判斷
@@ -321,8 +333,11 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         markItem.isEnabled = m.canControl
         stopItem.isEnabled = m.canStop
         discardItem.isEnabled = canDiscard(st)
-        // 取消收尾：只在錄製實例真的進了收尾（狀態檔 phase=finalizing）時可按；收尾前的停止階段錄製實例會略過訊號
-        cancelFinalizeItem.isEnabled = raw?.phase == .finalizing
+        // 取消收尾：背景收尾階段＝有可取消的那一場（與狀態列顯示的同一場，spec §4.54.7、修正輪 I7、I8）；
+        // 其他階段照 R3：只在錄製實例真的進了收尾（狀態檔 phase=finalizing）時可按；收尾前的停止階段錄製實例會略過訊號
+        cancelFinalizeItem.isEnabled = stage == .backgroundFinalizing
+            ? backgroundCancelCandidate(jobs) != nil
+            : raw?.phase == .finalizing
         // 顯示錄製小窗：只在 HUD 可能顯示的外觀有效；已顯示時灰掉
         showHUDItem.isEnabled = hudEligible(m) && !hud.isShown
         openItem.isEnabled = m.canOpenSession
@@ -851,7 +866,13 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
 
     /// 收尾中再送一次 SIGTERM：錄製實例的 FinalizeRunner 視為取消（§4.28.6），結果為 phase=failed「收尾已取消」。
     /// 與停止同一套：只有 stopTargetDecision 回 .signal(pid:) 才送；拒絕時說明原因、不送任何訊號。
+    /// R3x（spec §4.50.5、§6 第 149 條）：背景收尾階段（.backgroundFinalizing）改走 cancelBackgroundFinalize；
+    /// .finalizing 階段照 R3（stopTargetDecision，不加確認框）。
     @objc private func cancelFinalize() {
+        if menuStage(model) == .backgroundFinalizing {
+            cancelBackgroundFinalize()
+            return
+        }
         let current = readStatus(statusURL)
         guard current?.phase == .finalizing else { return }
         let recordPid = readPid(pidURL)
@@ -867,6 +888,58 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             return
         }
         Logger(path: logURL.path, append: true).line("\(isoNow()) 使用者取消收尾：送 SIGTERM")
+        guard kill(pid, SIGTERM) == 0 else { return }
+        refresh()
+    }
+
+    /// 背景收尾的取消（Q4 (a)；spec §4.50.5、§4.50.9，修正輪 I8）：
+    /// (1) 重讀每場狀態檔，以 backgroundCancelCandidate 為目標（與狀態列顯示的同一場）；
+    /// (2) NSAlert 顯示 backgroundCancelPrompt（只用場次代號，不放會議名、視窗標題），按「取消收尾」才繼續；
+    /// (3) 確認後再讀一次，候選換了一場 → 記一行、不送訊號；
+    /// (4) backgroundCancelDecision 回 .signal(pid:) 才送 SIGTERM（record.lock 以 retrySeconds: 0 試鎖）。
+    private func cancelBackgroundFinalize() {
+        let log = Logger(path: logURL.path, append: true)
+        let jobs = loadBackgroundJobs(home: home)
+        guard let target = backgroundCancelCandidate(jobs) else {
+            log.line("\(isoNow()) 取消收尾被拒（\(BackgroundCancelRefusal.noJob.rawValue)）：沒有背景收尾中的場次，不送訊號")
+            return
+        }
+        let runId = target.status.runId
+        let others = jobs.filter { job in
+            let s = backgroundJobState(job)
+            return (s == .running || s == .queued) && job.status.runId != runId
+        }.count
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.icon = NSApp.applicationIconImage
+        alert.messageText = "取消收尾？"
+        alert.informativeText = backgroundCancelPrompt(target: target, others: others)
+        // 第一顆＝預設鍵（Return）：不取消
+        alert.addButton(withTitle: "繼續收尾")
+        let cancel = alert.addButton(withTitle: "取消收尾")
+        cancel.hasDestructiveAction = true
+        cancel.keyEquivalent = ""
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        // 確認框開著的期間可能已收完或換了一場：重讀，只對確認框上的那一場送
+        guard let job = backgroundCancelCandidate(loadBackgroundJobs(home: home)), job.status.runId == runId else {
+            log.line("\(isoNow()) 取消收尾：確認後背景收尾的對象已改變（\(backgroundJobLabel(target))），不送訊號")
+            notify(title: "MeetingRecorder 沒有取消收尾", body: "這場的收尾已經結束或換成別場，沒有送出取消",
+                   kind: .failure, runId: runId)
+            return
+        }
+        let jobPid = job.status.pid
+        let decision = backgroundCancelDecision(job: job, recordLockHeld: recordLockHeld(), pidAlive: pidAlive(jobPid),
+                                                command: executablePath(jobPid))
+        guard case let .signal(pid) = decision else {
+            if case .refuse(let why) = decision {
+                log.line("\(isoNow()) 取消收尾被拒（\(why.rawValue)）：不送訊號")
+                notify(title: "MeetingRecorder 沒有取消收尾", body: backgroundCancelRefusalText(why), kind: .failure,
+                       runId: runId)
+            }
+            return
+        }
+        log.line("\(isoNow()) 使用者取消背景收尾（\(backgroundJobLabel(job))）：送 SIGTERM")
         guard kill(pid, SIGTERM) == 0 else { return }
         refresh()
     }
@@ -1029,10 +1102,21 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         default:
             break
         }
+    }
+
+    /// 自動前處理（spec §4.23.1、§4.54.5、§6 第 150 條；修正輪 B1）：statuses＝共用狀態檔＋每一個每場狀態檔。
+    /// 去重交給 Core 的 autoPrepCandidates（本程序已排過的 runId 集合 autoPrepEnqueued）；
+    /// lastAutoPrepRunId 照舊寫入（啟動前先記），保留跨重啟語意。一次只跑一個、其餘排隊由 AutoPrepRunner 負責。
+    private func enqueueAutoPrep(_ statuses: [RecordStatus]) {
         let prefs = prefsStore.current
-        if let session = shouldAutoPrep(autoPrep: prefs.autoPrep, status: st, seenInProgressRunIds: seenInProgress,
-                                        lastAutoPrepRunId: prefs.lastAutoPrepRunId) {
-            prefsStore.update { $0.lastAutoPrepRunId = st.runId }   // 啟動前先記，同一場不會跑兩次
+        let picks = autoPrepCandidates(autoPrep: prefs.autoPrep, statuses: statuses, seenInProgressRunIds: seenInProgress,
+                                       lastAutoPrepRunId: prefs.lastAutoPrepRunId, enqueuedRunIds: autoPrepEnqueued)
+        for st in picks {
+            // 候選已通過 shouldAutoPrep（autoPrepCandidates 內）；這裡取它回傳的 session（同一份判準，結果一定非 nil）
+            guard let session = shouldAutoPrep(autoPrep: true, status: st, seenInProgressRunIds: seenInProgress,
+                                               lastAutoPrepRunId: prefs.lastAutoPrepRunId) else { continue }
+            autoPrepEnqueued.insert(st.runId)
+            prefsStore.update { $0.lastAutoPrepRunId = st.runId }   // 啟動前先記
             autoPrep.enqueue(session, runId: st.runId)
         }
     }
@@ -1157,6 +1241,17 @@ private func stopRefusalText(_ r: StopRefusal) -> String {
     case .pidDead: return "record.pid 的程序已經不在，請執行 meeting record finish 收尾"
     case .pidMismatch: return "record.pid 與狀態檔的 pid 不一致，為了安全沒有送出停止"
     case .notRecorder: return "record.pid 指向的不是 MeetingRecorder，為了安全沒有送出停止"
+    }
+}
+
+/// 背景收尾取消被拒的說明（spec §3.26 BackgroundCancelRefusal；不含場次名）
+private func backgroundCancelRefusalText(_ r: BackgroundCancelRefusal) -> String {
+    switch r {
+    case .recording: return "正在錄製下一場，不能取消上一場的收尾（停止這場後再取消）"
+    case .noJob: return "找不到背景收尾中的場次，沒有送出取消"
+    case .ownerGone: return "這場的收尾程序已經不在，請執行 meeting record finish 收尾"
+    case .pidDead: return "這場收尾的程序已經不在，請執行 meeting record finish 收尾"
+    case .notRecorder: return "這場收尾的 pid 指向的不是 MeetingRecorder，為了安全沒有送出取消"
     }
 }
 
