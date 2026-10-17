@@ -240,6 +240,11 @@
 - [x] 閘門 1：intent 核准（run 目錄 `r3x-intent-draft.md`；Q1 併進 R3、Q2–Q4 (a)、Q5 實機時再改 harness、Q6 不做）
 - [x] Design：`spec.md`〈R3 補充輪（R3x）〉、`design.md`〈R3x 設計〉、`plan.md` §11、run 目錄 `r3x-subtasks.json`（7 個子任務、Red＋2 層）
 - [x] Design 修正輪（2026-10-17）：skeptic 的 B1、I1–I11、N2–N5 依主 session 決定改寫（對照見 `design.md` R3x-D15）
-- [ ] 閘門 2：§6 第 145–157 條與 `design.md` R3x-D13 五項決定
+- [x] 閘門 2：§6 第 145–157 條與 `design.md` R3x-D13 五項決定（使用者 2026-10-17 核准）
+- [x] Red：r3x-red-py（7e99e34）、r3x-red-swift（cfbb7a3）；Red 層補字面 03b6f48
+- [x] 第 1 層：r3x-core（2cf0553）、r3x-parallel-finalize（1ef7700）、r3x-cli（5c63d2d）
+- [x] 第 2 層：r3x-capture（469ac1c）、r3x-menubar（c28a4f3）
+- [ ] test：全量回歸、verifier、實機驗收（§4.58）
+- [ ] 閘門 3
 - [ ] Build：Red（`r3x-red-py`、`r3x-red-swift`）→ 第 1 層（`r3x-core`、`r3x-parallel-finalize`、`r3x-cli`）→ 第 2 層（`r3x-capture`、`r3x-menubar`）
 - [ ] Test：§4.58 實機驗收（前置每一步先問使用者）
