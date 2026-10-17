@@ -2375,6 +2375,12 @@ func applyBackgroundFinalize(_ m: MenuBarModel, status: RecordStatus?, jobs: [Ba
 | 156 | §4.28.1：收尾鎖被另一個程序持有時「立刻結束、回 5」 | 環境變數 `MH_FINALIZE_WAIT_LOCK=1` 時改為等鎖放開、再做冪等判斷（§3.25 收尾鎖等待）；只有背景收尾的錄製實例會設（§3.23 第 10 步）。沒設時（含 `meeting record finish`、前景收尾）照 §4.28.1 不變，既有 `test_r3_finalize_guard` 不改 | 修正輪 I5：A 排隊中、使用者手動 `finish` 還沒跑完時 A 取得排隊鎖，不等就會把「別人正在收」誤報成 A 收尾失敗 |
 | 157 | §4.41.1、§4.41.2：`appearance == .idle`（M1 等）→ `.idle` 階段，選單沒有「取消收尾」 | 沒有錄製在跑（`.idle`、`.failed`）而每場狀態檔有 running／queued 時，由 `applyBackgroundFinalize` 疊成 `.backgroundFinalizing`（§4.54.1 (a)），提供「取消收尾」；`menuBarModel` 本身與 M1–M10 不變，既有 `TriggerTests`、`R3MenuBarTests` 不改 | 修正輪 I7：共用狀態檔已被下一場寫成終態時，上一場的背景收尾仍要能看見、能取消 |
 
+- **Red 層補字面（2026-10-17，主 session 認可，閘門 3 追認；行為不變、測試不改）**：
+  - (1) §3.26 `backgroundCancelDecision` 的「狀態不是 running／queued → `.noJob`」裡的「狀態」指 `status.phase == .finalizing`（含 queued），不是 `backgroundJobState` 的結果；phase 為 finalizing、ownerAlive 為 false 時回 `.refuse(.ownerGone)`，§4.50.4 照原文。
+  - (2) §4.51.3、§4.51.12(a) 的「A 的 SIGTERM 計數為 0」讀作「`stop` 前後計數不增加」（替身收到第一次 SIGTERM 才進背景）。
+  - (3) §4.55.18 (1) 的「開始時刻嚴格遞增」容許 50 ms 排程誤差；「不跳號」照原文嚴格驗。
+  - (4) §4.55.14 的「檔名相同」以兩份副本預先寫入同一 `stamp` 的 `finalize.json` 驗（走 R3 沿用 stamp 的路徑）。
+
 ### R3x-§7 疑慮（續，第 64 條起）
 
 64. **收尾與錄製同時跑時的硬體編碼競爭，沒有實機數據**：R3x 之前收尾與錄製從不重疊（實機 `record.log` 裡「收尾中又開錄」的樣本是 0，`bg` §8）。代理測試（一條 30 fps、2992×1876 的即時 VT 編碼）在收尾開 1–3 個程序時跟得上、開 4 個就落後 21–27%（`pf` §5），所以上限 3、錄製中降為 2；但實機 SCK 是稀疏 VFR、即時 session 與批次 session 在 VT 的優先權未能確認、單一編碼引擎的機型縮放也未能確認。由 §4.58.4 量 B 的丟幀；若丟幀明顯，選項：(a) 錄製中降為 1（代價：錄製中收尾更慢，約多 25–30%）；(b) 收尾子程序改 `qualityOfService = .utility` 或 `nice`（代價：收尾變慢的幅度未知，要再量）；(c) 錄製中暫停背景收尾、等錄製結束再跑（代價：上一場的成品要等到下一場結束才有）。
