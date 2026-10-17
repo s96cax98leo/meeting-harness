@@ -235,3 +235,11 @@
 ### R3 Deliver
 - [ ] 依 plan §10.5 拆包（先問使用者）；推送前掃名稱（只回報有／沒有）
 - [ ] 閘門 4（stage 鍵 `r3-deliver`）
+
+### R3x（背景收尾與收尾平行化，2026-10-17）
+- [x] 閘門 1：intent 核准（run 目錄 `r3x-intent-draft.md`；Q1 併進 R3、Q2–Q4 (a)、Q5 實機時再改 harness、Q6 不做）
+- [x] Design：`spec.md`〈R3 補充輪（R3x）〉、`design.md`〈R3x 設計〉、`plan.md` §11、run 目錄 `r3x-subtasks.json`（7 個子任務、Red＋2 層）
+- [x] Design 修正輪（2026-10-17）：skeptic 的 B1、I1–I11、N2–N5 依主 session 決定改寫（對照見 `design.md` R3x-D15）
+- [ ] 閘門 2：§6 第 145–157 條與 `design.md` R3x-D13 五項決定
+- [ ] Build：Red（`r3x-red-py`、`r3x-red-swift`）→ 第 1 層（`r3x-core`、`r3x-parallel-finalize`、`r3x-cli`）→ 第 2 層（`r3x-capture`、`r3x-menubar`）
+- [ ] Test：§4.58 實機驗收（前置每一步先問使用者）
