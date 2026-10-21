@@ -6,7 +6,7 @@
   含上述任一檔的資料夾；名為「錄音」的資料夾不算場次。
 - 大小寫不分、純子字串（不當 regex）。
 - 每筆一行：<場次相對 <根> 的路徑>/<檔名>:<行號>: <該行，超過 120 字截斷加「…」>。
-- 場次依資料夾名稱（日期在前）新到舊；同場次依 <檔名> 字串、行號遞增。
+- 場次依相對 <根> 的路徑（日期在前，例 YYYYMMDD/HHMM 會議）新到舊；同場次依 <檔名> 字串、行號遞增。
 - 只讀 <根> 以內的檔：symlink 的檔與目錄一律略過，實際路徑也必須落在 <根> 之內（客戶資料邊界，§4.33.3）。
 
 結束碼：0 有結果；1 沒有結果（stdout 空）；2 缺參數、根目錄不存在。
@@ -58,8 +58,9 @@ def find_sessions(root):
             continue
         if any(_safe_file(dirpath, f, root_real) for f in SEARCH_FILES):
             out.append((rel.replace(os.sep, "/"), dirpath))
-    # 依資料夾名稱新到舊；同名時以相對路徑定序，結果穩定
-    out.sort(key=lambda s: (os.path.basename(s[1]), s[0]), reverse=True)
+    # 依相對路徑新到舊（spec §4.33.1）：錄製器的場次是 <根>/YYYYMMDD/HHMM 會議，只看 basename 會只剩時刻，
+    # 較舊日期的晚場會排到較新日期的早場前面；相對路徑唯一，結果穩定
+    out.sort(key=lambda s: s[0], reverse=True)
     return out
 
 

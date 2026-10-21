@@ -970,7 +970,7 @@ PY
   fi
   t0="$(date +%s)"
   while :; do
-    if [[ -f "${logf}" ]]; then  # 把收尾進度（例「正規化 12/95」）轉印出來
+    if [[ -f "${logf}" ]]; then  # 把收尾進度（例「正規化 已完成 12/95」）轉印出來
       n="$(wc -l < "${logf}" | tr -d ' ')"
       if [[ "${n}" -gt "${lines}" ]]; then
         sed -n "$((lines + 1)),${n}p" "${logf}" | grep -E '正規化|收尾|略過' || true

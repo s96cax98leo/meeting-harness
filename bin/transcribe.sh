@@ -60,10 +60,19 @@ OUTFMT="all"
 # 有聲區間由 _record_lib.py clip 算（成品時間軸、小數 3 位）；沒有 levels（ingest 的音檔）、
 # 全場無聲、或 MH_VAD=0 時退回整檔，送 ASR 的參數與 R2 相同。
 # 門檻、補、合併間隔可用 MH_VAD_THRESHOLD_DB／MH_VAD_PAD／MH_VAD_MERGE_GAP 覆寫。
+# 多音檔（_combine_audio.py 串成 .combined.wav，或 錄音/ 第一層有超過 1 個音檔）時不套 VAD：
+# levels 只屬於錄製器那一場，和串接後的時間軸對不上（spec §3.18、R3x §6 第 158 條；疑慮 63 選項 (a)）。
+# 音檔的認定與 _combine_audio.py 相同：m4a/mp3/wav/mov/mp4/m4v、隱藏檔不算。
 REC_DIR="$(cd "$(dirname "$AUDIO")" && pwd)"
 CLIP_TS=""
+N_AUDIO=0
+for _f in "$REC_DIR"/*.m4a "$REC_DIR"/*.mp3 "$REC_DIR"/*.wav "$REC_DIR"/*.mov "$REC_DIR"/*.mp4 "$REC_DIR"/*.m4v; do
+  if [[ -f "$_f" ]]; then N_AUDIO=$((N_AUDIO + 1)); fi
+done
 if [[ "${MH_VAD:-1}" == "0" ]]; then
   VAD_LINE="> VAD：未套用（MH_VAD=0）"
+elif [[ "$(basename "$AUDIO")" == ".combined.wav" || "$N_AUDIO" -gt 1 ]]; then
+  VAD_LINE="> VAD：未套用（多音檔）"
 else
   CLIP_JSON=""; VAD_REASON=""
   if CLIP_JSON="$(python3 "$HARNESS_ROOT/bin/lib/_record_lib.py" clip "$REC_DIR" 2>"$WORKDIR/clip.err")"; then
