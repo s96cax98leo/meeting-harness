@@ -21,21 +21,18 @@
 - [ ] `asr-robust`
 - [ ] `diarize-iron`
 - [ ] `prep-pipeline`
+- [ ] `record-sh-split`
 - [ ] `video-spike`（結論：未定）
 - [ ] `replay-bench`
 
 ### 第 2 層
-- [ ] `finalize-fast`
-- [ ] `recorder-capture`
-- [ ] `trigger-ui`
+- [ ] `finalize-fast`（含 refactor commit）
+- [ ] `recorder-capture`（含 refactor commit）
+- [ ] `trigger-ui`（含 refactor commit）
 
 ### 第 3 層
 - [ ] `incremental-asr`
 - [ ] `docs-cleanup`
-
-### 第 4 層
-- [ ] `split-swift`
-- [ ] `split-scripts`
 
 ## 每層整合（plan §3）
 
@@ -45,7 +42,6 @@
 | 第 1 層 | — | — | |
 | 第 2 層 | — | — | |
 | 第 3 層 | — | — | |
-| 第 4 層 | — | — | |
 
 ## 量測（spec §4.14；2 小時場、121 段）
 
@@ -57,7 +53,6 @@
 | 第 1 層後 | 10 | | | | | | | | |
 | 第 2 層後 | 10 | | | | | | | | |
 | 第 3 層後 | 10 | | | | | | | | |
-| 第 4 層後 | 10 | | | | | | | | |
 | 最終（1×） | 1 | early | | | | | | | |
 
 品質（spec §4.11.9，`--compare-full`）：`cer` ＝ ＿；`timeAlignedRatio` ＝ ＿。

@@ -200,7 +200,9 @@ func audioDeviceFailedMessage(input: String, inputTransport: String,
 | `bin/_diarize_pyannote.py` | `--embed-speaker <wav> <diarization.json> <SPEAKER_xx> <out.json>` | §4.6.4 |
 | `bin/_voiceprint.py` | `match`、`add` 新增 `--embeddings <路徑>` | §4.6.3–§4.6.4 |
 | `bin/lib/_asr_worker.py` | §3.9 | 新檔 |
-| `bin/lib/_transcript_quality.py` | `transcribe.sh` 品質檢查 heredoc 搬過來（第 4 層） | §4.13 |
+| `bin/lib/_transcript_quality.py` | `transcribe.sh` 品質檢查 heredoc 搬過來（asr-robust 的重構 commit） | §4.13 |
+| `bin/lib/_harness.py` | `harness_config(section)`（`_diarize_pyannote.py:24`、`_voiceprint.py:26` 兩份合一；只用標準函式庫，diarize venv 也能 import） | §4.13.2 |
+| `bin/lib/_record_lib.py` | 公開 `load_json`、`write_json_atomic`、`record_home`（prep-pipeline 加；finalize-fast 改 import） | §4.13.2 |
 
 ### 3.12 重放量測報告（`tools/bench/replay.py` 的 stdout JSON）
 
@@ -349,13 +351,13 @@ func audioDeviceFailedMessage(input: String, inputTransport: String,
 | 4.12.3 | 錄製實例的完成通知（`RecordingSession.swift:1248-1250`）與 menu bar 的完成通知（`MenuBar.swift:1129`）的內文應為 `completionNotificationBody(…)`，不得含 `session.path`、`st.session` 或 `outcome.message`；`"會議錄製完成"` 字面與 `Notifier.post(` 照舊在同一函式（既有 `test_r3_skip_finalize` 不改）。「在 Finder 顯示」用的 `userInfo["session"]` 保留。 | G9 | intent §6、§7 | `swift:testMSCompletionNotificationBody`；`test_ms_app_static.py::CaptureStatic::test_completion_body_no_path`、`TriggerStatic::test_menubar_completion_body_no_session` |
 | 4.12.4 | 實機（test 段）：一場錄製完成與自動前處理完成後，通知中心的兩則通知文字不含場次名、視窗標題或路徑。 | G9 | meeting-record §4.39.3 的理由 | 人工（plan §4） |
 
-### 4.13 結構重構（G8；第 4 層）
+### 4.13 結構重構（G8；各檔擁有者在速度改動之後的獨立 refactor commit）
 
 | # | 條文 | Story | 依據 | 驗法 |
 |---|---|---|---|---|
-| 4.13.1 | `wc -l` 判定：`MenuBar.swift` ≤ 1000、`RecordingSession.swift` ≤ 1000、`bin/_record_finalize.py` ≤ 1300；`record.sh` 的 `cmd_control` 本體 ≤ 100 行；`transcribe.sh` 不再含品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。 | G8 | design §13 | `test_ms_refactor.py::test_line_limits`、`::test_cmd_control_length`、`::test_transcribe_no_quality_heredoc` |
-| 4.13.2 | `paused_total`、原子寫入 JSON、`load_json`、`record_home`、`harness_config`、HF token 讀取在 `bin/` 底下各只有一份定義（`bin/lib/_record_lib.py`）。 | G8 | `b0-audit.md:56-62` | `test_ms_refactor.py::test_helpers_single_definition` |
-| 4.13.3 | 被既有靜態測試釘住的函式與字面應留在原檔；第 4 層合併後全量 Python 與 Swift 測試應不改而綠。若非改不可，該子任務停下回報，由主 session 一次送使用者核准（§6 第 22 條）。 | G8 | intent §7 Q4 | 全量測試；`git diff --diff-filter=M --name-only <第 3 層合併點> -- tests/ tools/MeetingRecorder/Tests/` 為空 |
+| 4.13.1 | `wc -l` 判定：`MenuBar.swift` ≤ 1000、`RecordingSession.swift` ≤ 1000、`PreflightRunner.swift` 的 `run` 函式本體 ≤ 80 行、`bin/_record_finalize.py` ≤ 1300；`record.sh` 的 `cmd_control` 本體 ≤ 100 行；`transcribe.sh` 不再含品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。 | G8 | design §13 | `test_ms_refactor.py::test_line_limit_menubar`、`::test_line_limit_recording_session`、`::test_preflight_run_length`、`::test_line_limit_record_finalize`、`::test_cmd_control_length`、`::test_transcribe_no_quality_heredoc` |
+| 4.13.2 | Python 端 `paused_total`、`write_json_atomic`、`load_json`、`record_home` 在 `bin/` 底下各只有一份定義（`bin/lib/_record_lib.py`，`_record_finalize.py` 以 import 取得，模組內名稱照舊可用）；`harness_config` 只有一份（`bin/lib/_harness.py`）。`meeting.sh` 的 HF token 檢查是 bash，不在本條範圍。 | G8 | `b0-audit.md:56-62` | `test_ms_refactor.py::test_record_helpers_single_definition`、`::test_harness_config_single_definition` |
+| 4.13.3 | 重構以獨立 commit（`refactor(meeting-speed)`）做在同一子任務的速度／修正 commit 之後；重構 commit 前後該子任務的完成條件測試都應綠（行為不變）。被既有靜態測試釘住的函式與字面應留在原檔；重構不得需要改既有測試。若非改不可，該子任務停下回報，由主 session 一次送使用者核准（§6 第 22 條）。 | G8 | intent §2 G8、§7 Q4 | 全量測試；重構 commit 的 `git diff --diff-filter=M --name-only <commit>~ <commit> -- tests/ tools/MeetingRecorder/Tests/` 為空 |
 | 4.13.4 | README 的流程圖應反映音訊先出、轉錄與分離並行、增量轉錄；`record.sh:973`、`transcribe.sh:3`、`_merge_speakers.py:3` 的過期註解更新；`.claude/workflows/meeting-pipeline.js` 檔頭標示棄用並指向 `meeting-summary`。 | G8 | `plan-approved.md:105-106` | `test_ms_docs.py::test_readme_flow`、`::test_stale_comments_updated`、`::test_meeting_pipeline_js_deprecated` |
 
 ### 4.14 量測（G1、G2、G4）
@@ -381,18 +383,19 @@ func audioDeviceFailedMessage(input: String, inputTransport: String,
 
 | 系統／檔案 | 改動 | 子任務 | 對外影響 |
 |---|---|---|---|
-| `bin/_record_finalize.py` | 音訊先出、copy 路徑、驗證後移、ffprobe 合併、N-3 | finalize-fast；第 4 層 split-scripts | stdout 多兩行；`finalize.json` 多兩鍵；結束碼不變 |
+| `bin/_record_finalize.py` | 音訊先出、copy 路徑、驗證後移、ffprobe 合併、N-3 | finalize-fast（含拆檔） | stdout 多兩行；`finalize.json` 多兩鍵；結束碼不變 |
 | `bin/meeting.sh` | prep 並行、早期模式、`state-begin`、stitch 交棒、`diarize` 失敗記錄、C8 | prep-pipeline | 子指令與結束碼不變；`.pipeline-state.json` 多 `prep` 鍵 |
-| `bin/lib/_record_lib.py` | `update_pipeline_state`、CLI `state-set`／`state-begin`；第 4 層集中 helper | prep-pipeline；split-scripts | 內部 |
-| `bin/transcribe.sh` | 成功判準、`asr.log`、raw 不轉、`MH_ASR_SEGMENTS_JSON`、`MH_TRANSCRIBE_REC_DIR` | asr-robust；split-scripts | 結束碼不變；多寫 `transcript.md`（只在不存在時） |
+| `bin/lib/_record_lib.py` | `update_pipeline_state`、CLI `state-set`／`state-begin`；公開共用 helper | prep-pipeline | 內部 |
+| `bin/transcribe.sh` | 成功判準、`asr.log`、raw 不轉、`MH_ASR_SEGMENTS_JSON`、`MH_TRANSCRIBE_REC_DIR` | asr-robust（含 heredoc 抽出） | 結束碼不變；多寫 `transcript.md`（只在不存在時） |
 | `bin/diarize.sh`、`_diarize_pyannote.py`、`_merge_speakers.py`、`_render.py`、`_voiceprint.py` | embedding 暫存、confidence、覆蓋規則、remove 過濾、`MH_DIARIZE_AUDIO`、16k 跳過（條件式） | diarize-iron | 場次資料夾不再有 `embeddings.json`；沒有 confidence 的 dict 不再掛名 |
 | `bin/lib/_asr_worker.py`（新）、`config.json` | 增量轉錄 | incremental-asr | `config.json` 多 `transcribe.incremental.enabled`（預設 true） |
 | `tools/MeetingRecorder/Sources/Core/` | §3.10 | ms-core | 狀態檔 Optional 鍵 |
-| `tools/MeetingRecorder/Sources/Capture/` | 畫布鎖定、`preservesAspectRatio`、`droppedFrames`、`audioReady`、起 worker、preflight 裝置失敗、停止路徑 log、完成通知 | recorder-capture；第 4 層 split-swift | 成品解析度停在開錄時視窗大小 |
-| `tools/MeetingRecorder/Sources/Trigger/` | `.early` 觸發、`prepOutcome`、通知、停止路徑 log | trigger-ui；第 4 層 split-swift | 通知文字改用場次代號 |
+| `tools/MeetingRecorder/Sources/Capture/` | 畫布鎖定、`preservesAspectRatio`、`droppedFrames`、`audioReady`、起 worker、preflight 裝置失敗、停止路徑 log、完成通知 | recorder-capture（含拆 `RecordingSession.swift`、`PreflightRunner.run`） | 成品解析度停在開錄時視窗大小 |
+| `tools/MeetingRecorder/Sources/Trigger/` | `.early` 觸發、`prepOutcome`、通知、停止路徑 log | trigger-ui（含拆 `MenuBar.swift`） | 通知文字改用場次代號 |
 | `.claude/skills/meeting-record/`、`meeting-transcribe/`、`meeting-speakers/`、`meeting-summary/` | 行為說明 | finalize-fast、asr-robust、diarize-iron | 改 repo 的 SKILL 等於改全域（專案規則 7） |
 | `tools/bench/`（新） | 重放量測工具 | replay-bench | 測試工具，不是對外介面 |
 | `.gitignore`、`README.md`、`.claude/workflows/meeting-pipeline.js` | 見 §4.6.8、§4.13.4 | diarize-iron、docs-cleanup | 無 |
+| `bin/record.sh` | 只做結構重構（`cmd_control` 拆函式、`record.sh:973` 註解），子指令與結束碼不變 | record-sh-split | 無 |
 | 下游知識庫專案 | `summary.md` 格式不動 | — | 不必驗 `_missing_sections()`（`_render.py` 只改套名判準，不改輸出段落） |
 
 ---
@@ -429,7 +432,7 @@ func audioDeviceFailedMessage(input: String, inputTransport: String,
 | 19 | 同上（16k 跳過，連帶第 14 條後段） | — | 隨第 18 條一併生效，但閘門 2 可只核准第 18 條而不核准本條 | `test_ms_iron_rules.py::test_diarize_skips_16k_conversion` | `diarize.sh` 不加 16k 判斷 |
 | 20 | `tests/record/test_r3_vtt_raw.py::test_diarize_keeps_raw` | 缺 segments.json 時呼叫轉錄替身、之後段落檔存在、輸出目錄不是場次目錄、回 0 | 改為：raw 內容與 mtime 不變（保留）、**不呼叫**轉錄替身、`meeting diarize` 回 1、stdout 或 stderr 含「缺 transcript.segments.json」 | 新斷言仍守住鐵則 1（raw 不變）；另由 `test_ms_prep.py::test_missing_segments_explicit_error` 驗 | 本條與第 13 條都不生效；§4.8.4 走「不核准時」分支 |
 | 21 | `tests/record/test_r3_lock.py::test_stop_wait_limit_covers_finalize_deadline`（**單獨核准**） | `(100, 930, 932)`、`(3600, 11430, 11432)` | 改為 `(100, 930, 936)`、`(3600, 11430, 11436)` | 下限不變（仍守住 ≥ 3×elapsed＋630）；上限放寬的理由：`startedAt` 只到秒（`%S`），小數被截掉最多 1 秒，加上子程序啟動時間，`int(3 × elapsed ＋ 630)` 可多出 3 × (1＋啟動秒數)；+2 只容得下約 0.67 秒的總誤差。+6 容 2 秒 | 不改；本 epic 的子任務不碰 `cmd_stop`，偶發紅燈照舊交人 |
-| 22 | 第 4 層結構重構要改的既有測試 | — | 預估 **0 條**（design §13 原則）。若 build 中發現非改不可，`split-*` 停下回報，主 session 把清單一次送使用者核准後，補記在本表 | — | 該處重構不做 |
+| 22 | 結構重構（§4.13）要改的既有測試 | — | 預估 **0 條**（design §13 原則）。若 build 中發現非改不可，該子任務停下回報，主 session 把清單一次送使用者核准後，補記在本表 | — | 該處重構不做 |
 
 `tests/record/test_r3x_parallel_finalize.py` 的 ResourceWarning（PIPE 沒關）**不在本輪修**，列為衍生工作（不編號）；`_lint.sh` 不加 `-W error::ResourceWarning`，所以不需要改測試。
 

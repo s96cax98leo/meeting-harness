@@ -14,8 +14,8 @@
 
 1. **關鍵路徑改成「音訊先出 → 前處理（轉錄與分離並行）」與「影片 copy 串接」兩條平行線**，驗證移到成品發佈之後。2 小時場的推算關鍵路徑見 §2；最緊的一段是講者分離（實測 204.9 秒，`baseline.md` A 節），5 分鐘的餘裕約 1 分鐘以內。
 2. **錄製中的增量轉錄**由錄製器在開錄時起一個低優先權的 Python worker（`bin/lib/_asr_worker.py`），只讀 `manifest.json` 已收尾的段落，模型只載一次；停止後只剩最後一窗。
-3. **閘門 1 的八項決定全部落成條文**（spec §4），被推翻或修訂的 meeting-record 條文逐條列在 spec §6.1（第 1–17 條）；要改的既有測試逐條列在 spec §6.2（第 18–22 條），全部標「待閘門 2 核准」（第 22 條是第 4 層的預留條，預估 0 條）。
-4. **拆成 15 個子任務、Red＋4 層**（§1；明細在 `plan.md` §1）。同一層的檔案不重疊；跨層只有第 4 層兩個重構子任務接手前面層的檔案，以 `depends_on` 串成序列。
+3. **閘門 1 的八項決定全部落成條文**（spec §4），被推翻或修訂的 meeting-record 條文逐條列在 spec §6.1（第 1–17 條）；要改的既有測試逐條列在 spec §6.2（第 18–22 條），全部標「待閘門 2 核准」（第 22 條是結構重構的預留條，預估 0 條）。
+4. **拆成 15 個子任務、Red＋3 層**（§1；明細在 `plan.md` §1）。所有子任務的檔案歸屬完全不重疊（跨層也不重疊）；結構重構由各檔的擁有者在速度 commit 之後另做 refactor commit（§13）。
 5. **契約夠用，沒有新端點**。新增的都是：狀態檔的 Optional 欄位、場次資料夾內的新檔、只給內部呼叫的環境變數、stdout 新增一行。`meeting.sh`／`record.sh`／`transcribe.sh`／`diarize.sh`／`_record_finalize.py` 的子指令與結束碼集合都不變（spec §2）。
 
 ---
@@ -28,7 +28,8 @@
 
 | 計畫原本 | 本設計 | 理由 |
 |---|---|---|
-| docs-cleanup 在第 4 層 | 移到第 3 層，只擁有 `README.md`、`.claude/workflows/meeting-pipeline.js` | 它擁有的檔沒有別人碰；過期註解交給各檔的擁有者（`transcribe.sh:3`＝asr-robust、`_merge_speakers.py:3`＝diarize-iron、`record.sh:973`＝split-scripts） |
+| docs-cleanup 在第 4 層 | 移到第 3 層，只擁有 `README.md`、`.claude/workflows/meeting-pipeline.js` | 它擁有的檔沒有別人碰；過期註解交給各檔的擁有者（`transcribe.sh:3`＝asr-robust、`_merge_speakers.py:3`＝diarize-iron、`record.sh:973`＝record-sh-split） |
+| split-swift、split-scripts 在第 4 層 | 拆掉，依檔案併進各檔的擁有者（`MenuBar.swift`＝trigger-ui；`RecordingSession.swift`、`PreflightRunner.swift`＝recorder-capture；`_record_finalize.py`＝finalize-fast；`transcribe.sh` heredoc＝asr-robust；`harness_config`＝diarize-iron；共用 helper 的公開＝prep-pipeline）；`record.sh` 沒有別的擁有者，獨立成 `record-sh-split`（第 1 層） | 重構要動的檔正好是速度層改的檔，另開子任務就一定兩個子任務擁有同一支檔（`check-envelope.sh` 擋檔案歸屬重疊）。G8「速度先、重構後」的理由是避免衝突；單一擁有者在自己的速度 commit 之後做 refactor commit，衝突來源不存在，順序也成立。代價：三個第 2 層子任務工作量變大 |
 | incremental-asr 改 `meeting.sh` 的 prep 讀取、改 `config.json` | `meeting.sh` 的 stitch 呼叫端由 `prep-pipeline` 寫（worker 檔不存在就跳過，spec §3.9）；`config.json` 的 `transcribe.incremental.enabled` 由 `diarize-iron` 一併加（它本來就要改 `diarize.note` 的 embedding 說明） | `incremental-asr` 只擁有新檔 `bin/lib/_asr_worker.py`，不必和第 1 層串鏈 |
 | （沒有） | 新增 `red-py`、`red-swift`（Red 層，kind=test） | `sdlc-build` 先寫紅燈測試；派工單要求 test 子任務擁有 tests/ |
 | preflight-diag、stop-gate、audio-first 的 Swift 部分各自改 Core | 新增 `ms-core`：獨佔 `Sources/Core/` | `Tests/run.sh` 一次編譯整個 Core（`research-code-contracts.md:137`），紅燈測試引用的 Core 名稱散在多個子任務就沒有任何一個子任務能單獨跑綠；R3 的 `r3-core` 是同一個理由（`specs/meeting-record/plan.md` §10.1） |
@@ -44,19 +45,18 @@
 | stop-gate「StopGate.evaluate 取代 5 處 `stopTargetDecision(`」 | 改為只補 log，不改呼叫形狀 | `test_r3_app_static.py:128-137,209,320` 要求 `MenuBar.swift`、`HUD.swift` 原樣含 `stopTargetDecision(`；intent §7 Q4「速度與一般修正繞開既有測試」 |
 | docs-cleanup 的 `_lint.sh` 加 `-W error::ResourceWarning` | 不做（衍生工作） | 疑似來源在測試檔（`b0-audit.md:208`），修它要改既有測試；本輪不修，列為衍生工作（spec §6.2 末段） |
 
-數量從 12 變 15，增加的三個（`ms-core`、`video-spike`、`replay-bench`）與兩個紅燈子任務都說得出不能併進別人的理由；減少的兩個是合併（state-lock＋prep-parallel、audio-first＋video-copy 的 finalize 端）。
+數量從 12 變 15：新增 `red-py`、`red-swift`、`ms-core`、`video-spike`、`replay-bench`、`record-sh-split`，各自說得出不能併進別人的理由；減少的是合併（state-lock＋prep-parallel、audio-first＋video-copy 的 finalize 端、split-swift 與 split-scripts 併進各檔擁有者）。
 
 ### 1.2 分層
 
 | 層 | 子任務 | 相依 |
 |---|---|---|
 | Red | `red-py`、`red-swift` | — |
-| 1 | `ms-core`、`asr-robust`、`diarize-iron`、`prep-pipeline`、`video-spike`、`replay-bench` | — |
+| 1 | `ms-core`、`asr-robust`、`diarize-iron`、`prep-pipeline`、`record-sh-split`、`video-spike`、`replay-bench` | — |
 | 2 | `finalize-fast`、`recorder-capture`、`trigger-ui` | 見 plan §1 |
 | 3 | `incremental-asr`、`docs-cleanup` | `incremental-asr`：`finalize-fast`、`prep-pipeline`、`asr-robust`、`diarize-iron`；`docs-cleanup`：`finalize-fast`、`prep-pipeline` |
-| 4（結構重構） | `split-swift`、`split-scripts` | 各自接手的檔案的前一個擁有者 |
 
-**跨層接手**（只有第 4 層）：`bin/_record_finalize.py`＝finalize-fast(2) → split-scripts(4)；`bin/transcribe.sh`＝asr-robust(1) → split-scripts(4)；`bin/meeting.sh`、`bin/lib/_record_lib.py`＝prep-pipeline(1) → split-scripts(4)；`bin/_voiceprint.py`、`bin/_diarize_pyannote.py`＝diarize-iron(1) → split-scripts(4)；`MenuBar.swift`＝trigger-ui(2) → split-swift(4)；`RecordingSession.swift`、`PreflightRunner.swift`＝recorder-capture(2) → split-swift(4)。第 1–3 層之間沒有任何共用檔。
+**檔案歸屬**：每支檔從頭到尾只有一個擁有者，跨層也不重疊（`plan.md` §1）。
 
 ---
 
@@ -203,10 +203,11 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 
 ## 13. 結構重構（MS-D14；G8）
 
-- 排在速度層之後（第 4 層）。行為不變，以全量測試佐證。
+- **誰做**：各檔的擁有者，在自己的速度／修正 commit 之後另做一個 `refactor(meeting-speed)` commit；`record.sh` 由 `record-sh-split` 在第 1 層做（速度改動不碰它）。分工見 §1.1。重構 commit 前後該子任務的完成條件測試都要綠（行為不變）。
 - **原則：被靜態測試釘住的函式與字面留在原檔**（`test_r2_static.py`、`test_r3_app_static.py`、`test_r3x_app_static.py`、`test_static_rules.py`、`test_r3x_parallel_finalize.py` 的 `need()` 與模組全域，`research-code-contracts.md:127-135`）。可以搬的是沒被釘住的部分（例如 `MenuBar.swift` 的圖示繪製、`RecordingSession.swift` 的監看與落盤 helper、`_record_finalize.py` 的分析與補償函式），Swift 用 `extension` 放到新檔，Python 搬到 `bin/lib/` 再由原模組 import（可變全域不搬，避免副本問題）。
-- 依這個原則，預估第 4 層要改的既有測試為 **0 條**（intent §7 Q4 的「第 3 層批次」）。build 中若發現非改不可，`split-*` 停下回報，由主 session 一次送使用者核准，不得自行改測試。
-- 目標用行數判定（spec §4.13）：`MenuBar.swift`、`RecordingSession.swift` 各 ≤ 1000 行；`_record_finalize.py` ≤ 1300 行；`record.sh` 的 `cmd_control` ≤ 100 行；`transcribe.sh` 不再有品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。重複 helper 集中：`paused_total`、原子寫入、`load_json`、`record_home`、`harness_config`、HF token 讀取。
+- 依這個原則，預估要改的既有測試為 **0 條**（intent §7 Q4 的「重構批次」，spec §6 第 22 條預留）。build 中若發現非改不可，該子任務停下回報，由主 session 一次送使用者核准，不得自行改測試。
+- 目標用行數判定（spec §4.13.1）：`MenuBar.swift`、`RecordingSession.swift` 各 ≤ 1000 行；`PreflightRunner.run` ≤ 80 行；`_record_finalize.py` ≤ 1300 行；`record.sh` 的 `cmd_control` ≤ 100 行；`transcribe.sh` 不再有品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。
+- 重複 helper（spec §4.13.2）：`paused_total`、`write_json_atomic`、`load_json`、`record_home` 由 `prep-pipeline` 在 `bin/lib/_record_lib.py` 公開、`finalize-fast` 改 import；`harness_config` 由 `diarize-iron` 合成 `bin/lib/_harness.py`。`meeting.sh` 的 HF token 檢查是 bash，不在範圍。
 
 ## 14. 測試策略（MS-D15；intent §7 Q4）
 
@@ -216,7 +217,7 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 | 鐵則（源頭修正） | `diarize.sh`、`_merge_speakers.py` 直接改；`test_diarize_and_merge_untouched` 送核准（spec §6 第 18 條） |
 | C8 靜默重轉 | `test_diarize_keeps_raw` 送核准（spec §6 第 13、20 條），附不核准時的替代 |
 | `test_r3_lock` 容差 | 單獨送核准（spec §6 第 21 條；提議 +2 → +6 的理由見該條） |
-| 第 4 層重構 | 原則上 0 條（spec §6 第 22 條預留）；`test_r3x_parallel_finalize.py` 的 ResourceWarning 不修（衍生工作） |
+| 結構重構 | 原則上 0 條（spec §6 第 22 條預留）；`test_r3x_parallel_finalize.py` 的 ResourceWarning 不修（衍生工作） |
 | 新測試 | `tests/record/test_ms_*.py`（Python）、`tools/MeetingRecorder/Tests/MSCoreTests.swift`（Swift），由 Red 層先寫 |
 
 `test_diarize_and_merge_untouched` 若核准修改，同一支檔裡的 16k 跳過轉檔（速度）會連帶被允許；spec §6 第 19 條把這一點單獨列出，閘門 2 可以只核准鐵則、不核准速度那一項（不核准時 `diarize.sh` 的 16k 判斷不做，代價是多一次數秒的轉檔）。
