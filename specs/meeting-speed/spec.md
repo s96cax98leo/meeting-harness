@@ -1,7 +1,7 @@
 # spec：meeting-speed（停止錄製後 5 分鐘內就緒＋全專案重構）
 
 - 上游：`specs/meeting-speed/intent.md`（閘門 1 已核准，2026-10-21；**§7 是決定全文**）、`design.md`、`adr/` 四則。
-- 狀態：**修正輪 2 草稿，待閘門 2 核准**。使用者 2026-10-21 在閘門 2 前已先決定 D1–D5 與 E1–E4（原文與逐條處理見 run 目錄 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`，該目錄不進 repo）：§6 第 1–21 條核准（D1）；G1 拆兩條線量（D2，§4.14.4）；當晚錄製異常中止的 4 項修正併入（D3，§4.4.12、§4.4.13、§4.16）；每個子任務都跑四件套（D4，§4.15）；§4.11.9 品質門檻核准、結構重構不另開第 4 層（D5）；§6 第 23 條（E1）、第 24 條與異常中止判定改用共享狀態檔的 pid（E2）確認；四件套的兩個例外以「允許仍紅」一詞統一（E3，§4.15.1）；拿掉早期模式、影片線外推值 > 240 秒補長錄、`paused_total` 以 `_record_finalize` 的算法為準（E4，§3.7、§4.14.4、§4.13.2）。§4.4.13 的擷取幀率／尺寸待 `video-spike` 實測後由使用者決定。
+- 狀態：**閘門 2 已核准（使用者 2026-10-21）**。使用者 2026-10-21 在閘門 2 前已先決定 D1–D5 與 E1–E4（原文與逐條處理見 run 目錄 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`，該目錄不進 repo）：§6 第 1–21 條核准（D1）；G1 拆兩條線量（D2，§4.14.4）；當晚錄製異常中止的 4 項修正併入（D3，§4.4.12、§4.4.13、§4.16）；每個子任務都跑四件套（D4，§4.15）；§4.11.9 品質門檻核准、結構重構不另開第 4 層（D5）；§6 第 23 條（E1）、第 24 條與異常中止判定改用共享狀態檔的 pid（E2）確認；四件套的兩個例外以「允許仍紅」一詞統一（E3，§4.15.1）；拿掉早期模式、影片線外推值 > 240 秒補長錄、`paused_total` 以 `_record_finalize` 的算法為準（E4，§3.7、§4.14.4、§4.13.2）。§4.4.13 的擷取幀率／尺寸待 `video-spike` 實測後由使用者決定。
 - 行號以 `042c404` 為準（`git log --oneline -1 origin/main`）。
 - 編號：本 spec 的節號與 §6 條號從 §1、第 1 條自己起算；引用 meeting-record 的條文一律寫「meeting-record §x.y」或「meeting-record §6 第 n 條」。
 - Story ID：本 repo 沒有上層任務系統，Story ID 用 intent §2 的目標代號 **G1–G9**（只在本 epic 內引用，不是任務編號）。commit scope 用 `meeting-speed`。
@@ -187,7 +187,7 @@ func audioDeviceFailedMessage(input: String, inputTransport: String,
                               output: String, outputTransport: String) -> String
 
 // Control.swift（D3 b，修正輪新增；修正輪 2 依 E2 拿掉 recordPid 參數）
-func abnormalStopSession(status: RecordStatus?, pidAlive: Bool, sessionExists: Bool) -> String?
+func abnormalStopSession(status: RecordStatus?, pidAlive: Bool, sessionExists: Bool, segmentsPending: Bool) -> String?
 func abnormalStopNotification(label: String) -> (title: String, body: String)
 ```
 
@@ -198,7 +198,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 - `stopPathLogLine` → `停止略過（<source>）：<reason>`。
 - `audioDeviceFailedMessage` → `音訊裝置無法啟動（輸入：<input>／<inputTransport>；輸出：<output>／<outputTransport>）`。
 - `sessionCodeLabel`：startedAt 可解析 → `M/d HH:mm 開始的場次`；不可解析 → `場次 <runId 前 8 個字元>`。
-- `abnormalStopSession`：`status` 非 nil、`phase == .stopping`、`status.pid > 0`、`pidAlive == false`（呼叫端以 `kill(status.pid, 0)` 判斷）、`status.session` 非空、`sessionExists == true`（呼叫端判斷 `status.session` 是存在的目錄）→ 回 `status.session`；其餘回 nil。判定不讀、不依賴 `record.pid`（E2；§4.16）。
+- `abnormalStopSession`：`status` 非 nil、`phase == .stopping`、`status.pid > 0`、`pidAlive == false`（呼叫端以 `kill(status.pid, 0)` 判斷）、`status.session` 非空、`sessionExists == true`（呼叫端判斷 `status.session` 是存在的目錄）、`segmentsPending == true`（呼叫端依 「段落待收尾」＝`<status.session>/錄音/tracks/` 有 `seg-*.mov`，且 `錄音/tracks/finalize.json` 不存在、或其 `videoPublishedAt` 為 null、或（舊 schema）沒有 `videoPublishedAt` 鍵也沒有 `finishedAt`；有 `videoPublishedAt` 非 null，或舊 schema 有 `finishedAt`，都算已收尾（keep-segments 開著時段落會留著，靠這一項排除））→ 回 `status.session`；其餘回 nil。判定不讀、不依賴 `record.pid`（E2；§4.16）。`segmentsPending` 是使用者 2026-10-21 閘門 2 決定加的條件，用來壓掉收尾後的重複通知（§7 疑慮 15）。
 - `abnormalStopNotification` → (`上次錄製異常中止`, `<label>：段落還在，按「收尾」執行 meeting record finish`)。
 
 ### 3.11 Python 新名稱
@@ -397,9 +397,9 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 
 | # | 條文 | Story | 依據 | 驗法 |
 |---|---|---|---|---|
-| 4.16.1 | Core `abnormalStopSession` 的輸出應與 §3.10 字面相同（`phase == .stopping`、狀態檔記錄的 pid 已不在、場次目錄存在才回場次路徑；不看 `record.pid`）。 | G5 | D3 b；E2 | `swift:testMSAbnormalStopDetected`、`swift:testMSAbnormalStopNotWhenAlive`、`swift:testMSAbnormalStopNotWhenOtherPhase`、`swift:testMSAbnormalStopNotWhenSessionMissing`、`swift:testMSAbnormalStopNotWhenNoStatus` |
-| 4.16.2 | 當選單 app 啟動時，應讀 `record.status.json`、以 `kill(status.pid, 0)` 判斷狀態檔記錄的程序是否還在、判斷 `status.session` 是否為存在的目錄，交給 `abnormalStopSession`（不讀 `record.pid`）；回非 nil 時，應發一則 `abnormalStopNotification(label: sessionCodeLabel(…))` 的通知並提供「收尾」動作，按下才以現行執行 `meeting.sh` 的方式跑 `meeting.sh record finish <場次>`（不自動跑）；通知文字不得含場次名或路徑。 | G5、G9 | D3 b；E2；meeting-record §4.39.3 的理由 | `swift:testMSAbnormalStopNotification`；`test_ms_app_static.py::TriggerStatic::test_abnormal_stop_checked_on_launch`（`Trigger/` 有呼叫 `abnormalStopSession(` 與 `kill(`，且呼叫 `abnormalStopSession(` 的函式本體不含 `record.pid`）、`::test_abnormal_stop_notification_no_name` |
-| 4.16.3 | 當 `meeting record finish` 不帶參數時，若 `<record home>/record.status.json` 的 `phase == "stopping"`、`pid` 是正整數且 `kill -0 <pid>` 失敗、`session` 是存在的目錄，則應在 stderr 印一行「· 接手異常中止的場次：<路徑>」後照 `finish <場次>` 執行，結束碼照現行 {0,2,3,5}；`record.pid` 存在與否、內容為何都不影響判定（E2）；任一條件不成立時照舊印「✗ 少了場次目錄…」回 2。 | G5 | D3 c；E2；`bin/record.sh:822,829,1199-1202` | `test_ms_record_finish.py::test_no_arg_uses_abnormal_session`、`::test_no_arg_after_stop_removed_pid_file`（沒有 `record.pid`、狀態檔 pid 已死、phase＝stopping → 接手）、`::test_no_arg_without_status_exit2`、`::test_no_arg_live_pid_exit2`、`::test_no_arg_other_phase_exit2`、`::test_no_arg_session_missing_exit2` |
+| 4.16.1 | Core `abnormalStopSession` 的輸出應與 §3.10 字面相同（`phase == .stopping`、狀態檔記錄的 pid 已不在、場次目錄存在、段落待收尾才回場次路徑；不看 `record.pid`）。 | G5 | D3 b；E2；閘門 2 | `swift:testMSAbnormalStopDetected`、`swift:testMSAbnormalStopNotWhenAlive`、`swift:testMSAbnormalStopNotWhenOtherPhase`、`swift:testMSAbnormalStopNotWhenSessionMissing`、`swift:testMSAbnormalStopNotWhenNoStatus`、`swift:testMSAbnormalStopNotWhenNoPendingSegments` |
+| 4.16.2 | 當選單 app 啟動時，應讀 `record.status.json`、以 `kill(status.pid, 0)` 判斷狀態檔記錄的程序是否還在、判斷 `status.session` 是否為存在的目錄、依 §3.10 判斷段落待收尾，交給 `abnormalStopSession`（不讀 `record.pid`）；回非 nil 時，應發一則 `abnormalStopNotification(label: sessionCodeLabel(…))` 的通知並提供「收尾」動作，按下才以現行執行 `meeting.sh` 的方式跑 `meeting.sh record finish <場次>`（不自動跑）；通知文字不得含場次名或路徑。 | G5、G9 | D3 b；E2；meeting-record §4.39.3 的理由 | `swift:testMSAbnormalStopNotification`；`test_ms_app_static.py::TriggerStatic::test_abnormal_stop_checked_on_launch`（`Trigger/` 有呼叫 `abnormalStopSession(` 與 `kill(`，且呼叫 `abnormalStopSession(` 的函式本體不含 `record.pid`）、`::test_abnormal_stop_notification_no_name` |
+| 4.16.3 | 當 `meeting record finish` 不帶參數時，若 `<record home>/record.status.json` 的 `phase == "stopping"`、`pid` 是正整數且 `kill -0 <pid>` 失敗、`session` 是存在的目錄、且段落待收尾（定義同 §3.10），則應在 stderr 印一行「· 接手異常中止的場次：<路徑>」後照 `finish <場次>` 執行，結束碼照現行 {0,2,3,5}；`record.pid` 存在與否、內容為何都不影響判定（E2）；任一條件不成立時照舊印「✗ 少了場次目錄…」回 2。 | G5 | D3 c；E2；`bin/record.sh:822,829,1199-1202` | `test_ms_record_finish.py::test_no_arg_uses_abnormal_session`、`::test_no_arg_after_stop_removed_pid_file`（沒有 `record.pid`、狀態檔 pid 已死、phase＝stopping → 接手）、`::test_no_arg_without_status_exit2`、`::test_no_arg_live_pid_exit2`、`::test_no_arg_other_phase_exit2`、`::test_no_arg_session_missing_exit2`、`::test_no_arg_already_finalized_exit2`（段落還在但 `finalize.json` 的 `videoPublishedAt` 非 null → 回 2） |
 | 4.16.4 | `record.sh` 的 usage 與子指令列不改（`finish <場次>` 照舊，既有 `test_docs`、`test_surface_parsers` 不改）；不帶參數的接手行為寫進 `.claude/skills/meeting-record/SKILL.md`。 | G5 | 專案規則 7 | `test_ms_docs.py::test_record_skill_finish_no_arg`；既有 `test_docs`、`test_surface_parsers`（不改） |
 
 ---
@@ -452,7 +452,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | 16 | meeting-record intent（`specs/meeting-record/intent.md:386-397`）：即時轉錄與拆檔本輪不做 | 已由使用者 2026-10-21 的決定取代（增量轉錄）；不需另行核准，僅記錄 | intent §4.2 末段 |
 | 17 | §4.39.3、R3-§6 第 135 條：錄製中告警通知不得含場次名 | **擴大適用**到錄製完成、前處理完成／失敗／沒有執行、異常中止的通知（§4.12、§4.16.2）；原條文不變 | intent §7 R2 完成通知 |
 | 23 | §4.6.5、R3-§6 第 140 條、`bin/_record_finalize.py:22`（模組說明第 7 步「最後才把 wav rename 進 錄音/——場次在這一刻才存在」）；intent §7 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」 | **使用者 2026-10-21 確認（E1）**：正式 wav 在音訊階段、任何影片步驟之前發佈（§4.2.1）；「先寫 `finalize.json`、wav 後出現」的順序不變（§4.2.3），`finalize.json` 改兩階段寫入，`finishedAt` 的意義改為「錄音成品發佈時刻」、另加 `videoPublishedAt`（§3.4）。「場次存在」從「收尾全部完成」改為「錄音成品就緒（影片可能仍在收尾）」；據此修訂 meeting-record §4.6.5、R3-§6 第 140 條，以及 intent §7 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」一句（intent.md 本身不改，以本條為準）。既有 `test_concurrency.py` 不改（它的 `published()` 讀 `finishedAt`＋`outputs.audio`，第一階段就成立）。代價：影片收尾期間 `meeting status`、`meeting prep <根>` 會列出該場（§7 疑慮 11） | D2（使用者 2026-10-21：正式 wav 必須先於影片發佈、不等影片）；E1（使用者 2026-10-21 確認本條） |
-| 24 | meeting-record spec §2（`specs/meeting-record/spec.md:42`）：`record finish` 缺參數 → 2 | **使用者 2026-10-21 確認（E2）**：缺參數、且共享狀態檔記錄的 pid 已不在、phase＝stopping、場次目錄存在時，stderr 印一行說明後接手該場次（§4.16.3；不依賴 `record.pid`）；沒有可接手的場次時照舊 2。結束碼集合 {0,2,3,5} 不變，usage 不改 | D3 c；E2 |
+| 24 | meeting-record spec §2（`specs/meeting-record/spec.md:42`）：`record finish` 缺參數 → 2 | **使用者 2026-10-21 確認（E2）**：缺參數、且共享狀態檔記錄的 pid 已不在、phase＝stopping、場次目錄存在、段落待收尾（使用者 2026-10-21 閘門 2 加）時，stderr 印一行說明後接手該場次（§4.16.3；不依賴 `record.pid`）；沒有可接手的場次時照舊 2。結束碼集合 {0,2,3,5} 不變，usage 不改 | D3 c；E2 |
 
 ### 6.2 既有測試的修改（逐條；第 18–21 條使用者 2026-10-21 核准（D1），由 `red-py` 改，其他子任務一律不改）
 
@@ -484,5 +484,5 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 12. **擷取幀率與尺寸上限未定**（§4.4.13）：WindowServer 高負載是 2026-10-21 異常中止的背景（`incident-2018-windowserver.md:4,18`），但降到 30 fps 會修訂 intent §7 Q3「維持 60 fps」。由 `video-spike` 量完回報使用者，`recorder-capture` 等決定才開工。
 13. **早期模式拿掉**（§3.7）：D1 放行了「早期模式的 `MH_DIARIZE_AUDIO` 改 `diarize.sh`」，但 D2 讓正式 wav 在音訊階段就出現，prep 讀正式 wav 即可，早期模式（`tracks/audio/`、`MH_PREP_EARLY`、`MH_TRANSCRIBE_REC_DIR`、`MH_DIARIZE_AUDIO`）全部多餘。**使用者 2026-10-21 確認拿掉（E4(1)）**；連同 hard link 發佈一併不做。
 14. **`paused_total` 仍有三種實作**（§4.13.2，E4(3)）：本輪把 `_record_lib` 統一成 `_record_finalize` 的算法（連續兩個 pause 取後一個），但 `tests/record/e2e_check.py:344` 與 Swift `Core/Control.swift:186` `pausedTotal` 仍以先 pause 為起點；錄製器在已暫停時不會再寫一筆 pause（`RecordingSession.swift:806` 的 `guard !gate.paused`；`Core/Control.swift:214-215` 的 `appendingPauseEvent` 遇到與最後一筆同種類的事件直接回原陣列），正常錄製不會產生連續兩個 pause，所以實際結果一致。改 `e2e_check.py` 要改既有測試工具、改 Swift 要動 `R3RecordLibVectorTests` 的共用向量，本輪不做，列為衍生工作（不編號）。
-15. **異常中止通知可能重複**（§4.16.2，E2）：判定只看共享狀態檔，而收尾成功不會改寫共享狀態檔（單一寫者是錄製實例），所以按「收尾」完成後，到下一次開錄改寫狀態檔之前，每次重開選單都會再看到一次通知；再按一次只會得到「已完成」、回 0，不會壞資料。E2 的條件沒有包含「段落還在」，本 spec 照 E2 字面不加；若要壓掉重複通知，可加「`錄音/tracks/` 還有 `seg-*.mov`」一項（代價：CLI 與選單的條件要一起改、多兩支測試），由使用者決定。
+15. **異常中止通知重複（已處理）**（§4.16.2）：收尾成功不會改寫共享狀態檔，只看狀態檔會在收尾後重複通知；使用者 2026-10-21 閘門 2 決定 CLI 與選單都加「段落待收尾」條件（§3.10），收尾完成（`videoPublishedAt` 非 null）或段落已清掉後就不再通知、`finish` 不帶參數回 2。
 16. **`kill -0` 的 pid 重用**（§4.16）：狀態檔記錄的 pid 若已被別的程序重用，`kill -0` 會成功、判為「還在」而不接手；這是安全側的錯失（使用者仍可用 `meeting record finish <場次>`），不另處理。

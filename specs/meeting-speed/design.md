@@ -259,7 +259,7 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 | 項 | 做法 | 子任務 | spec |
 |---|---|---|---|
 | (a) 補尾幀數 | §4.2 的「補尾幀數」 | `finalize-fast` | §4.4.12 |
-| (b) 選單啟動偵測 | Core `abnormalStopSession(status:pidAlive:sessionExists:)` 判定（`phase == .stopping`、共享狀態檔記錄的 pid 已不在、場次目錄存在；不看 `record.pid`，E2）；`MenuBar` 啟動時讀狀態檔、`kill(status.pid, 0)`、檢查場次目錄，成立就發通知並提供「收尾」動作，按下才跑 `meeting.sh record finish <場次>`（使用者一鍵，不自動跑：收尾會花數分鐘 CPU，且使用者可能想先看段落） | `ms-core`（判定）、`trigger-ui`（啟動、通知、動作） | §4.16.1–§4.16.2 |
+| (b) 選單啟動偵測 | Core `abnormalStopSession(status:pidAlive:sessionExists:segmentsPending:)` 判定（`phase == .stopping`、共享狀態檔記錄的 pid 已不在、場次目錄存在；不看 `record.pid`，E2）；`MenuBar` 啟動時讀狀態檔、`kill(status.pid, 0)`、檢查場次目錄，成立就發通知並提供「收尾」動作，按下才跑 `meeting.sh record finish <場次>`（使用者一鍵，不自動跑：收尾會花數分鐘 CPU，且使用者可能想先看段落） | `ms-core`（判定）、`trigger-ui`（啟動、通知、動作） | §4.16.1–§4.16.2 |
 | (c) `finish` 不帶參數 | `record.sh cmd_finish` 沒有參數時用同一套條件（bash 版：讀 `record.status.json` 的 `pid`／`phase`／`session`、`kill -0`、目錄存在）找可接手的場次；有就在 stderr 印一行說明後照 `finish <場次>` 跑，沒有就照舊回 2。結束碼集合與 usage 不改 | `record-sh-split` | §4.16.3–§4.16.4 |
 | (d) 擷取幀率／尺寸 | `video-spike` 量三種設定，回報使用者 | `video-spike`；決定後才派 `recorder-capture` | §4.4.13 |
 
