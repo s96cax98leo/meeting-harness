@@ -17,10 +17,15 @@ bash "$MH/bin/transcribe.sh" "<音檔或影片>" "<輸出.md>" zh
 | 語言／情況 | 模型 |
 |---|---|
 | zh（預設） | `Kenji8000/Breeze-ASR-25-mlx`——聯發科 Breeze-ASR-25 的 MLX 版，Whisper-large-v2 針對台灣華語＋中英混雜微調，**原生輸出繁體**，60 分鐘音檔約 2 分鐘 |
-| 其他語言／Breeze 失敗 | `mlx-community/whisper-large-v3-mlx`（此路徑會自動跑 OpenCC `s2twp` 轉正體） |
+| 其他語言／Breeze 失敗 | `mlx-community/whisper-large-v3-mlx`（此路徑會對 `transcript.md` 與 `transcript.segments.json` 跑 OpenCC `s2twp` 轉正體；raw 不轉） |
 | 無 mlx 環境 | `openai-whisper medium` |
 
 單次換模型：`export MH_ASR_MODEL="<hf repo>"`。
+**退回鏈的成功判準**：引擎回 0 **而且**有非空的段落 `.json` 才算成功；引擎內部丟例外但 CLI 仍回 0、只留 `.txt` 的情況算失敗，
+清掉這次輸出、改跑下一個引擎（Breeze → large-v3 → openai-whisper），全部失敗回 3。不再有「回 0 卻拿殘稿」的靜默結果。
+每次嘗試的完整輸出寫到暫存工作目錄的 `asr.log`；失敗時 stderr 印該引擎輸出的最後 30 行。
+`MH_ASR_SEGMENTS_JSON`（內部用，`meeting.sh prep` 在增量轉錄拼接成功時設定）：指向 mlx_whisper 同 schema 的段落 JSON 時
+不呼叫任何 ASR 引擎，raw、段落檔、`transcript.md`、品質檔照常產出，raw 標頭的模型會註明「（增量轉錄）」。
 防迴圈的實際做法：`--condition-on-previous-text False`（不拿前文當提示），加上轉完後的重複偵測（見下方 `*.QUALITY_WARNING`）。
 `--compression-ratio-threshold` 已移除：mlx-whisper CLI 的溫度只有單一值、沒有溫度回退，這個門檻沒有作用。
 **VAD（只轉有聲區間）**：錄製器產的場次（`錄音/tracks/manifest.json` 有 `levels`）會先用
@@ -36,8 +41,10 @@ bash "$MH/bin/transcribe.sh" "<音檔或影片>" "<輸出.md>" zh
 > Breeze 對應數字是 **0.6%／0／0**（剩下的還是 `台→臺` 這種誤判）。
 
 ## 產物與規矩
-- `transcript.raw.md`：引擎原始輸出。**不刪段、不改寫**——要精修就另存 `transcript.md`。
-- `transcript.segments.json`：段落時間戳，**一律輸出**（不必再設 `MH_EMIT_SEGMENTS=1`），講者分離、VTT 要用。
+- `transcript.raw.md`：引擎原始輸出。**不刪段、不改寫**，raw 不轉字形（非 Breeze 引擎吐簡體也照原樣留著，鐵則 1）。
+- `transcript.md`：正體版。轉錄時若它不存在，就由 raw 另存一份（Breeze 照抄，其他引擎用 OpenCC 轉正體）；
+  已存在（例如人工精修過）就不覆寫。精修直接改這份。
+- `transcript.segments.json`：段落時間戳，**一律輸出**（不必再設 `MH_EMIT_SEGMENTS=1`），講者分離、VTT 要用；非 Breeze 引擎照舊轉正體。
 - `transcript.quality.json`：可疑段落清單，一律輸出（沒有就 `[]`）。每筆 `{"start", "end", "reason"}`，`reason` 為
   `compression_ratio`（該段 zlib 壓縮比 > 2.4）、`no_speech_loop`（同一句在段內連續重複 ≥3 次）、
   `repeat_run`（相鄰 ≥4 段文字相同，每段各一筆）。只標記不刪：raw 不動，衍生檔（`transcript.speakers.md`、VTT）
@@ -47,5 +54,5 @@ bash "$MH/bin/transcribe.sh" "<音檔或影片>" "<輸出.md>" zh
 - 同一場多個檔案會自動依檔名串接（`_combine_audio.py`），時間戳連續。
 
 ## 精修（選用）
-以 raw 為主體，用現場 `錄音/轉文字.txt` 與 `$MH/vault/術語表.md` 校對專名、補標點分段 → 寫 `transcript.md`。
+以 raw 為主體，用現場 `錄音/轉文字.txt` 與 `$MH/vault/術語表.md` 校對專名、補標點分段 → 寫 `transcript.md`（覆蓋轉錄時自動另存的正體版；raw 不動）。
 只做「更正＋標點＋分段」，不摘要、不增刪語意。
