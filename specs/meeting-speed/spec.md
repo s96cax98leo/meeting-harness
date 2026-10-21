@@ -1,7 +1,7 @@
 # spec：meeting-speed（停止錄製後 5 分鐘內就緒＋全專案重構）
 
 - 上游：`specs/meeting-speed/intent.md`（閘門 1 已核准，2026-10-21；**§7 是決定全文**）、`design.md`、`adr/` 四則。
-- 狀態：**修正輪 1 草稿，待閘門 2 核准**。使用者 2026-10-21 在閘門 2 前已先決定 D1–D5（原文與逐條處理見 run 目錄 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`，該目錄不進 repo）：§6 第 1–21 條核准（D1）；G1 拆兩條線量（D2，§4.14.4）；當晚錄製異常中止的 4 項修正併入（D3，§4.4.12、§4.4.13、§4.16）；每個子任務都跑四件套（D4，§4.15）；§4.11.9 品質門檻核准、結構重構不另開第 4 層（D5）。修正輪新增的 §6 第 23、24 條待閘門 2 確認；§4.4.13 的擷取幀率／尺寸待 `video-spike` 實測後由使用者決定。
+- 狀態：**修正輪 2 草稿，待閘門 2 核准**。使用者 2026-10-21 在閘門 2 前已先決定 D1–D5 與 E1–E4（原文與逐條處理見 run 目錄 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`，該目錄不進 repo）：§6 第 1–21 條核准（D1）；G1 拆兩條線量（D2，§4.14.4）；當晚錄製異常中止的 4 項修正併入（D3，§4.4.12、§4.4.13、§4.16）；每個子任務都跑四件套（D4，§4.15）；§4.11.9 品質門檻核准、結構重構不另開第 4 層（D5）；§6 第 23 條（E1）、第 24 條與異常中止判定改用共享狀態檔的 pid（E2）確認；四件套的兩個例外以「允許仍紅」一詞統一（E3，§4.15.1）；拿掉早期模式、影片線外推值 > 240 秒補長錄、`paused_total` 以 `_record_finalize` 的算法為準（E4，§3.7、§4.14.4、§4.13.2）。§4.4.13 的擷取幀率／尺寸待 `video-spike` 實測後由使用者決定。
 - 行號以 `042c404` 為準（`git log --oneline -1 origin/main`）。
 - 編號：本 spec 的節號與 §6 條號從 §1、第 1 條自己起算；引用 meeting-record 的條文一律寫「meeting-record §x.y」或「meeting-record §6 第 n 條」。
 - Story ID：本 repo 沒有上層任務系統，Story ID 用 intent §2 的目標代號 **G1–G9**（只在本 epic 內引用，不是任務編號）。commit scope 用 `meeting-speed`。
@@ -25,7 +25,7 @@
 | G8 | 結構重構：拆長檔、集中重複 helper，行為不變 | §4.13 |
 | G9 | 完成通知（前處理三則、錄製完成兩則）改用場次代號；`test_r3_lock` 容差送核准；N-3 補行為測試；N-4 明確不做 | §4.4.10、§4.12、§6 第 21 條、§7 疑慮 7 |
 
-**不在範圍**（intent §4.5、§7；design §15）：AI 總結速度；增量講者分離；`meeting.sh prep` 失敗時回非 0；`aac_at`；pyannote 4 不傳 `return_embeddings`；N-4；`_lint.sh` 加 `-W error::ResourceWarning`；停止流程提早把共享狀態標成「可救回」（`incident-2018-windowserver.md` 衍生工作第 3 項，D3 未列入）；`bin/_record_prompt.py:45` 的 `load_json` 併入共用 helper（§4.13.2）。
+**不在範圍**（intent §4.5、§7；design §15）：AI 總結速度；增量講者分離；`meeting.sh prep` 失敗時回非 0；`aac_at`；pyannote 4 不傳 `return_embeddings`；N-4；`_lint.sh` 加 `-W error::ResourceWarning`；停止流程提早把共享狀態標成「可救回」（`incident-2018-windowserver.md` 衍生工作第 3 項，D3 未列入）；`bin/_record_prompt.py:45` 的 `load_json` 併入共用 helper；`harness_config` 三份（`bin/_diarize_pyannote.py:24`、`bin/_voiceprint.py:26`、`bin/_profile.py:49`）合一（修正輪 2 移出，理由見 §4.13.2）。
 
 ---
 
@@ -33,9 +33,9 @@
 
 | 指令 | 結束碼集合（`042c404`） | 本 epic 的新情況 | 對映 |
 |---|---|---|---|
-| `meeting record finish` | 0／2／3／5（`bin/record.sh:1199-1219`） | 不帶參數、共享狀態指向異常中止的場次（§4.16.3） | 照該場次跑，結束碼照 `finish <場次>` 現行；沒有可接手的場次時照舊 2 |
+| `meeting record finish` | 0／2／3／5（`bin/record.sh:1199-1219`） | 不帶參數、共享狀態檔記錄的 pid 已不在且 phase＝stopping（§4.16.3；不看 `record.pid`） | 照該場次跑，結束碼照 `finish <場次>` 現行；沒有可接手的場次時照舊 2 |
 | `meeting.sh prep` | 同上 | 轉錄、OCR、分離任一失敗 | 仍回 0（intent §4.5），只寫 `.pipeline-state.json` |
-| `meeting.sh diarize` | 0／1／2 | 缺 `transcript.segments.json`（§4.8.4，條件式） | 1 |
+| `meeting.sh diarize` | 0／1／2 | 缺 `transcript.segments.json`（§4.8.4；§6 第 13、20 條，使用者 2026-10-21 核准） | 1 |
 | `meeting record stop`／`finish`／`status` | `stop` 0/3/5、`finish` 0/2/3/5、`status` 0/5（`bin/record.sh:40-74`） | 背景驗證失敗（§4.5） | 5（同「收尾失敗」） |
 | `_record_finalize.py` | 0／2／3／5 | 背景驗證失敗或逾時 | 5 |
 | `transcribe.sh` | 0／2／3／4（＋`set -e` 帶出的其他碼，`bin/transcribe.sh:5`） | ASR 引擎回 0 但沒有非空 `.json`（§4.7.1） | 走退回鏈；全部引擎都失敗時照舊 3 |
@@ -186,8 +186,8 @@ func audioProbeVerdict(opened: Bool, targetPeakDBFS: Double, displayPeakDBFS: Do
 func audioDeviceFailedMessage(input: String, inputTransport: String,
                               output: String, outputTransport: String) -> String
 
-// Control.swift（D3 b，修正輪新增）
-func abnormalStopSession(status: RecordStatus?, recordPid: Int32?, pidAlive: Bool) -> String?
+// Control.swift（D3 b，修正輪新增；修正輪 2 依 E2 拿掉 recordPid 參數）
+func abnormalStopSession(status: RecordStatus?, pidAlive: Bool, sessionExists: Bool) -> String?
 func abnormalStopNotification(label: String) -> (title: String, body: String)
 ```
 
@@ -198,7 +198,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 - `stopPathLogLine` → `停止略過（<source>）：<reason>`。
 - `audioDeviceFailedMessage` → `音訊裝置無法啟動（輸入：<input>／<inputTransport>；輸出：<output>／<outputTransport>）`。
 - `sessionCodeLabel`：startedAt 可解析 → `M/d HH:mm 開始的場次`；不可解析 → `場次 <runId 前 8 個字元>`。
-- `abnormalStopSession`：`status` 非 nil、`phase == .stopping`、`recordPid` 非 nil 且等於 `status.pid`、`pidAlive == false`、`session` 非空 → 回 `status.session`；其餘回 nil。
+- `abnormalStopSession`：`status` 非 nil、`phase == .stopping`、`status.pid > 0`、`pidAlive == false`（呼叫端以 `kill(status.pid, 0)` 判斷）、`status.session` 非空、`sessionExists == true`（呼叫端判斷 `status.session` 是存在的目錄）→ 回 `status.session`；其餘回 nil。判定不讀、不依賴 `record.pid`（E2；§4.16）。
 - `abnormalStopNotification` → (`上次錄製異常中止`, `<label>：段落還在，按「收尾」執行 meeting record finish`)。
 
 ### 3.11 Python 新名稱
@@ -212,8 +212,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | `bin/_voiceprint.py` | `match`、`add` 新增 `--embeddings <路徑>` | §4.6.3–§4.6.4 |
 | `bin/lib/_asr_worker.py` | §3.9 | 新檔 |
 | `bin/lib/_transcript_quality.py` | `transcribe.sh` 品質檢查 heredoc 搬過來（asr-robust 的重構 commit） | §4.13 |
-| `bin/lib/_harness.py` | `harness_config(section)`（`bin/_diarize_pyannote.py:24`、`bin/_voiceprint.py:26`、`bin/_profile.py:49` 三份合一；只用標準函式庫，diarize venv 也能 import） | §4.13.2 |
-| `bin/lib/_record_lib.py` | 公開 `load_json`、`write_json_atomic`、`record_home`（prep-pipeline 加；finalize-fast 改 import） | §4.13.2 |
+| `bin/lib/_record_lib.py` | 公開 `load_json`、`write_json_atomic`、`record_home`（prep-pipeline 加；finalize-fast 改 import）；`paused_total(pauses)` 改成 `_record_finalize.paused_total` 的算法（prep-pipeline；E4(3)） | §4.13.2 |
 
 ### 3.12 重放量測報告（`tools/bench/replay.py` 的 stdout JSON）
 
@@ -371,7 +370,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | # | 條文 | Story | 依據 | 驗法 |
 |---|---|---|---|---|
 | 4.13.1 | `wc -l` 判定：`MenuBar.swift` ≤ 1000、`RecordingSession.swift` ≤ 1000、`PreflightRunner.swift` 的 `run` 函式本體 ≤ 80 行、`bin/_record_finalize.py` ≤ 1300；`record.sh` 的 `cmd_control` 本體 ≤ 100 行；`transcribe.sh` 不再含品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。 | G8 | design §13 | `test_ms_refactor.py::test_line_limit_menubar`、`::test_line_limit_recording_session`、`::test_preflight_run_length`、`::test_line_limit_record_finalize`、`::test_cmd_control_length`、`::test_transcribe_no_quality_heredoc` |
-| 4.13.2 | `bin/_record_finalize.py` 不得自行定義 `paused_total`、`write_json_atomic`、`load_json`、`record_home`，改由 `bin/lib/_record_lib.py` import（模組內名稱照舊可用）；`harness_config` 只在 `bin/lib/_harness.py` 定義一份，`bin/_diarize_pyannote.py`、`bin/_voiceprint.py`、`bin/_profile.py` 改 import。範圍只到這兩組（`b0-audit.md:56-62` 列的重複＋`_profile.py:49` 同名同體）；`bin/_record_prompt.py:45` 的 `load_json` 是錄製提問用的同形小 helper，本輪不併（衍生工作（不編號））；`meeting.sh` 的 HF token 檢查是 bash，不在範圍。 | G8 | `b0-audit.md:56-62`；`bin/_profile.py:49` | `test_ms_refactor.py::test_record_helpers_single_definition`（只看 `_record_finalize.py` 與 `_record_lib.py`）、`::test_harness_config_single_definition`（只看上列四支） |
+| 4.13.2 | `bin/_record_finalize.py` 不得自行定義 `paused_total`、`write_json_atomic`、`load_json`、`record_home`，改由 `bin/lib/_record_lib.py` import（模組內名稱照舊可用）；範圍只到這一組（`b0-audit.md:56-62`）。**`paused_total` 以 `_record_finalize.py` 的算法為準（使用者 2026-10-21 決定，E4(3)）**：依序掃事件，`pause` 一律把起點設為該筆的 `t`（連續兩個 `pause` 取後一個），`resume` 有起點才累加 `resume.t − 起點` 並清掉起點；沒有前導 pause 的 resume、最後沒配對的 pause 不計；`t` 以 `float()` 解析、非有限值或解析失敗略過；小數 3 位（`bin/_record_finalize.py:570-575,749-762`）。`_record_lib.paused_total` 改成同一算法、不再經 `pause_pairs`；`pause_pairs`、`output_time` 與共用向量 `tests/record/vectors/output_time.json` 不變。**這是對 `_record_lib.paused_total` 呼叫端的行為變更**（連續兩個 pause 時由「先 pause 為起點」改為「後 pause 為起點」；`t` 是數字字串時由略過改為解析），受影響的呼叫端（`042c404`，`grep -rn "paused_total" bin tests tools`）：(1) `bin/_record_finalize.py:1537` 寫 `manifest.gapStats.pausedTotal`——改 import 後輸出與現行逐字相同；(2) `tests/record/test_r3_record_lib.py:127-134`——三組輸入都沒有連續 pause、`t` 都是數字，結果不變、不改；`bin/` 其他檔與 Swift 都不呼叫 `_record_lib.paused_total`（`bin/_render.py:410` 只用 `pause_pairs`）。另有兩份同名實作不在本條範圍、本輪不改：`tests/record/e2e_check.py:344`、Swift `Core/Control.swift:186` 的 `pausedTotal`（兩者都以先 pause 為起點，§7 疑慮 14）。順序：`red-py` 先寫鎖定 `_record_finalize.paused_total` 現行行為的測試（Red 層就綠）→ `prep-pipeline` 改 `_record_lib.paused_total` → `finalize-fast` 改 import。`harness_config` 三份合一**移出本 epic**（修正輪 2）：既有、不得改的 `tests/record/test_review_fixes.py:96-101` 的 `copy_with_config` 只把單支 `_profile.py`／`_voiceprint.py` 複製到暫存 `repo/bin/`，改 import `bin/lib/_harness.py` 後複製出去的腳本找不到模組；在各檔保留 fallback 又等於仍有多份定義，合一沒有意義。列為衍生工作（不編號）。`bin/_record_prompt.py:45` 的 `load_json` 本輪不併（衍生工作（不編號））；`meeting.sh` 的 HF token 檢查是 bash，不在範圍。 | G8 | `b0-audit.md:56-62`；`bin/_record_finalize.py:749-762`；`bin/lib/_record_lib.py:113-134`；`tests/record/test_review_fixes.py:96-101`；E4(3) | `test_ms_refactor.py::test_record_helpers_single_definition`（只看 `_record_finalize.py` 與 `_record_lib.py`）、`::test_paused_total_finalize_locked`（以 `[pause 10, pause 20, resume 50]`→30.0、`[pause 70, resume 100, pause 150]`→30.0、`[resume 5]`→0、`[]`→0、`t` 為 `"10"` 的字串等輸入鎖定 `_record_finalize.paused_total` 現行輸出；Red 層就綠）、`::test_paused_total_record_lib_matches_finalize`（同一組輸入，`_record_lib.paused_total` 的輸出與上一支的期望值相同）；既有 `test_r3_record_lib`、`test_review_fixes`（不改） |
 | 4.13.3 | 重構以獨立 commit（`refactor(meeting-speed)`）做在同一子任務的速度／修正 commit 之後；重構 commit 前後該子任務的完成條件測試都應綠（行為不變）。被既有靜態測試釘住的函式與字面應留在原檔；重構不得需要改既有測試。若非改不可，該子任務停下回報，由主 session 一次送使用者核准（§6 第 22 條）。 | G8 | intent §2 G8、§7 Q4 | 全量測試；重構 commit 的 `git diff --diff-filter=M --name-only <commit>~ <commit> -- tests/ tools/MeetingRecorder/Tests/` 為空 |
 | 4.13.4 | README 的流程圖應反映音訊先出、轉錄與分離並行、增量轉錄；`record.sh:973`、`transcribe.sh:3`、`_merge_speakers.py:3` 的過期註解更新（三支各自一個測試，對應各檔的擁有者）；`.claude/workflows/meeting-pipeline.js` 檔頭標示棄用並指向 `meeting-summary`。 | G8 | `plan-approved.md:105-106` | `test_ms_docs.py::test_readme_flow`、`::test_stale_comment_transcribe`、`::test_stale_comment_merge_speakers`、`::test_stale_comment_record_sh`、`::test_meeting_pipeline_js_deprecated` |
 
@@ -382,25 +381,25 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | 4.14.1 | `tools/bench/replay.py <段落目錄> [--speed N] [--no-worker] [--compare-full] [--legacy]` 應在暫存區建沙盒場次（名稱「[Stand-up] 範例專案」）與沙盒 `MH_RECORD_HOME`，依各段 `startedAt`／`finishedAt` 的間隔除以 N 依序放入段落並更新 manifest，最後一段放完算「停止」，起 `_record_finalize.py`；認到「音訊就緒：」就起 `meeting.sh prep <沙盒場次>`（只帶 `MH_PREP_RUN_ID`），`--legacy` 或沒有這一行時等收尾結束再起。`stopToWav` 取正式 wav 出現在 `錄音/` 第一層的時刻。 | G1 | intent §7 Q6 | `test_ms_replay.py::test_speed_schedule`、`::test_early_flow`、`::test_legacy_flow`（替身） |
 | 4.14.2 | 報告應符合 §3.12，不得含任何路徑、場次名或來源目錄名。 | G1 | 公開 repo | `test_ms_replay.py::test_report_keys`、`::test_report_no_paths` |
 | 4.14.3 | **每層量測（逐字稿線）**：每層合併後以 `--speed 10` 重放 2026-10-20 的 2 小時段落（121 段）一次，報告數字寫進 progress.md。這批段落沒有 `canvasLock`、影片走重編，`stopToVideo` 只記錄、不判定。 | G1 | intent §7 Q6；D2 | 主 session（plan §4） |
-| 4.14.4 | **最終驗收（G1）。量法經使用者 2026-10-21 在閘門 2 前核准（D2）**，拆兩條線：(i) **逐字稿線**：`--speed 1` 重放 2026-10-20 的 2 小時段落（121 段）一次，`stopToSpeakersMd ≤ 300` 且 `stopToWav ≤ 300`（正式 wav 依 §4.2.1 先於影片發佈，舊段落走重編不影響這兩個數字）。(ii) **影片線**：用新錄製器（`record.meta.json` 有 `canvasLock`）錄的實錄段落量 `stopToVideo`；實錄不足 121 段時依段數線性外推：外推值＝實測 `stopToVideo` × 121 ÷ 實錄段數，外推值 ≤ 300；外推值 ≥ 240 秒（接近 300）時再補錄一場 ≥ 2 小時的會議實測，以實測值為準。(i)(ii) 都成立才算 G1 達成。 | G1 | intent §7 Q1、Q6；D2 | 主 session＋使用者（plan §4） |
+| 4.14.4 | **最終驗收（G1）。量法經使用者 2026-10-21 在閘門 2 前核准（D2）**，拆兩條線：(i) **逐字稿線**：`--speed 1` 重放 2026-10-20 的 2 小時段落（121 段）一次，`stopToSpeakersMd ≤ 300` 且 `stopToWav ≤ 300`（正式 wav 依 §4.2.1 先於影片發佈，舊段落走重編不影響這兩個數字）。(ii) **影片線**：用新錄製器（`record.meta.json` 有 `canvasLock`）錄的實錄段落量 `stopToVideo`；實錄不足 121 段時依段數線性外推：外推值＝實測 `stopToVideo` × 121 ÷ 實錄段數，外推值 ≤ 300；外推值 > 240 秒時再補錄一場 ≥ 2 小時的會議實測，以實測值為準（門檻使用者 2026-10-21 確認，E4(2)）。(i)(ii) 都成立才算 G1 達成。 | G1 | intent §7 Q1、Q6；D2 | 主 session＋使用者（plan §4） |
 
 ### 4.15 迴歸與 verify（D4：使用者 2026-10-21 核准）
 
 | # | 條文 | Story | 依據 | 驗法 |
 |---|---|---|---|---|
-| 4.15.1 | 每個子任務完成時（有 refactor commit 的，在 refactor commit 之後）都應跑下列四件套，並符合 plan §2〈共通〉的判準：(a) `bash bin/_lint.sh && bash bin/meeting.sh doctor` 回 0；(b) `/bin/bash tools/MeetingRecorder/Tests/run.sh` 回 0——只有 plan §3「預期仍紅」允許的子任務可以編譯失敗，且錯誤只限缺 §3.10 名稱；(c) Python 全量 `$PY -m unittest discover -s tests/record -t .`：`FAIL:`／`ERROR:` 的測試 ID 都在 plan §3 該層「預期仍紅」清單內、且不含本子任務完成條件列的測試，輸出沒有 `ImportError`、`ModuleNotFoundError`、`SyntaxError`、`NameError`；(d) 名稱掃描：本子任務的 diff 與 commit 訊息以 `grep -qiF -f <client-names.txt>` 檢查，只回報有／沒有，結果須為「沒有」。 | 全部 | intent.md:92-96（§2 末段「驗收時每個子任務都要過」）；D4 | plan §2〈共通〉的四條指令 |
-| 4.15.2 | 每層合併後，plan §3 該層列的指令都應回 0，「預期仍紅」只能是該欄列的測試。 | 全部 | 專案規則 verify | plan §3 |
+| 4.15.1 | 每個子任務完成時（有 refactor commit 的，在 refactor commit 之後）都應跑下列四件套，並符合 plan §2〈共通〉的判準：(a) `bash bin/_lint.sh && bash bin/meeting.sh doctor` 回 0；(b) `/bin/bash tools/MeetingRecorder/Tests/run.sh` 回 0；(c) Python 全量 `$PY -m unittest discover -s tests/record -t .` 沒有 `FAIL:`／`ERROR:`，輸出沒有 `ImportError`、`ModuleNotFoundError`、`SyntaxError`、`NameError`；(d) 名稱掃描：本子任務的 diff 與 commit 訊息以 `grep -qiF -f <client-names.txt>` 檢查，只回報有／沒有，結果須為「沒有」。**(b)(c) 的例外只有兩個，統稱「允許仍紅」（使用者 2026-10-21 核准，E3）**：(i) red-swift 階段——`MSCoreTests.swift` 已在本分支或本層開工時的 `feature/meeting-speed`、`ms-core` 尚未合併（Red 層的 `red-swift`，與第 1 層 `ms-core` 以外的子任務）——Swift `run.sh` 只因缺 §3.10 名稱而編譯失敗（每一行 `error:` 都是缺 §3.10 的名稱）；(ii) 每層開工時 plan §3 列的允許仍紅清單（Red 層的 `red-py` 與第 1 層用 R0、第 2 層用 R1、第 3 層用 R2）內、由本子任務以外的子任務（後續層或同層其他子任務）負責轉綠的測試允許仍紅；本子任務完成條件列的測試不得紅。清單外任何紅燈一律失敗。 | 全部 | intent.md:92-96（§2 末段「驗收時每個子任務都要過」）；D4；E3 | plan §2〈共通〉的四條指令 |
+| 4.15.2 | 每層合併後，plan §3 該層列的指令都應回 0；全量的紅燈只能是 plan §3 該層「合併後允許仍紅」欄列的測試（也就是下一層的開工清單），Swift 編譯失敗只能出現在 Red 層合併後（例外 (i)）。 | 全部 | 專案規則 verify | plan §3 |
 | 4.15.3 | 新增與修改的檔案、commit 訊息不得含 `client-names.txt` 列的名稱（只回報有／沒有）。 | 全部 | intent §4.1 | `test_ms_docs.py::test_no_client_names_in_ms_files`（不得 skipped） |
 
 ### 4.16 異常中止後的接手（D3 b、c；G5）
 
-背景：2026-10-21 晚間 WindowServer 重啟、GUI session 重建，錄製器在收尾前結束；最後一段沒收尾、共享狀態停在 `stopping`（`incident-2018-windowserver.md:3-14`）。判定只用既有狀態：`record.status.json` 與 `record.pid`（`bin/record.sh:30`），不新增狀態檔或 phase。
+背景：2026-10-21 晚間 WindowServer 重啟、GUI session 重建，錄製器在收尾前結束；最後一段沒收尾、共享狀態停在 `stopping`（`incident-2018-windowserver.md:3-14`）。判定只用共享狀態檔 `record.status.json` 記錄的 `pid`、`phase`、`session`，**不依賴 `record.pid`**（使用者 2026-10-21 決定，E2）：`meeting record stop` 遇到 `record.pid` 的 pid 已死時會刪掉 `record.pid`（`bin/record.sh:822,829`），使用者先按停止、再跑 `finish` 或重開選單時 `record.pid` 往往已不在。不新增狀態檔或 phase；CLI 與選單用同一套條件。
 
 | # | 條文 | Story | 依據 | 驗法 |
 |---|---|---|---|---|
-| 4.16.1 | Core `abnormalStopSession` 的輸出應與 §3.10 字面相同（`phase == .stopping`、`record.pid` 與狀態檔 pid 相同且程序已不在才回場次路徑）。 | G5 | D3 b | `swift:testMSAbnormalStopDetected`、`swift:testMSAbnormalStopNotWhenAlive`、`swift:testMSAbnormalStopNotWhenOtherPhase`、`swift:testMSAbnormalStopNotWhenPidMismatch` |
-| 4.16.2 | 當選單 app 啟動時，應讀 `record.status.json` 與 `record.pid`、以 `kill(pid, 0)` 判斷程序是否還在，交給 `abnormalStopSession`；回非 nil 且該目錄存在時，應發一則 `abnormalStopNotification(label: sessionCodeLabel(…))` 的通知並提供「收尾」動作，按下才以現行執行 `meeting.sh` 的方式跑 `meeting.sh record finish <場次>`（不自動跑）；通知文字不得含場次名或路徑。 | G5、G9 | D3 b；meeting-record §4.39.3 的理由 | `swift:testMSAbnormalStopNotification`；`test_ms_app_static.py::TriggerStatic::test_abnormal_stop_checked_on_launch`、`::test_abnormal_stop_notification_no_name` |
-| 4.16.3 | 當 `meeting record finish` 不帶參數時，若 `<record home>/record.status.json` 的 `phase == "stopping"`、`record.pid` 存在且其 pid 已不在（`kill -0` 失敗）、兩者 pid 相同、`session` 是存在的目錄，則應在 stderr 印「· 接手異常中止的場次：<路徑>」後照 `finish <場次>` 執行，結束碼照現行 {0,2,3,5}；任一條件不成立時照舊印「✗ 少了場次目錄…」回 2。 | G5 | D3 c；`bin/record.sh:1199-1202` | `test_ms_record_finish.py::test_no_arg_uses_abnormal_session`、`::test_no_arg_without_status_exit2`、`::test_no_arg_live_pid_exit2`、`::test_no_arg_other_phase_exit2`、`::test_no_arg_pid_mismatch_exit2` |
+| 4.16.1 | Core `abnormalStopSession` 的輸出應與 §3.10 字面相同（`phase == .stopping`、狀態檔記錄的 pid 已不在、場次目錄存在才回場次路徑；不看 `record.pid`）。 | G5 | D3 b；E2 | `swift:testMSAbnormalStopDetected`、`swift:testMSAbnormalStopNotWhenAlive`、`swift:testMSAbnormalStopNotWhenOtherPhase`、`swift:testMSAbnormalStopNotWhenSessionMissing`、`swift:testMSAbnormalStopNotWhenNoStatus` |
+| 4.16.2 | 當選單 app 啟動時，應讀 `record.status.json`、以 `kill(status.pid, 0)` 判斷狀態檔記錄的程序是否還在、判斷 `status.session` 是否為存在的目錄，交給 `abnormalStopSession`（不讀 `record.pid`）；回非 nil 時，應發一則 `abnormalStopNotification(label: sessionCodeLabel(…))` 的通知並提供「收尾」動作，按下才以現行執行 `meeting.sh` 的方式跑 `meeting.sh record finish <場次>`（不自動跑）；通知文字不得含場次名或路徑。 | G5、G9 | D3 b；E2；meeting-record §4.39.3 的理由 | `swift:testMSAbnormalStopNotification`；`test_ms_app_static.py::TriggerStatic::test_abnormal_stop_checked_on_launch`（`Trigger/` 有呼叫 `abnormalStopSession(` 與 `kill(`，且呼叫 `abnormalStopSession(` 的函式本體不含 `record.pid`）、`::test_abnormal_stop_notification_no_name` |
+| 4.16.3 | 當 `meeting record finish` 不帶參數時，若 `<record home>/record.status.json` 的 `phase == "stopping"`、`pid` 是正整數且 `kill -0 <pid>` 失敗、`session` 是存在的目錄，則應在 stderr 印一行「· 接手異常中止的場次：<路徑>」後照 `finish <場次>` 執行，結束碼照現行 {0,2,3,5}；`record.pid` 存在與否、內容為何都不影響判定（E2）；任一條件不成立時照舊印「✗ 少了場次目錄…」回 2。 | G5 | D3 c；E2；`bin/record.sh:822,829,1199-1202` | `test_ms_record_finish.py::test_no_arg_uses_abnormal_session`、`::test_no_arg_after_stop_removed_pid_file`（沒有 `record.pid`、狀態檔 pid 已死、phase＝stopping → 接手）、`::test_no_arg_without_status_exit2`、`::test_no_arg_live_pid_exit2`、`::test_no_arg_other_phase_exit2`、`::test_no_arg_session_missing_exit2` |
 | 4.16.4 | `record.sh` 的 usage 與子指令列不改（`finish <場次>` 照舊，既有 `test_docs`、`test_surface_parsers` 不改）；不帶參數的接手行為寫進 `.claude/skills/meeting-record/SKILL.md`。 | G5 | 專案規則 7 | `test_ms_docs.py::test_record_skill_finish_no_arg`；既有 `test_docs`、`test_surface_parsers`（不改） |
 
 ---
@@ -411,9 +410,9 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 |---|---|---|---|
 | `bin/_record_finalize.py` | 音訊先出（正式 wav 先發佈、`finalize.json` 兩階段）、copy 路徑、驗證後移、ffprobe 合併、N-3、補尾幀數（D3 a） | finalize-fast（含拆檔） | stdout 多兩行；`finalize.json` 多三鍵；正式 wav 比影片早出現；結束碼不變 |
 | `bin/meeting.sh` | prep 並行、`state-begin`、stitch 交棒、`diarize` 失敗記錄、C8 | prep-pipeline | 子指令與結束碼不變；`.pipeline-state.json` 多 `prep` 鍵 |
-| `bin/lib/_record_lib.py` | `update_pipeline_state`、CLI `state-set`／`state-begin`；公開共用 helper | prep-pipeline | 內部 |
+| `bin/lib/_record_lib.py` | `update_pipeline_state`、CLI `state-set`／`state-begin`；公開共用 helper；`paused_total` 改用 `_record_finalize` 的算法（§4.13.2） | prep-pipeline | 內部；`paused_total` 對連續兩個 pause 的結果改變（呼叫端只有 `_record_finalize.py` 與既有 `test_r3_record_lib`，兩者結果不變） |
 | `bin/transcribe.sh` | 成功判準、`asr.log`、raw 不轉、`MH_ASR_SEGMENTS_JSON` | asr-robust（含 heredoc 抽出） | 結束碼不變；多寫 `transcript.md`（只在不存在時） |
-| `bin/diarize.sh`、`_diarize_pyannote.py`、`_merge_speakers.py`、`_render.py`、`_voiceprint.py`、`_profile.py` | embedding 暫存、confidence、覆蓋規則、remove 過濾、16k 跳過；`harness_config` 合一 | diarize-iron | 場次資料夾不再有 `embeddings.json`；沒有 confidence 的 dict 不再掛名 |
+| `bin/diarize.sh`、`_diarize_pyannote.py`、`_merge_speakers.py`、`_render.py`、`_voiceprint.py` | embedding 暫存、confidence、覆蓋規則、remove 過濾、16k 跳過（`harness_config` 合一移出本 epic，§4.13.2） | diarize-iron | 場次資料夾不再有 `embeddings.json`；沒有 confidence 的 dict 不再掛名 |
 | `config.json` | 加 `transcribe.incremental.enabled`（預設 true）；`diarize.note` 不再寫 `embeddings.json` | diarize-iron | 多一個設定鍵 |
 | `bin/lib/_asr_worker.py`（新） | 增量轉錄 | incremental-asr | 內部 |
 | `tools/MeetingRecorder/Sources/Core/` | §3.10（含異常中止判定） | ms-core | 狀態檔 Optional 鍵 |
@@ -431,7 +430,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 
 ### 6.1 被取代或修訂的 meeting-record 條文
 
-第 1–17 條：使用者 2026-10-21 在閘門 2 前核准（D1）。第 23、24 條：修正輪依 D2、D3 新增，待閘門 2 確認。
+第 1–17 條：使用者 2026-10-21 在閘門 2 前核准（D1）。第 23 條：使用者 2026-10-21 確認（E1）。第 24 條：使用者 2026-10-21 確認（E2）。
 
 | 第 n 條 | 原條文（meeting-record） | 本 epic 的修訂 | 理由／出處 |
 |---|---|---|---|
@@ -452,8 +451,8 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | 15 | §4.29.2：`_render.py` 照抄 `_merge_speakers.main` 的套名判準（`confidence` 預設 1.0 的行為隨之照抄） | 沒有 `confidence` 的 dict 視為未確認、不套名；兩支程式一起改。代價：舊場次重跑 render，原本沒有 confidence 的 dict 對應不再掛名 | intent §5 預設 2；§4.6.2 |
 | 16 | meeting-record intent（`specs/meeting-record/intent.md:386-397`）：即時轉錄與拆檔本輪不做 | 已由使用者 2026-10-21 的決定取代（增量轉錄）；不需另行核准，僅記錄 | intent §4.2 末段 |
 | 17 | §4.39.3、R3-§6 第 135 條：錄製中告警通知不得含場次名 | **擴大適用**到錄製完成、前處理完成／失敗／沒有執行、異常中止的通知（§4.12、§4.16.2）；原條文不變 | intent §7 R2 完成通知 |
-| 23 | §4.6.5、R3-§6 第 140 條、`bin/_record_finalize.py:22`（模組說明第 7 步「最後才把 wav rename 進 錄音/——場次在這一刻才存在」）；intent §7 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」 | **（修正輪新增，待閘門 2 確認）** 正式 wav 在音訊階段、任何影片步驟之前發佈（§4.2.1）；「先寫 `finalize.json`、wav 後出現」的順序不變（§4.2.3），`finalize.json` 改兩階段寫入，`finishedAt` 的意義改為「錄音成品發佈時刻」、另加 `videoPublishedAt`（§3.4）。「場次存在」從「收尾全部完成」改為「錄音成品就緒（影片可能仍在收尾）」。既有 `test_concurrency.py` 不改（它的 `published()` 讀 `finishedAt`＋`outputs.audio`，第一階段就成立）。代價：影片收尾期間 `meeting status`、`meeting prep <根>` 會列出該場（§7 疑慮 11） | D2（使用者 2026-10-21：正式 wav 必須先於影片發佈、不等影片） |
-| 24 | meeting-record spec §2（`specs/meeting-record/spec.md:42`）：`record finish` 缺參數 → 2 | **（修正輪新增，待閘門 2 確認）** 缺參數且共享狀態指向異常中止的場次時接手該場次（§4.16.3）；沒有可接手的場次時照舊 2。結束碼集合 {0,2,3,5} 不變，usage 不改 | D3 c |
+| 23 | §4.6.5、R3-§6 第 140 條、`bin/_record_finalize.py:22`（模組說明第 7 步「最後才把 wav rename 進 錄音/——場次在這一刻才存在」）；intent §7 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」 | **使用者 2026-10-21 確認（E1）**：正式 wav 在音訊階段、任何影片步驟之前發佈（§4.2.1）；「先寫 `finalize.json`、wav 後出現」的順序不變（§4.2.3），`finalize.json` 改兩階段寫入，`finishedAt` 的意義改為「錄音成品發佈時刻」、另加 `videoPublishedAt`（§3.4）。「場次存在」從「收尾全部完成」改為「錄音成品就緒（影片可能仍在收尾）」；據此修訂 meeting-record §4.6.5、R3-§6 第 140 條，以及 intent §7 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」一句（intent.md 本身不改，以本條為準）。既有 `test_concurrency.py` 不改（它的 `published()` 讀 `finishedAt`＋`outputs.audio`，第一階段就成立）。代價：影片收尾期間 `meeting status`、`meeting prep <根>` 會列出該場（§7 疑慮 11） | D2（使用者 2026-10-21：正式 wav 必須先於影片發佈、不等影片）；E1（使用者 2026-10-21 確認本條） |
+| 24 | meeting-record spec §2（`specs/meeting-record/spec.md:42`）：`record finish` 缺參數 → 2 | **使用者 2026-10-21 確認（E2）**：缺參數、且共享狀態檔記錄的 pid 已不在、phase＝stopping、場次目錄存在時，stderr 印一行說明後接手該場次（§4.16.3；不依賴 `record.pid`）；沒有可接手的場次時照舊 2。結束碼集合 {0,2,3,5} 不變，usage 不改 | D3 c；E2 |
 
 ### 6.2 既有測試的修改（逐條；第 18–21 條使用者 2026-10-21 核准（D1），由 `red-py` 改，其他子任務一律不改）
 
@@ -472,7 +471,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 ## 7. 疑慮
 
 1. **關鍵路徑餘裕不到 1 分鐘**：講者分離實測 infer 204.9 秒（`baseline.md` A 節），加上音訊就緒時間（未量測）與 merge，推算 4–4.5 分（design §2.2）；mlx 與 pyannote 並行搶 GPU 的影響未量測（intent §4.4）。回報點：第 2 層量測後 `stopToSpeakersMd > 300` 時，主 session 停下回報使用者，可選的下一步是 (a) 加大分離的 batch（`_diarize_pyannote.py` 參數，需另開子任務）、(b) 增量轉錄改在停止後暫停 worker 讓出 GPU、(c) 接受實測值。本 spec 不預先決定。
-2. **影片 5 分鐘的量法**（D2 已核准，§4.14.4 (ii)）：2026-10-20 的保留段落是 D8 錄的（各段尺寸不同），走不到 copy 路徑；影片只能用新錄製器的段落量。實錄不足 121 段時以段數線性外推；copy remux 與 concat 主要是 I/O，線性假設合理但未驗證，所以外推值 ≥ 240 秒時補一場 ≥ 2 小時的實錄。
+2. **影片 5 分鐘的量法**（D2 已核准，§4.14.4 (ii)）：2026-10-20 的保留段落是 D8 錄的（各段尺寸不同），走不到 copy 路徑；影片只能用新錄製器的段落量。實錄不足 121 段時以段數線性外推；copy remux 與 concat 主要是 I/O，線性假設合理但未驗證，所以外推值 > 240 秒時補一場 ≥ 2 小時的實錄（E4(2)）。
 3. **`aac_at` 不採**（design §10）：若第 2 層量到影片超過 5 分而 `aac_at` 能補回，另開核准改 `test_static_rules.py:505-522`。
 4. **錄製中的 `levels` 落盤時機**：`manifest.levels` 每 0.5 秒在記憶體累加（`RecordingSession.swift:715`），段落收尾時 `writeManifest()`（`:697`）一起落盤，所以 worker 讀得到該段結尾前的 levels；最後 0.5 秒窗可能還沒寫入，切點找不到時硬切（§4.11.3）。
 5. **畫布鎖定的代價**：開錄後放大視窗，成品解析度停在開錄時；開錄當下視窗是幕前調度縮圖時整場都小（§6 第 4 條）。`preservesAspectRatio` 在 macOS 15 的預設與行為、SCK 段落（VFR、`time_base=1/600`）copy 串接是否乾淨，由 `video-spike` 先實測；實測不可行時 `finalize-fast`、`recorder-capture` 停下回報，不自行改做法。
@@ -483,4 +482,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 10. **三方資源分配**：錄製 ＞ 背景收尾（錄製中平行度 2，沿用 R3x-D9）＞ worker（nice 10、有別場背景收尾就不開新窗、丟幀就暫停）。錄製中編碼負擔與 worker 搶 CPU／GPU 的實際影響只能靠 §4.11.10 的實錄確認。
 11. **正式 wav 提早發佈的副作用**（§6 第 23 條）：影片收尾期間場次已可被 `meeting status`／`meeting prep <根>` 列出。若使用者或其他 session 在這段時間手動對整個根目錄跑 prep，會與自動前處理重複轉錄同一場（不會壞資料：raw 照鐵則 1 不原地改寫，`.pipeline-state.json` 有鎖；但浪費一次轉錄）。本 epic 不加互斥，列為觀察項。
 12. **擷取幀率與尺寸上限未定**（§4.4.13）：WindowServer 高負載是 2026-10-21 異常中止的背景（`incident-2018-windowserver.md:4,18`），但降到 30 fps 會修訂 intent §7 Q3「維持 60 fps」。由 `video-spike` 量完回報使用者，`recorder-capture` 等決定才開工。
-13. **早期模式拿掉**（§3.7）：D1 放行了「早期模式的 `MH_DIARIZE_AUDIO` 改 `diarize.sh`」，但 D2 讓正式 wav 在音訊階段就出現，prep 讀正式 wav 即可，早期模式（`tracks/audio/`、`MH_PREP_EARLY`、`MH_TRANSCRIBE_REC_DIR`、`MH_DIARIZE_AUDIO`）全部多餘。修正輪預設拿掉；使用者若仍要保留，閘門 2 說一聲即可恢復（代價：`meeting.sh`、`transcribe.sh`、`diarize.sh` 多三個環境變數分支與一段清理邏輯，沒有速度收益）。
+13. **早期模式拿掉**（§3.7）：D1 放行了「早期模式的 `MH_DIARIZE_AUDIO` 改 `diarize.sh`」，但 D2 讓正式 wav 在音訊階段就出現，prep 讀正式 wav 即可，早期模式（`tracks/audio/`、`MH_PREP_EARLY`、`MH_TRANSCRIBE_REC_DIR`、`MH_DIARIZE_AUDIO`）全部多餘。**使用者 2026-10-21 確認拿掉（E4(1)）**；連同 hard link 發佈一併不做。
+14. **`paused_total` 仍有三種實作**（§4.13.2，E4(3)）：本輪把 `_record_lib` 統一成 `_record_finalize` 的算法（連續兩個 pause 取後一個），但 `tests/record/e2e_check.py:344` 與 Swift `Core/Control.swift:186` `pausedTotal` 仍以先 pause 為起點；錄製器在已暫停時不會再寫一筆 pause（`RecordingSession.swift:806` 的 `guard !gate.paused`；`Core/Control.swift:214-215` 的 `appendingPauseEvent` 遇到與最後一筆同種類的事件直接回原陣列），正常錄製不會產生連續兩個 pause，所以實際結果一致。改 `e2e_check.py` 要改既有測試工具、改 Swift 要動 `R3RecordLibVectorTests` 的共用向量，本輪不做，列為衍生工作（不編號）。
+15. **異常中止通知可能重複**（§4.16.2，E2）：判定只看共享狀態檔，而收尾成功不會改寫共享狀態檔（單一寫者是錄製實例），所以按「收尾」完成後，到下一次開錄改寫狀態檔之前，每次重開選單都會再看到一次通知；再按一次只會得到「已完成」、回 0，不會壞資料。E2 的條件沒有包含「段落還在」，本 spec 照 E2 字面不加；若要壓掉重複通知，可加「`錄音/tracks/` 還有 `seg-*.mov`」一項（代價：CLI 與選單的條件要一起改、多兩支測試），由使用者決定。
+16. **`kill -0` 的 pid 重用**（§4.16）：狀態檔記錄的 pid 若已被別的程序重用，`kill -0` 會成功、判為「還在」而不接手；這是安全側的錯失（使用者仍可用 `meeting record finish <場次>`），不另處理。

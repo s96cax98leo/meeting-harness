@@ -2,7 +2,7 @@
 
 - 上游：`specs/meeting-speed/intent.md`（閘門 1 已核准，2026-10-21；**§7 是決定全文，取代 §5 的建議**）。
 - 下游：`spec.md`（驗收條件）、`plan.md`（子任務、檔案、測試對應）、`progress.md`、`adr/`（四則）。
-- 狀態：**修正輪 1 草稿，待閘門 2 核准**。使用者 2026-10-21 在閘門 2 前的決定 D1–D5 已落進本檔、spec、plan（逐條處理見 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`）。
+- 狀態：**修正輪 2 草稿，待閘門 2 核准**。使用者 2026-10-21 在閘門 2 前的決定 D1–D5、E1–E4 已落進本檔、spec、plan（逐條處理見 `_tpm/runs/20261021-sdlc-meeting-speed/design-revise-對照.md`）。
 - 行號以 `042c404` 為準（`git log --oneline -1 origin/main`）；可用 `sed -n '<行>p' <檔>` 重跑核對。
 - 本檔的 MS-D1…MS-D16 只是本檔內的決策編號，**不是任務編號**；G1–G9 沿用 intent §2 的目標代號，spec 用它們當 Story ID。
 - 範例場次名一律用「[Stand-up] 範例專案」。
@@ -14,7 +14,7 @@
 
 1. **關鍵路徑改成「音訊先出 → 前處理（轉錄與分離並行）」與「影片 copy 串接」兩條平行線**，驗證移到成品發佈之後。2 小時場的推算關鍵路徑見 §2；最緊的一段是講者分離（實測 204.9 秒，`baseline.md` A 節），5 分鐘的餘裕約 1 分鐘以內。
 2. **錄製中的增量轉錄**由錄製器在開錄時起一個低優先權的 Python worker（`bin/lib/_asr_worker.py`），只讀 `manifest.json` 已收尾的段落，模型只載一次；停止後只剩最後一窗。
-3. **閘門 1 的八項決定全部落成條文**（spec §4），被推翻或修訂的 meeting-record 條文逐條列在 spec §6.1；要改的既有測試列在 spec §6.2。第 1–21 條使用者已在閘門 2 前核准（D1）；修正輪依 D2、D3 新增第 23 條（正式 wav 先於影片發佈）、第 24 條（`record finish` 不帶參數可接手），待閘門 2 確認；第 22 條是結構重構的預留條，預估 0 條。
+3. **閘門 1 的八項決定全部落成條文**（spec §4），被推翻或修訂的 meeting-record 條文逐條列在 spec §6.1；要改的既有測試列在 spec §6.2。第 1–21 條使用者已在閘門 2 前核准（D1）；修正輪依 D2、D3 新增的第 23 條（正式 wav 先於影片發佈）、第 24 條（`record finish` 不帶參數可接手）使用者 2026-10-21 已確認（E1、E2）；第 22 條是結構重構的預留條，預估 0 條。
 4. **拆成 15 個子任務、Red＋3 層**（§1；明細在 `plan.md` §1）。所有子任務的檔案歸屬完全不重疊（跨層也不重疊）；結構重構由各檔的擁有者在速度 commit 之後另做 refactor commit（§13；D5：不另開第 4 層）。當晚錄製異常中止的 4 項修正依 D3 併進既有子任務，不新增子任務（§17）。
 5. **契約夠用，沒有新端點**。新增的都是：狀態檔的 Optional 欄位、場次資料夾內的新檔、只給內部呼叫的環境變數、stdout 新增一行。`meeting.sh`／`record.sh`／`transcribe.sh`／`diarize.sh`／`_record_finalize.py` 的子指令與結束碼集合都不變（spec §2）。
 
@@ -29,7 +29,7 @@
 | 計畫原本 | 本設計 | 理由 |
 |---|---|---|
 | docs-cleanup 在第 4 層 | 移到第 3 層，只擁有 `README.md`、`.claude/workflows/meeting-pipeline.js` | 它擁有的檔沒有別人碰；過期註解交給各檔的擁有者（`transcribe.sh:3`＝asr-robust、`_merge_speakers.py:3`＝diarize-iron、`record.sh:973`＝record-sh-split） |
-| split-swift、split-scripts 在第 4 層 | 拆掉，依檔案併進各檔的擁有者（`MenuBar.swift`＝trigger-ui；`RecordingSession.swift`、`PreflightRunner.swift`＝recorder-capture；`_record_finalize.py`＝finalize-fast；`transcribe.sh` heredoc＝asr-robust；`harness_config`＝diarize-iron；共用 helper 的公開＝prep-pipeline）；`record.sh` 沒有別的擁有者，獨立成 `record-sh-split`（第 1 層） | 重構要動的檔正好是速度層改的檔，另開子任務就一定兩個子任務擁有同一支檔（`check-envelope.sh` 擋檔案歸屬重疊）。G8「速度先、重構後」的理由是避免衝突；單一擁有者在自己的速度 commit 之後做 refactor commit，衝突來源不存在，順序也成立。代價：三個第 2 層子任務工作量變大 |
+| split-swift、split-scripts 在第 4 層 | 拆掉，依檔案併進各檔的擁有者（`MenuBar.swift`＝trigger-ui；`RecordingSession.swift`、`PreflightRunner.swift`＝recorder-capture；`_record_finalize.py`＝finalize-fast；`transcribe.sh` heredoc＝asr-robust；共用 helper 的公開與 `paused_total` 統一＝prep-pipeline）；`record.sh` 沒有別的擁有者，獨立成 `record-sh-split`（第 1 層） | 重構要動的檔正好是速度層改的檔，另開子任務就一定兩個子任務擁有同一支檔（`check-envelope.sh` 擋檔案歸屬重疊）。G8「速度先、重構後」的理由是避免衝突；單一擁有者在自己的速度 commit 之後做 refactor commit，衝突來源不存在，順序也成立。代價：三個第 2 層子任務工作量變大 |
 | incremental-asr 改 `meeting.sh` 的 prep 讀取、改 `config.json` | `meeting.sh` 的 stitch 呼叫端由 `prep-pipeline` 寫（worker 檔不存在就跳過，spec §3.9）；`config.json` 的 `transcribe.incremental.enabled` 由 `diarize-iron` 一併加（它本來就要改 `diarize.note` 的 embedding 說明） | `incremental-asr` 只擁有新檔 `bin/lib/_asr_worker.py`，不必和第 1 層串鏈 |
 | （沒有） | 新增 `red-py`、`red-swift`（Red 層，kind=test） | `sdlc-build` 先寫紅燈測試；派工單要求 test 子任務擁有 tests/ |
 | preflight-diag、stop-gate、audio-first 的 Swift 部分各自改 Core | 新增 `ms-core`：獨佔 `Sources/Core/` | `Tests/run.sh` 一次編譯整個 Core（`research-code-contracts.md:137`），紅燈測試引用的 Core 名稱散在多個子任務就沒有任何一個子任務能單獨跑綠；R3 的 `r3-core` 是同一個理由（`specs/meeting-record/plan.md` §10.1） |
@@ -48,7 +48,8 @@
 | 事故修正 (b) 選單啟動偵測異常中止（D3） | 判定進 `ms-core`、偵測與通知進 `trigger-ui` | 判定是純函式，放 Core 才能被 `Tests/run.sh` 測；啟動流程在 `MenuBar.swift`，`trigger-ui` 擁有 |
 | 事故修正 (c) `record finish` 不帶參數接手（D3） | 併進 `record-sh-split`（從純重構變成 feat＋refactor） | 改的是 `record.sh` 的 `cmd_finish`，`record-sh-split` 是 `record.sh` 唯一的擁有者 |
 | 事故修正 (d) 擷取幀率／尺寸（D3） | `video-spike` 多量一節，結果交使用者決定 | D3 明定不在 spec 預先定案；`recorder-capture` 等決定才開工 |
-| `harness_config` 只合兩份 | 加 `bin/_profile.py:49`（同名同體），`_profile.py` 歸 `diarize-iron` | skeptic 指出第三份沒有擁有者；`_profile.py` 沒有其他子任務要碰 |
+| `harness_config` 合一（修正輪 1 擴成三份、`_profile.py` 歸 `diarize-iron`） | **修正輪 2 移出本 epic**，列衍生工作（不編號）；`bin/_profile.py` 不再列入任何子任務的 owns | 既有、不得改的 `tests/record/test_review_fixes.py:96-101` `copy_with_config` 只把單支 `_profile.py`／`_voiceprint.py` 複製到暫存 `repo/bin/` 執行；改 import `bin/lib/_harness.py` 後複製出去的腳本找不到模組。保留各檔 fallback 又等於仍有多份定義。另一種做法「改測試讓它連 `bin/lib/` 一起複製」違反「上游測試不改」 |
+| `paused_total` 兩份「改 import、行為不變」 | 以 `_record_finalize` 的算法為準（連續兩個 pause 取後一個）；`red-py` 先寫鎖定測試，`prep-pipeline` 改 `_record_lib`，`finalize-fast` 再改 import（E4(3)） | 兩份在連續兩個 pause 時結果不同（`bin/_record_finalize.py:749-762` 取後一個；`bin/lib/_record_lib.py:113-134` 經 `pause_pairs` 取前一個），「行為不變」不成立 |
 | 三支過期註解共用一支測試 | 拆成三支（`test_stale_comment_transcribe`／`_merge_speakers`／`_record_sh`） | 一支測試橫跨三個擁有者，沒有任何子任務能單獨轉綠 |
 
 數量從 12 變 15：新增 `red-py`、`red-swift`、`ms-core`、`video-spike`、`replay-bench`、`record-sh-split`，各自說得出不能併進別人的理由；減少的是合併（state-lock＋prep-parallel、audio-first＋video-copy 的 finalize 端、split-swift 與 split-scripts 併進各檔擁有者）。
@@ -99,14 +100,14 @@
 
 ## 3. 音訊先出（MS-D2；ADR `adr/adr-ms-audio-first.md`）
 
-intent §7 Q2：wav 先寫到 `錄音/tracks/`，自動前處理直接讀它；「場次存在＝錄製完成」不變。**D2（使用者 2026-10-21，閘門 2 前）**：正式 wav 必須先於影片發佈、不等影片——取代 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」的那一句（spec §6 第 23 條）。
+intent §7 Q2：wav 先寫到 `錄音/tracks/`，自動前處理直接讀它；「場次存在＝錄製完成」不變。**D2（使用者 2026-10-21，閘門 2 前）**：正式 wav 必須先於影片發佈、不等影片——取代 Q2「正式 wav 照舊在最後一刻 rename 進 `錄音/`」的那一句；「場次存在」改為錄音成品就緒（影片可能還在收尾），使用者 2026-10-21 確認（E1；spec §6 第 23 條）。
 
 - **產法**：沿用 `audio_graph`（`bin/_record_finalize.py:894-915`）與正規化相同的原點與 `-t`，逐段抽出 48 kHz 雙聲道 PCM；補償模式 ≠ off 時沿用 `compensated_audio`（`:1108-1151`），它只吃 `good`、`plan`、`work`、`total`，不依賴影片正規化結果，可以提前。整條 PCM 再轉 16 kHz 單聲道，寫到現行暫存目錄 `錄音/tracks/.finalize/audio.wav.part`（`:1449,1502`；符合 Q2「wav 先寫到 `錄音/tracks/`」）。影片的音軌照舊用同一份 PCM，§4.6.20 (ii) 的 ≤ 25 ms 判準仍適用。
 - **發佈**：`錄音/tracks/audio-ready.json`（段落清單＋大小＋長度＋起點、補償模式、stamp）→ `finalize.json` 第一階段（現行鍵＋`finishedAt`＋`videoPublishedAt: null`，`outputs.video` 是預定路徑）→ `os.replace` 成 `錄音/<同名>.wav` → stdout 印 `音訊就緒：錄音/<檔名>`。「先 `finalize.json`、wav 後出現」（R3-§6 第 140 條）照舊，所以既有 `test_concurrency.py::test_finalizing_session_not_listed` 不改也綠（它的 `published()` 只看 `finishedAt` 與 `outputs.audio`，`tests/record/test_concurrency.py:19-26`）。
 - **對外呈現**：`FinalizeRunner` 逐行轉印時認出「音訊就緒：」，呼叫 `status.update { $0.audioReady = true }`（`Capture/FinalizeRunner.swift:93-108` 已在逐行讀）。Python 不寫狀態檔，維持 `research-code-contracts.md:101` 的單一寫者。不另加 `stages.audio`（intent §7 沒有要求；skeptic 第 6 點）。
 - **觸發**：Core 新增 `autoPrepPick`，在 `phase == .finalizing && audioReady == true` 時回 `.early`；原本的 done 路徑保留（同一 runId 只排一次）。`AutoPrepRunner` 對 `.early`、`.done` 都只多帶 `MH_PREP_RUN_ID=<uuid>`。
 - **prep 怎麼吃**：正式 wav 已在 `錄音/` 第一層，`meeting.sh prep <場次>` 照現行 `list_sessions`／`_combine_audio.py` 就讀得到（`bin/meeting.sh:287-298,321`）；轉錄的 VAD 以音源所在目錄（`錄音/`）找 `tracks/manifest.json`，分離以 `_combine_audio.py "$REC"` 取同一支 wav（`bin/diarize.sh:24`）。所以**不需要早期模式**。
-- **為什麼拿掉早期模式**：前一版為了「正式 wav 最後才出現」設計了 `錄音/tracks/audio/` 暫存音檔、`MH_PREP_EARLY`、`MH_TRANSCRIBE_REC_DIR`、`MH_DIARIZE_AUDIO` 與 hard link 發佈。D2 讓正式 wav 在音訊階段就出現，這些都只剩繞路、沒有速度收益；D1 雖然放行了 `MH_DIARIZE_AUDIO` 改 `diarize.sh`，修正輪用不到（spec §7 疑慮 13，使用者可在閘門 2 要求恢復）。
+- **為什麼拿掉早期模式**：前一版為了「正式 wav 最後才出現」設計了 `錄音/tracks/audio/` 暫存音檔、`MH_PREP_EARLY`、`MH_TRANSCRIBE_REC_DIR`、`MH_DIARIZE_AUDIO` 與 hard link 發佈。D2 讓正式 wav 在音訊階段就出現，這些都只剩繞路、沒有速度收益；D1 雖然放行了 `MH_DIARIZE_AUDIO` 改 `diarize.sh`，修正輪用不到。使用者 2026-10-21 確認拿掉（E4(1)；spec §7 疑慮 13）。
 - **冪等的中間態**（C2）：`audio-ready.json` 的段落清單、補償模式與這次相同、正式 wav 存在 → 不重寫（mtime 不變），直接進影片步驟。影片失敗回 5 時，下一次 `record finish` 只補影片；`already_done` 看兩個成品檔都在才算完成（`bin/_record_finalize.py:735-746`），影片不在就不會誤判。
 - **代價**：影片收尾期間場次已可被 `meeting status`／`meeting prep <根>` 列出（spec §7 疑慮 11）。
 
@@ -170,7 +171,7 @@ intent §7 Q5：切點取段尾附近的 VAD 靜音點；丟幀數一增加就�
 ## 7. 狀態檔加鎖（MS-D7）
 
 - `bin/lib/_record_lib.py` 新增 `update_pipeline_state(sess, updates, timeout=5.0)`：`<場次>/.pipeline-state.lock` 取 flock、讀後合併、mkstemp＋rename、等鎖 5 秒逾時放棄（沿用 `adr-r3-defaults-writers.md:26-30` 與既有 `_acquire_lock`，`bin/lib/_record_lib.py:41-58`）；CLI 子指令 `state-set`、`state-begin`。
-- 寫入者三方：`meeting.sh state_set`（改呼叫 CLI）、`_record_finalize.set_state_done` 與新的 `audio: done`（改呼叫函式）、`_asr_worker` 不寫這個檔。
+- 寫入者：`meeting.sh state_set`（改呼叫 CLI）、`_record_finalize.set_state_done`（改呼叫函式，只寫 `record: done`；不另加 `audio` stage，spec §4.2.11 已刪）；`_asr_worker` 不寫這個檔。
 - 逾時：印一行警告到 stderr、該次寫入放棄、呼叫端照常繼續（狀態檔只是紀錄；`AutoPrepRunner` 讀到缺 stage 會判失敗，比靜默寫壞好）。
 
 ## 8. 失敗看得到（MS-D8；G5）
@@ -208,7 +209,7 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 - 報告（JSON）：`stopToAudioReady`、`stopToSpeakersMd`、`stopToVideo`、`stopToWav`（正式 wav 出現在 `錄音/` 第一層的時刻）、`stopToAllReady`（三者取最大）、`verifySeconds`、`workerBacklogAtStop`、`speed`、`segments`、`recordedSeconds`；**不記任何來源路徑或場次名**（公開 repo，數字可以抄進 progress.md）。
 - 加速重放時 worker 追不上的段數會比實際多，量到的停止後時間偏大（誤差方向保守，intent §5 Q6）；報告記下停止當下欠幾窗。
 - 品質比對：`replay.py --compare-full` 另跑一次整檔轉錄，依 §5 的兩個門檻算字差異率與時間差比例。
-- **G1 拆兩條線量（D2，使用者 2026-10-21 核准；spec §4.14.4）**：逐字稿線（`stopToSpeakersMd`、`stopToWav`）用 2026-10-20 的 2 小時舊段落重放量——正式 wav 不等影片，舊段落走重編也不影響這兩個數字；影片線（`stopToVideo`）用新錄製器（有 `canvasLock`）的實錄量，實錄不足 121 段時依段數線性外推，外推值 ≥ 240 秒時補錄一場 ≥ 2 小時的會議。
+- **G1 拆兩條線量（D2，使用者 2026-10-21 核准；spec §4.14.4）**：逐字稿線（`stopToSpeakersMd`、`stopToWav`）用 2026-10-20 的 2 小時舊段落重放量——正式 wav 不等影片，舊段落走重編也不影響這兩個數字；影片線（`stopToVideo`）用新錄製器（有 `canvasLock`）的實錄量，實錄不足 121 段時依段數線性外推，外推值 > 240 秒時補錄一場 ≥ 2 小時的會議（E4(2)）。
 - 資料來源（C10）：保留段落的路徑由使用者在量測時提供或由主 session 量；子 agent 不讀 `~/.meeting-harness/`。
 
 ## 13. 結構重構（MS-D14；G8）
@@ -217,7 +218,7 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 - **原則：被靜態測試釘住的函式與字面留在原檔**（`test_r2_static.py`、`test_r3_app_static.py`、`test_r3x_app_static.py`、`test_static_rules.py`、`test_r3x_parallel_finalize.py` 的 `need()` 與模組全域，`research-code-contracts.md:127-135`）。可以搬的是沒被釘住的部分（例如 `MenuBar.swift` 的圖示繪製、`RecordingSession.swift` 的監看與落盤 helper、`_record_finalize.py` 的分析與補償函式），Swift 用 `extension` 放到新檔，Python 搬到 `bin/lib/` 再由原模組 import（可變全域不搬，避免副本問題）。
 - 依這個原則，預估要改的既有測試為 **0 條**（intent §7 Q4 的「重構批次」，spec §6 第 22 條預留）。build 中若發現非改不可，該子任務停下回報，由主 session 一次送使用者核准，不得自行改測試。
 - 目標用行數判定（spec §4.13.1）：`MenuBar.swift`、`RecordingSession.swift` 各 ≤ 1000 行；`PreflightRunner.run` ≤ 80 行；`_record_finalize.py` ≤ 1300 行；`record.sh` 的 `cmd_control` ≤ 100 行；`transcribe.sh` 不再有品質檢查的 heredoc（搬到 `bin/lib/_transcript_quality.py`）。
-- 重複 helper（spec §4.13.2）：`paused_total`、`write_json_atomic`、`load_json`、`record_home` 由 `prep-pipeline` 在 `bin/lib/_record_lib.py` 公開、`finalize-fast` 改 import；`harness_config` 由 `diarize-iron` 合成 `bin/lib/_harness.py`，三個使用者（`_diarize_pyannote.py:24`、`_voiceprint.py:26`、`_profile.py:49`）改 import。`bin/_record_prompt.py:45` 的 `load_json` 不併（衍生工作（不編號））；`meeting.sh` 的 HF token 檢查是 bash，不在範圍。
+- 重複 helper（spec §4.13.2）：`paused_total`、`write_json_atomic`、`load_json`、`record_home` 由 `prep-pipeline` 在 `bin/lib/_record_lib.py` 公開、`finalize-fast` 改 import。`paused_total` 兩份在連續兩個 pause 時結果不同，以 `_record_finalize` 的算法（取後一個）為準（E4(3)）：`red-py` 先寫鎖定 `_record_finalize.paused_total` 現行輸出的測試，`prep-pipeline` 把 `_record_lib.paused_total` 改成同一算法（`pause_pairs`、`output_time` 不動），`finalize-fast` 再改 import；這是對 `_record_lib.paused_total` 呼叫端的行為變更，呼叫端清單在 spec §4.13.2。`harness_config` 三份合一移出本 epic（§1.1；衍生工作（不編號））。`bin/_record_prompt.py:45` 的 `load_json` 不併（衍生工作（不編號））；`meeting.sh` 的 HF token 檢查是 bash，不在範圍。
 
 ## 14. 測試策略（MS-D15；intent §7 Q4）
 
@@ -229,7 +230,7 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 | `test_r3_lock` 容差 | +2 → +6（spec §6 第 21 條，D1 已核准） |
 | 結構重構 | 原則上 0 條（spec §6 第 22 條預留）；`test_r3x_parallel_finalize.py` 的 ResourceWarning 不修（衍生工作） |
 | 新測試 | `tests/record/test_ms_*.py`（Python）、`tools/MeetingRecorder/Tests/MSCoreTests.swift`（Swift），由 Red 層先寫 |
-| 每個子任務的驗收（D4） | lint＋doctor、Swift `run.sh`、Python 全量、名稱掃描四件套都跑（spec §4.15.1）；紅燈階段的失敗只能落在 plan §3「預期仍紅」清單，判定方式是比對 `FAIL:`／`ERROR:` 的測試 ID，可機械判定 |
+| 每個子任務的驗收（D4） | lint＋doctor、Swift `run.sh`、Python 全量、名稱掃描四件套都跑（spec §4.15.1）；例外統稱「允許仍紅」（E3）：(i) red-swift 階段 Swift `run.sh` 只因缺 spec §3.10 名稱而編譯失敗；(ii) plan §3 每層開工清單（R0／R1／R2）內、由其他子任務負責的測試；清單外任何紅燈一律失敗。判定方式是比對 `FAIL:`／`ERROR:` 的測試 ID，可機械判定 |
 
 ## 15. 不做（MS-D16）
 
@@ -258,8 +259,10 @@ intent §5 Q3 的建議是「先量 `aac_at` 的收益再決定要不要申請�
 | 項 | 做法 | 子任務 | spec |
 |---|---|---|---|
 | (a) 補尾幀數 | §4.2 的「補尾幀數」 | `finalize-fast` | §4.4.12 |
-| (b) 選單啟動偵測 | Core `abnormalStopSession(status:recordPid:pidAlive:)` 判定（`phase == .stopping`、`record.pid` 與狀態檔 pid 相同且程序已不在）；`MenuBar` 啟動時讀狀態檔與 `record.pid`、`kill(pid, 0)`，成立就發通知並提供「收尾」動作，按下才跑 `meeting.sh record finish <場次>`（使用者一鍵，不自動跑：收尾會花數分鐘 CPU，且使用者可能想先看段落） | `ms-core`（判定）、`trigger-ui`（啟動、通知、動作） | §4.16.1–§4.16.2 |
-| (c) `finish` 不帶參數 | `record.sh cmd_finish` 沒有參數時用同一套條件（bash 版）找可接手的場次；有就印一行說明後照 `finish <場次>` 跑，沒有就照舊回 2。usage 不改 | `record-sh-split` | §4.16.3–§4.16.4 |
+| (b) 選單啟動偵測 | Core `abnormalStopSession(status:pidAlive:sessionExists:)` 判定（`phase == .stopping`、共享狀態檔記錄的 pid 已不在、場次目錄存在；不看 `record.pid`，E2）；`MenuBar` 啟動時讀狀態檔、`kill(status.pid, 0)`、檢查場次目錄，成立就發通知並提供「收尾」動作，按下才跑 `meeting.sh record finish <場次>`（使用者一鍵，不自動跑：收尾會花數分鐘 CPU，且使用者可能想先看段落） | `ms-core`（判定）、`trigger-ui`（啟動、通知、動作） | §4.16.1–§4.16.2 |
+| (c) `finish` 不帶參數 | `record.sh cmd_finish` 沒有參數時用同一套條件（bash 版：讀 `record.status.json` 的 `pid`／`phase`／`session`、`kill -0`、目錄存在）找可接手的場次；有就在 stderr 印一行說明後照 `finish <場次>` 跑，沒有就照舊回 2。結束碼集合與 usage 不改 | `record-sh-split` | §4.16.3–§4.16.4 |
 | (d) 擷取幀率／尺寸 | `video-spike` 量三種設定，回報使用者 | `video-spike`；決定後才派 `recorder-capture` | §4.4.13 |
 
-**判定為什麼是兩份（Swift 與 bash）**：選單 app 與 CLI 是兩個入口，現行的 `record.pid` 守門也是兩份（`Core/Lock.swift:56-57` 與 `bin/record.sh:19`）。兩份都只讀同兩個檔、條件逐字寫在 spec §3.10 與 §4.16.3，由各自的測試釘住。
+**判定為什麼不用 `record.pid`（E2）**：`meeting record stop` 遇到 `record.pid` 的 pid 已死時會刪掉 `record.pid`（`bin/record.sh:822,829`）。使用者常見的順序是「發現錄製怪怪的 → 先按停止 → 再收尾」，這時 `record.pid` 已經不在，若判定要求 `record.pid` 存在，`finish` 不帶參數與選單偵測都會落空。共享狀態檔 `record.status.json` 的 `pid` 欄（`Core/Records.swift` 的 `RecordStatus.pid`）不會被 `stop` 刪，所以改用它。
+
+**判定為什麼是兩份（Swift 與 bash）**：選單 app 與 CLI 是兩個入口，現行的守門也是兩份（`Core/Lock.swift:56-57` 與 `bin/record.sh:19`）。兩份都只讀 `record.status.json` 一個檔、條件逐字寫在 spec §3.10 與 §4.16.3，由各自的測試釘住。

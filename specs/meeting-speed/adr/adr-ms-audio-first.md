@@ -1,6 +1,6 @@
 # ADR：音訊先出——正式 wav 何時出現、前處理怎麼拿到
 
-- 狀態：提議（待 meeting-speed 閘門 2 核准；修正輪 1 依使用者 D2 改採選項 D）
+- 狀態：提議（待 meeting-speed 閘門 2 核准；修正輪 1 依使用者 D2 改採選項 D；修正輪 2：使用者 2026-10-21 確認 spec §6 第 23 條（E1）與拿掉早期模式（E4(1)））
 - 日期：2026-10-21
 - 範圍：`bin/_record_finalize.py`、`tools/MeetingRecorder/Sources/Capture/FinalizeRunner.swift`、`Core/Records.swift`、`Core/Control.swift`、`Trigger/Completion.swift`
 
@@ -28,12 +28,12 @@
 
 採 **D**。理由：
 1. 只有 D 同時滿足 D2（正式 wav 不等影片）與限制六（`test_concurrency` 不改）。
-2. 正式 wav 一出現在 `錄音/` 第一層，現行 prep、轉錄 VAD、分離取音源的路徑全部照舊可用，B 的三個環境變數與清理邏輯都成為多餘；D1 對 `MH_DIARIZE_AUDIO` 的放行因此用不到（spec §7 疑慮 13，使用者可在閘門 2 要求恢復 B 的早期模式）。
+2. 正式 wav 一出現在 `錄音/` 第一層，現行 prep、轉錄 VAD、分離取音源的路徑全部照舊可用，B 的三個環境變數與清理邏輯都成為多餘；D1 對 `MH_DIARIZE_AUDIO` 的放行因此用不到；使用者 2026-10-21 確認拿掉 B 的早期模式（E4(1)；spec §7 疑慮 13）。
 3. 對外呈現照 intent §7 Q2：`audioReady: Bool?`（nil 省略鍵，沿用 `adr-r2-status-fields.md`），由 `FinalizeRunner` 認 stdout 的「音訊就緒：」一行後寫入，Python 不寫狀態檔。
 
 ## 後果
 
 - meeting-speed spec §3.2（`audio-ready.json`、發佈順序）、§3.4（`finalize.json` 兩階段）、§3.7（拿掉三個環境變數）、§3.8（stdout 行）、§4.2、§4.3。
-- meeting-speed spec §6 第 9 條撤回（不再用 hard link）；第 23 條記錄 meeting-record §4.6.5、R3-§6 第 140 條與 intent §7 Q2 的修訂，待閘門 2 確認。
+- meeting-speed spec §6 第 9 條撤回（不再用 hard link）；第 23 條記錄 meeting-record §4.6.5、R3-§6 第 140 條與 intent §7 Q2「最後一刻」一句的修訂（「場次存在」改為錄音成品就緒、影片可能還在收尾），使用者 2026-10-21 確認（E1）。
 - 影片失敗或逾時回 5 時，正式 wav 與 `finalize.json` 第一階段保留；`already_done` 要兩個成品檔都在才算完成（`bin/_record_finalize.py:735-746`），下次 `record finish` 只補影片（spec §4.2.5、§4.3.2）。
 - 冪等多一個中間態：`audio-ready.json` 與這次輸入相同、正式 wav 在 → 不重寫 wav，只補影片（spec §4.3.2）。
