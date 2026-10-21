@@ -470,3 +470,92 @@ func statusItemObscured(itemMinX: CGFloat, itemMaxX: CGFloat, visible: Bool,
     guard let lo = notchMinX, let hi = notchMaxX, hi > lo else { return false }
     return itemMaxX > lo && itemMinX < hi
 }
+
+// MARK: - meeting-speed：提早前處理、前處理結果與通知（spec §3.10、§4.2.9、§4.8.6、§4.8.7、§4.12）
+
+/// spec §4.2.9：`.early`＝音訊就緒即可開前處理；`.done`＝舊路徑（錄製結束才排）。
+enum AutoPrepPick: Equatable { case early(session: String, runId: String), done(session: String, runId: String) }
+
+/// 共同前提：自動前處理開啟、有狀態、未捨棄、session 非空、runId 曾在進行中被看見、尚未排過。
+/// `.finalizing`＋`audioReady == true` → `.early`；`.done` 時照 `shouldAutoPrep` 的條件 → `.done`；其餘 nil。
+func autoPrepPick(autoPrep: Bool, status: RecordStatus?, seenInProgressRunIds: Set<String>,
+                  enqueuedRunIds: Set<String>) -> AutoPrepPick? {
+    guard autoPrep, let st = status, st.discarded != true, !st.session.isEmpty,
+          seenInProgressRunIds.contains(st.runId), !enqueuedRunIds.contains(st.runId) else { return nil }
+    if st.phase == .finalizing && st.audioReady == true {
+        return .early(session: st.session, runId: st.runId)
+    }
+    if let session = shouldAutoPrep(autoPrep: autoPrep, status: st, seenInProgressRunIds: seenInProgressRunIds,
+                                    lastAutoPrepRunId: nil) {
+        return .done(session: session, runId: st.runId)
+    }
+    return nil
+}
+
+/// spec §4.8.6：前處理結果，依 pipeline.state.json 的 `prep` 與 `stages` 判定。
+enum PrepOutcome: Equatable { case ok, failed([String]), unknown }
+
+/// 讀不到、JSON 壞、`prep.runId` 不等於這次 → `.unknown`；
+/// `prep.expect` 每個 stage 都是 `status == "done"` 且 `runId` 等於這次 → `.ok`；否則 `.failed`（依 expect 順序）。
+func prepOutcome(pipelineState: Data?, runId: String) -> PrepOutcome {
+    guard let data = pipelineState,
+          let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let prep = root["prep"] as? [String: Any],
+          let prepRun = prep["runId"] as? String, prepRun == runId else { return .unknown }
+    let expect = (prep["expect"] as? [Any])?.compactMap { $0 as? String } ?? []
+    let stages = root["stages"] as? [String: Any] ?? [:]
+    let failed = expect.filter { name in
+        guard let st = stages[name] as? [String: Any] else { return true }
+        return (st["status"] as? String) != "done" || (st["runId"] as? String) != runId
+    }
+    return failed.isEmpty ? .ok : .failed(failed)
+}
+
+/// spec §3.10 字面；內文以 label（場次代號）開頭，不含場次名或路徑。
+func prepNotification(outcome: PrepOutcome, exitCode: Int32, label: String) -> (title: String, body: String) {
+    let failTitle = "前處理失敗"
+    if exitCode != 0 { return (failTitle, "\(label)：結束碼 \(exitCode)，詳見 autoprep.log") }
+    switch outcome {
+    case .ok: return ("前處理完成", label)
+    case .failed(let stages): return (failTitle, "\(label)：\(stages.joined(separator: "、")) 失敗，詳見 autoprep.log")
+    case .unknown: return (failTitle, "\(label)：無法確認結果，詳見 autoprep.log")
+    }
+}
+
+/// spec §4.12.3、§3.10 字面：ok → `<label>`；否則 `<label>：收尾有錯誤，詳見 record.log`。
+func completionNotificationBody(ok: Bool, label: String) -> String {
+    ok ? label : "\(label)：收尾有錯誤，詳見 record.log"
+}
+
+// MARK: - meeting-speed：音訊就緒行、停止路徑 log、增量轉錄 worker（spec §3.8、§4.2.8、§4.10.3、§4.11.1）
+
+/// spec §3.8：去掉前導空白（含 tab）後以「音訊就緒：」（全形冒號）開頭才成立。
+func isAudioReadyLine(_ line: String) -> Bool {
+    line.drop(while: { $0.isWhitespace }).hasPrefix("音訊就緒：")
+}
+
+/// spec §4.10.3、§3.10 字面：`停止略過（<source>）：<reason>`。
+func stopPathLogLine(source: String, reason: String) -> String {
+    "停止略過（\(source)）：\(reason)"
+}
+
+/// spec §4.11.1：至少一段收尾、尚未起過、worker 檔存在、增量轉錄未關閉 → true（只起一次）。
+func asrWorkerShouldStart(finishedSegments: Int, alreadyStarted: Bool, workerScriptExists: Bool,
+                          incrementalEnabled: Bool) -> Bool {
+    finishedSegments >= 1 && !alreadyStarted && workerScriptExists && incrementalEnabled
+}
+
+// MARK: - meeting-speed：異常中止（spec §3.10、§4.16；E2：只看狀態檔）
+
+/// 狀態檔 phase 為 stopping、記錄的 pid 為正整數且已不在、場次目錄存在、段落待收尾 → 回 status.session；其餘 nil。
+/// pidAlive、sessionExists、segmentsPending 由呼叫端判斷（kill(status.pid, 0)、目錄存在、§3.10「段落待收尾」）。
+func abnormalStopSession(status: RecordStatus?, pidAlive: Bool, sessionExists: Bool, segmentsPending: Bool) -> String? {
+    guard let st = status, st.phase == .stopping, st.pid > 0, !pidAlive,
+          !st.session.isEmpty, sessionExists, segmentsPending else { return nil }
+    return st.session
+}
+
+/// spec §4.16.2、§3.10 字面；不含場次名或路徑。
+func abnormalStopNotification(label: String) -> (title: String, body: String) {
+    ("上次錄製異常中止", "\(label)：段落還在，按「收尾」執行 meeting record finish")
+}
