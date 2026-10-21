@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""openai-whisper CLI 的替身：同樣模擬「例外後回 0、只留 .txt」（meeting-speed spec §4.7.1：全部引擎都失敗時回 3）。
+
+argv 以一行 JSON 附加到 FAKE_ASR_LOG（engine＝whisper）。"""
+import json
+import os
+import sys
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_ASR_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"argv": argv, "engine": "whisper"}, ensure_ascii=False) + "\n")
+outdir = argv[argv.index("--output_dir") + 1] if "--output_dir" in argv and argv.index("--output_dir") + 1 < len(argv) \
+    else "."
+audio = argv[0] if argv else "audio.wav"
+os.makedirs(outdir, exist_ok=True)
+with open(os.path.join(outdir, os.path.splitext(os.path.basename(audio))[0] + ".txt"), "w", encoding="utf-8") as f:
+    f.write("範例內容（例外前的殘稿）\n")
+print("Traceback (most recent call last):\n  RuntimeError: 範例例外（替身）", file=sys.stderr)
+sys.exit(0)
