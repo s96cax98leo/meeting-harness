@@ -281,3 +281,26 @@
 - ~~把 87 分鐘場的基準數字（遮罩後）補進 run 目錄~~：已完成，見 run 目錄的 `baseline.md`（2026-10-21）。
 - `run.json` 五個 stage 都是 `pending`，沒有 plan-approved.md 的核准紀錄（`research-requirement.md:67`）。閘門紀錄由主 session 用 `save_run.py approve` 補記。
 - `config.json` 的 `requireVerifierPassBeforePublish` 沒有程式在檢查；`meeting-pipeline.js` 舊流程直接寫 summary.md，有違反鐵則 2 的風險（`b0-audit.md:53-55`）。docs-cleanup 要決定改接新流程還是標示棄用。
+
+## 7. 閘門 1 決定（2026-10-21 使用者核准）
+
+以下是使用者在閘門 1 的決定（AskUserQuestion），取代 §5 的「建議」。design 照這份走。
+
+- **Q1 終點**：包含影片成品，背景驗證不計。目標是 2 小時場從停止到 `transcript.speakers.md`、影片成品、錄音成品都就緒 ≤ 5 分。整支解碼驗證移到成品交付之後在背景跑，失敗時要標記並通知（C9 的處理方式交給 design）。
+- **Q2 音訊先出**：wav 先寫到 `錄音/tracks/`，自動前處理直接讀它；正式 wav 照舊在最後一刻 rename 進 `錄音/`。「場次存在＝錄製完成」（§4.6.5、R3-§6 第 140 條）不變，`test_concurrency` 不用改。對外呈現：`RecordStatus` 加 Optional `audioReady`，phase 不新增。
+- **Q3 影片**：開錄時鎖定當下的視窗像素，整場固定，維持 60 fps。全場符合條件就走 `-c:v copy`，碼率等於來源；不符合條件時整場退回現行重編。
+  - 修訂 D8 (i)，推翻 §4.3.4，修訂 D7。
+  - 用缺陷 B、F、N 的情境重驗。
+  - `preservesAspectRatio` 和 copy 串接要先實測。
+- **Q4 既有測試**：混合。
+  - 速度相關的改動一律繞開既有測試，保留既有介面。
+  - 鐵則修正改在源頭；`test_diarize_and_merge_untouched` 等受影響的測試，逐條送使用者核准。
+  - 第 3 層結構重構要改的測試，一次送核准。
+  - `test_r3_lock` 的計時容差單獨送核准。
+- **Q5 增量轉錄**：切點取段尾附近的 VAD 靜音點。丟幀數一增加，就暫停背景處理到停止為止，錄製中不恢復。逐段結果不完整，或模型、語言、VAD 參數和整檔路徑不一致時，退回整檔轉錄。品質門檻的數字由 design 訂，閘門 2 核准。
+- **Q6 量法**：
+  - 重放器依各段 `startedAt` 模擬段落關閉，每一層都用加速重放量。
+  - 最終驗收做一次 1× 重放（2 小時）。
+  - 另錄一場實錄，記下停止當下還欠幾段。
+- **R2 完成通知**：「錄製完成通知含場次路徑」併進 G9，和前處理通知一起改成場次代號。
+- **embedding**：每場的講者 embedding 只在聲紋比對當下用暫存檔（mktemp），比對完就刪除；不落在場次資料夾，也不進 `vault/`。使用者確認對應之後，才照專案規則 5 寫進 `vault/voiceprints/`。這樣完全符合規則字面（§5 預設第 3 條作廢）。
