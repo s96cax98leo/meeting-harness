@@ -966,7 +966,7 @@ PY
     echo "錄製器已在收尾，等結果（不再送停止訊號）…"
   else
     kill -TERM "${pid}" 2>/dev/null
-    echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+    echo "已送出停止，收尾中（長場次要等一下）…"
   fi
   t0="$(date +%s)"
   while :; do
@@ -1196,9 +1196,57 @@ for p in glob.glob(os.path.join(fin, "*.status.json")):
 PY
 }
 
+# 異常中止的場次（meeting-speed spec §3.10 abnormalStopSession 的 bash 版、§4.16.3）：只讀共享狀態檔，不看 record.pid（E2）。
+# 條件：phase＝stopping、pid 是正整數且 kill -0 失敗、session 是存在的目錄、段落待收尾（錄音/tracks/ 有 seg-*.mov，
+# 且 finalize.json 不存在、或 videoPublishedAt 為 null、或舊 schema 兩個鍵都沒有）。成立就印場次路徑，否則什麼都不印。
+abnormal_stop_session() {
+  python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null
+import glob, json, os, sys
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+if not isinstance(st, dict) or st.get("phase") != "stopping":
+    sys.exit(0)
+pid, sess = st.get("pid"), st.get("session")
+if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+    sys.exit(0)
+try:
+    os.kill(pid, 0)
+    sys.exit(0)  # 還活著（或無權限送訊號，視同還在）
+except ProcessLookupError:
+    pass
+except OSError:
+    sys.exit(0)
+if not isinstance(sess, str) or not sess or not os.path.isdir(sess):
+    sys.exit(0)
+tracks = os.path.join(sess, "錄音", "tracks")
+if not glob.glob(os.path.join(glob.escape(tracks), "seg-*.mov")):
+    sys.exit(0)
+fin_path = os.path.join(tracks, "finalize.json")
+if os.path.exists(fin_path):
+    try:
+        fin = json.load(open(fin_path, encoding="utf-8"))
+    except Exception:
+        fin = {}
+    if not isinstance(fin, dict):
+        fin = {}
+    if "videoPublishedAt" in fin:
+        if fin["videoPublishedAt"] is not None:
+            sys.exit(0)
+    elif "finishedAt" in fin:
+        sys.exit(0)
+print(sess)
+PY
+}
+
 cmd_finish() {
   check_unknown "" "" "$@" || return 2
   local sess="${1:-}"
+  if [[ -z "${sess}" && $# -eq 0 ]]; then
+    sess="$(abnormal_stop_session)"
+    [[ -n "${sess}" ]] && err "· 接手異常中止的場次：${sess}"
+  fi
   if [[ -z "${sess}" ]]; then err "✗ 少了場次目錄：meeting.sh record finish <場次>"; return 2; fi
   if [[ $# -gt 1 ]]; then shift; err "✗ 多了參數：$*"; return 2; fi
   if [[ ! -d "${sess}" ]]; then err "✗ 找不到場次目錄：${sess}"; return 2; fi
@@ -1218,13 +1266,12 @@ cmd_finish() {
 
 # R2 控制（spec R2-§2.2、§3.9、§3.14 的 controlAvailability／requestControl、§4.16.5–§4.16.8）。
 # 一支 python 做完：判斷可否控制 → 取 flock 寫控制檔 → 需要時送 SIGUSR1 → 等狀態檔反映。
+# python 本體拆成三段（共用 helper、可否控制＋寫控制檔、送訊號＋等反映；meeting-speed spec §4.13.1），
+# 由 cmd_control 串起來以 python3 -c 執行；sys.argv 的位置與拆分前相同。
 # 結束碼：0 已套用（或本來就是目標狀態）；3 沒有可控制的錄製或沒有回應。
-cmd_control() { # <pause|resume|mute|unmute|mark> 參數…
-  local word="$1"
-  shift
-  check_unknown "" "" "$@" || return 2
-  if [[ $# -gt 0 ]]; then err "✗ ${word} 不接參數：$*"; return 2; fi
-  python3 - "${word}" "${STATUS_FILE}" "${PID_FILE}" "${CONTROL_FILE}" "${CONTROL_LOCK}" "${CONTROL_WAIT_SECONDS}" <<'PY'
+
+control_py_lib() { # 共用 helper：參數、讀檔、程序存活、時間格式
+  cat <<'PY'
 import datetime, fcntl, json, math, os, signal, sys, tempfile, time
 word, st_path, pid_path, ctl_path, lock_path, wait_s = sys.argv[1:7]
 wait_s = float(wait_s)
@@ -1282,6 +1329,11 @@ def recorded(st):  # 同 Core recordedSeconds；舊狀態檔沒有 recordingStar
     return max(0, math.floor(e))
 
 
+PY
+}
+
+control_py_request() { # 1. 可否控制 2. flock 下寫控制檔
+  cat <<'PY'
 # 1. 可否控制（§3.14 controlAvailability 的順序；回 3 時不碰控制檔）
 st = load(st_path)
 try:
@@ -1330,6 +1382,11 @@ with open(lock_path, "a") as lk:
         json.dump(ctl, fh, ensure_ascii=False)
     os.replace(tmp, ctl_path)
 
+PY
+}
+
+control_py_signal() { # 3. 已是目標狀態就回 0 4. 送 SIGUSR1、等狀態檔反映
+  cat <<'PY'
 # 3. 本來就是目標狀態 → 不送訊號、直接回 0
 if word != "mark" and (st.get(FIELD[word][0]) is True) == FIELD[word][1]:
     print({"pause": "已經是暫停中", "resume": "本來就在錄製中", "mute": "麥克風本來就是靜音",
@@ -1370,6 +1427,15 @@ else:
     print({"resume": "已繼續錄製", "mute": "麥克風已靜音", "unmute": "麥克風已取消靜音"}[word])
 sys.exit(0)
 PY
+}
+
+cmd_control() { # <pause|resume|mute|unmute|mark> 參數…
+  local word="$1"
+  shift
+  check_unknown "" "" "$@" || return 2
+  if [[ $# -gt 0 ]]; then err "✗ ${word} 不接參數：$*"; return 2; fi
+  python3 -c "$(control_py_lib; control_py_request; control_py_signal)" \
+    "${word}" "${STATUS_FILE}" "${PID_FILE}" "${CONTROL_FILE}" "${CONTROL_LOCK}" "${CONTROL_WAIT_SECONDS}"
 }
 
 sub="${1:-}"
