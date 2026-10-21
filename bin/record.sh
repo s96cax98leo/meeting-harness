@@ -1196,9 +1196,57 @@ for p in glob.glob(os.path.join(fin, "*.status.json")):
 PY
 }
 
+# 異常中止的場次（meeting-speed spec §3.10 abnormalStopSession 的 bash 版、§4.16.3）：只讀共享狀態檔，不看 record.pid（E2）。
+# 條件：phase＝stopping、pid 是正整數且 kill -0 失敗、session 是存在的目錄、段落待收尾（錄音/tracks/ 有 seg-*.mov，
+# 且 finalize.json 不存在、或 videoPublishedAt 為 null、或舊 schema 兩個鍵都沒有）。成立就印場次路徑，否則什麼都不印。
+abnormal_stop_session() {
+  python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null
+import glob, json, os, sys
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+if not isinstance(st, dict) or st.get("phase") != "stopping":
+    sys.exit(0)
+pid, sess = st.get("pid"), st.get("session")
+if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+    sys.exit(0)
+try:
+    os.kill(pid, 0)
+    sys.exit(0)  # 還活著（或無權限送訊號，視同還在）
+except ProcessLookupError:
+    pass
+except OSError:
+    sys.exit(0)
+if not isinstance(sess, str) or not sess or not os.path.isdir(sess):
+    sys.exit(0)
+tracks = os.path.join(sess, "錄音", "tracks")
+if not glob.glob(os.path.join(glob.escape(tracks), "seg-*.mov")):
+    sys.exit(0)
+fin_path = os.path.join(tracks, "finalize.json")
+if os.path.exists(fin_path):
+    try:
+        fin = json.load(open(fin_path, encoding="utf-8"))
+    except Exception:
+        fin = {}
+    if not isinstance(fin, dict):
+        fin = {}
+    if "videoPublishedAt" in fin:
+        if fin["videoPublishedAt"] is not None:
+            sys.exit(0)
+    elif "finishedAt" in fin:
+        sys.exit(0)
+print(sess)
+PY
+}
+
 cmd_finish() {
   check_unknown "" "" "$@" || return 2
   local sess="${1:-}"
+  if [[ -z "${sess}" && $# -eq 0 ]]; then
+    sess="$(abnormal_stop_session)"
+    [[ -n "${sess}" ]] && err "· 接手異常中止的場次：${sess}"
+  fi
   if [[ -z "${sess}" ]]; then err "✗ 少了場次目錄：meeting.sh record finish <場次>"; return 2; fi
   if [[ $# -gt 1 ]]; then shift; err "✗ 多了參數：$*"; return 2; fi
   if [[ ! -d "${sess}" ]]; then err "✗ 找不到場次目錄：${sess}"; return 2; fi
