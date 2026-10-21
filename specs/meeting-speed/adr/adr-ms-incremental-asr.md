@@ -2,7 +2,7 @@
 
 - 狀態：提議（待 meeting-speed 閘門 2 核准）
 - 日期：2026-10-21
-- 範圍：`bin/lib/_asr_worker.py`（新）、`tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`、`bin/meeting.sh`（prep 讀取）、`bin/transcribe.sh`（讀現成段落）
+- 範圍：`bin/lib/_asr_worker.py`（新）、`tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`、`bin/meeting.sh`（prep 呼叫 `stitch`）、`bin/transcribe.sh`（讀現成段落）
 
 ## 背景
 
@@ -28,7 +28,7 @@
 - worker 持有 `錄音/tracks/asr/worker.lock`（flock），同一場只會有一個；`state.json` 每窗更新心跳。
 - 窗不重疊、拼接不去重（鐵則 1：raw 只能換來源，不能清洗）。
 - 交棒：prep 呼叫 `_asr_worker.py stitch`，回 0 就把結果經 `MH_ASR_SEGMENTS_JSON` 交給 `transcribe.sh`；回 3 就退回整檔轉錄。後段處理只有一份程式。
-- 品質門檻（字差異率 ≤ 5%、時間差 ≤ 1.0 秒的比例 ≥ 95%）只在重放量測時離線比對。
+- 品質門檻（字差異率 ≤ 5%、時間差 ≤ 1.0 秒的比例 ≥ 95%，使用者 2026-10-21 核准，D5）只在重放量測時離線比對。
 
 ## 後果
 

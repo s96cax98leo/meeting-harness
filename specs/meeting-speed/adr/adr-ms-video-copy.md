@@ -1,6 +1,6 @@
 # ADR：影片 copy 串接的適用條件與驗證後移
 
-- 狀態：提議（待 meeting-speed 閘門 2 核准）
+- 狀態：提議（待 meeting-speed 閘門 2 核准；修正輪 1 補 D3 (a)(d)）
 - 日期：2026-10-21
 - 範圍：`tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`（擷取設定）、`Core/Records.swift`（`RecordMeta.canvasLock`）、`bin/_record_finalize.py`
 - 修訂：meeting-record 的 D8 (i)、D7（`specs/meeting-record/adr/adr-segment-writer.md:44`、`adr-video-tail-pad.md:22-31`）；推翻 meeting-record spec §4.3.4。
@@ -9,7 +9,7 @@
 
 - intent §7 Q3（使用者決定）：開錄時鎖定當下視窗像素、整場固定、60 fps；全場符合條件就 `-c:v copy`、碼率等於來源；不符合就整場退回現行重編；用缺陷 B、F、N 的情境重驗；`preservesAspectRatio` 與 copy 串接要先實測。
 - intent §7 Q1：終點含影片成品，背景驗證不計；驗證失敗要標記並通知，處理方式交 design（C9）。
-- `adr-video-tail-pad.md` 選項 C（copy）不採的理由是「copy 段與重編段混用 SPS/PPS 不一致」；`b0-audit.md:201-202` 也指出整場 SPS/PPS 要一致。
+- `adr-video-tail-pad.md` 選項 C（copy）不採的理由是「copy 段與重編段混用 SPS/PPS 不一致」；`b0-audit.md:30-31` 也指出整場 SPS/PPS 要一致。
 - 既有 `test_finalize.py` 的合成段落沒有錄製器的 meta 標記，§4.6.10 要求「位元率 ≥ 各段最大值」（`tests/record/test_finalize.py:192-211`）。intent §7 Q4：速度相關改動繞開既有測試。
 
 ## 選項（適用條件）
@@ -42,3 +42,6 @@
 - meeting-speed spec §3.3、§3.4、§4.4、§4.5；§6 第 1–8、10–12 條記修訂與推翻的 meeting-record 條文。
 - `preservesAspectRatio` 的行為與 SCK 段落 copy 串接的乾淨度由 `video-spike` 先實測；實測不可行時，`finalize-fast` 與 `recorder-capture` 停下回報（不自行改做法）。
 - 開錄後把視窗放大，成品解析度停在開錄時的大小（intent §5 Q3 (a) 的代價，使用者已在閘門 1 接受）。
+- 正式 wav 不等影片（D2，`adr-ms-audio-first.md` 選項 D）：影片走 copy 或重編都不影響錄音成品的發佈時刻。
+- 退回重編路徑仍會走到 `normalize`，所以 D3 (a) 的補尾幀數修正（不再只依 `r_frame_rate` 推算，spec §4.4.12）照樣要做。
+- 擷取幀率（60／30 fps）與尺寸上限由 `video-spike` 量 WindowServer 負擔後交使用者決定（D3 (d)，spec §4.4.13）；決定前維持 intent §7 Q3 的 60 fps。

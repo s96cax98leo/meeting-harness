@@ -6,7 +6,8 @@
 ## 閘門
 
 - [x] 閘門 1（intent）：2026-10-21 使用者核准（`run.json` 的 `plan.approved`）
-- [ ] 閘門 2（design／spec／plan）：spec §6 第 1–17 條、第 18–21 條（第 19、21 條可分開）、§4.11.9 品質門檻
+- [ ] 閘門 2（design／spec／plan）：閘門 2 前已決定 D1–D5（2026-10-21：§6 第 1–21 條核准、G1 拆兩條線量、事故 4 項併入、每子任務四件套、不開第 4 層與品質門檻）；待確認 §6 第 23、24 條、§7 疑慮 13（拿掉早期模式）、§4.14.4 的 240 秒門檻
+- [ ] 擷取幀率／尺寸（spec §4.4.13）：等 `video-spike` 回報後由使用者決定（決定前 `recorder-capture` 不開工）
 - [ ] 閘門 3（test）
 - [ ] 閘門 4（deliver）
 
@@ -21,8 +22,8 @@
 - [ ] `asr-robust`
 - [ ] `diarize-iron`
 - [ ] `prep-pipeline`
-- [ ] `record-sh-split`
-- [ ] `video-spike`（結論：未定）
+- [ ] `record-sh-split`（feat：`finish` 不帶參數接手＋refactor commit）
+- [ ] `video-spike`（copy 結論：未定；擷取幀率／尺寸：待使用者決定）
 - [ ] `replay-bench`
 
 ### 第 2 層
@@ -43,9 +44,9 @@
 | 第 2 層 | — | — | |
 | 第 3 層 | — | — | |
 
-## 量測（spec §4.14；2 小時場、121 段）
+## 量測：逐字稿線（spec §4.14.3、§4.14.4 (i)；2026-10-20 的 2 小時場、121 段重放）
 
-改之前約 30 分（`baseline.md` A 節）。目標：`stopToAllReady ≤ 300` 秒。
+改之前約 30 分（`baseline.md` A 節）。目標：最終 1× 重放 `stopToSpeakersMd ≤ 300` 且 `stopToWav ≤ 300` 秒。這批段落沒有 `canvasLock`，`stopToVideo`／`stopToAllReady` 只記錄、不判定。
 
 | 時點 | speed | flow | stopToAudioReady | stopToSpeakersMd | stopToWav | stopToVideo | stopToAllReady | workerBacklogAtStop | videoPath |
 |---|---|---|---|---|---|---|---|---|---|
@@ -55,7 +56,13 @@
 | 第 3 層後 | 10 | | | | | | | | |
 | 最終（1×） | 1 | early | | | | | | | |
 
-品質（spec §4.11.9，`--compare-full`）：`cer` ＝ ＿；`timeAlignedRatio` ＝ ＿。
+品質（spec §4.11.9，`--compare-full`；門檻 CER ≤ 5%、≥ 95%，D5 核准）：`cer` ＝ ＿；`timeAlignedRatio` ＝ ＿。
+
+## 量測：影片線（spec §4.14.4 (ii)；新錄製器實錄）
+
+| 實錄段數 | 實測 stopToVideo | 外推到 121 段 | ≥ 240 秒要補長錄？ | 補錄實測 |
+|---|---|---|---|---|
+| | | | | |
 
 ## 實機（test 段，spec §4.4.11、§4.11.10、§4.12.4）
 

@@ -32,6 +32,6 @@
 
 ## 後果
 
-- meeting-speed spec §4.6；§6 第 14、18 條（`diarize.sh` 改動要核准 `test_diarize_and_merge_untouched` 的修改）。
+- meeting-speed spec §4.6；§6 第 14、18 條（刪除 `test_diarize_and_merge_untouched`，使用者 2026-10-21 已核准，D1）。
 - 重算向量需要 diarize venv 就緒；沒有時 `add` 回 2 並提示 `bash bin/setup-diarize.sh`（結束碼沿用 `_voiceprint.py` 既有的 2）。
 - 「重算與原始向量的差異」未量測，列為 spec §7 疑慮 6。
