@@ -7,8 +7,10 @@
 - 使用者已決定的三項（AskUserQuestion，2026-10-21）：`_tpm/runs/20261021-sdlc-meeting-speed/plan-approved.md:8-11`。
 - 已核准的計畫與盤點：同 run 目錄的 `plan-approved.md`（133 行）、`b0-audit.md`（66 行；行號基準 `414b65c`，位移對照見 `research-code-contracts.md:8-17`）。
 - 調研依據：同 run 目錄的 `research-requirement.md`、`research-specs-adr.md`、`research-code-contracts.md`、`research-upstream.md`。run 目錄不在版控（`.gitignore` 的 `/_tpm/runs/*`）。
+- 效能基準：同 run 目錄的 `baseline.md`（主 session 從本機 log 遮罩後取得，2026-10-21；兩場：2026-10-20 的 2 小時場、2026-10-21 的 87 分鐘場）。
+- 修訂紀錄：2026-10-21 依 sdlc-plan skeptic 的意見修正 §1、§2、§3、§4、§5，§6 補一句（仍是草稿，未過閘門 1）。
 - `specs/_templates/intent.md` 不存在（`ls specs/` 只有 `meeting-record`），本檔用 fallback 五節格式。
-- 本檔裡的 G1–G9（目標）、Q1–Q5（待決問題）、C1–C10（衝突）只是本檔內引用，**不是任務編號**。
+- 本檔裡的 G1–G9（目標）、Q1–Q6（待決問題）、C1–C10（衝突）只是本檔內引用，**不是任務編號**。
 - 行號以 `042c404` 為準，可用 `sed -n '<行>p' <檔>` 重跑核對。範例場次名一律用「[Stand-up] 範例專案」。
 
 ---
@@ -17,7 +19,7 @@
 
 ### 1.1 停止錄製後要等約 30 分鐘
 
-2026-10-20 的 2 小時場（121 段），從停止到 `transcript.speakers.md` 就緒約 30 分（`plan-approved.md:14-23`；加總 ≈ 29.5 分，`research-requirement.md:25`）：
+2026-10-20 的 2 小時場（121 段，停止點 E＝7220 秒），從停止到 `transcript.speakers.md` 就緒約 30 分（`baseline.md` A 節；`plan-approved.md:14-23`；各步加總 ≈ 29.5 分，`research-requirement.md:25`）：
 
 | 階段 | 耗時 | 根因（依據） |
 |---|---|---|
@@ -27,11 +29,17 @@
 | 抽 wav | 5 秒 | 從 AAC 解回 16k，排在最後（`bin/_record_finalize.py:1501-1504`） |
 | 等收尾 | — | 自動前處理要等 `phase == .done`（`tools/MeetingRecorder/Sources/Core/Control.swift:414`），但前處理其實只要 wav |
 | 轉錄 | 5 分 56 秒 | mlx-whisper 單 process、一次解一窗（`bin/transcribe.sh:120-133`） |
-| 講者分離 | 3.6 分 | 排在轉錄之後才跑（`bin/meeting.sh:327-338`），但不依賴轉錄；16k wav 又轉一次（`bin/diarize.sh:28`） |
+| 講者分離 | 3.6 分（infer 204.9 秒） | 排在轉錄之後才跑（`bin/meeting.sh:327-338`），但不依賴轉錄；16k wav 又轉一次（`bin/diarize.sh:28`） |
 
-2026-10-21 的 87 分鐘場（88 段，R3 合併後版本）收尾約 26 分＋前處理 7.3 分 ≈ 33 分：這組數字只出現在派工單，repo 與 run 目錄都找不到出處（`research-requirement.md:16`），**未能確認**，本檔不拿它當驗收基準。
+表中 normalize 16.5 分、concat 149.1 秒、驗證 48.7 秒、抽 wav 5.3 秒、轉錄 5 分 56 秒、分離 infer 204.9 秒都有 log 出處（`baseline.md` A 節）；log 上收尾總長約 20 分 16 秒、前處理 9 分 38 秒。
 
-**結論**：四分之三的時間花在影片收尾；而前處理只需要音訊，卻被排在影片之後，轉錄與分離又串行。只壓縮各步驟不夠，要換做法：音訊和影片拆開、前處理平行、錄製中先做一部分。
+2026-10-21 的 87 分鐘場（88 段，E＝5228 秒，R3 合併後的 `042c404`）：收尾約 26 分（concat 97.1 秒＋驗證 64.0 秒、抽 wav 3.8 秒），前處理 7 分 16 秒，合計約 33 分（`baseline.md` B 節）。段數比 2 小時場少，收尾反而更久，表示 normalize 的耗時不只跟段數有關，原因未查證。G1 的驗收基準仍以 2 小時場為準（使用者原話「昨天 2 小時的會議」）。
+
+**小結（現象與根因）**：
+- 影片收尾（normalize＋concat＋驗證＋抽 wav）約 19.9 分，占停止後總時間（≈ 29.5 分）的約 67%，也就是約三分之二（`baseline.md` A 節推算）。其中 normalize 一項就占 16.5 分。
+- 前處理只用到音訊，卻要等影片收尾全部完成才開始（`Control.swift:414`）。
+- 前處理內部的轉錄與講者分離彼此不依賴，卻是串行（`bin/meeting.sh:327-338`）。
+- 所有工作都在停止之後才開始；錄製期間已經關閉的段落沒有被利用。
 
 ### 1.2 正確性與五條鐵則的缺陷
 
@@ -54,23 +62,30 @@
 
 ### 1.4 R3 交下來的項目
 
-- 前處理完成通知的內文含場次名（`tools/MeetingRecorder/Sources/Trigger/Completion.swift:132` 取 `lastPathComponent`，`:138`、`:172`、`:180`、`:182` 放進內文），跟 R3-§6 第 135 條和 spec §4.39.3「通知不得含場次名」不一致（`research-requirement.md:28`、`research-specs-adr.md:39`）。
+- 前處理完成通知的內文含場次名（`tools/MeetingRecorder/Sources/Trigger/Completion.swift:132` 取 `lastPathComponent`，`:138`、`:172`、`:180`、`:182` 放進內文），跟 R3-§6 第 135 條拿掉場次名的理由（使用者可能正在分享整個螢幕，`specs/meeting-record/spec.md:1944`）不一致；spec §4.39.3「通知不得含場次名或視窗標題」字面上只管錄製中的告警通知（`:1793`），完成通知是比照同一理由（`research-requirement.md:28`、`research-specs-adr.md:39`）。
 - `tests/record/test_r3_lock.py:351-355` 的計時容許範圍只有 +2 秒（(930, 932)、(11430, 11432)）。R3 交接所說的「±1 秒太緊」是不是指這一條，**未能確認**（`research-specs-adr.md:63`）。
 - N-3（被中止的段落印「改用 libx264」沒有行為測試）、N-4（前景退回路徑沒有整合測試）（`_tpm/runs/20261010-sdlc-meeting-record/pr-description.md:109`）。N-3 對應計畫的 video-copy（`plan-approved.md:83`）；N-4 不在計畫的 12 個子任務裡（`research-requirement.md:30`）。
 
 ## 2. 期望結果
 
-- **G1 速度（主目標）**：2 小時場從停止錄製到「`transcript.speakers.md` 以及影片、錄音成品都就緒」≤ 5 分鐘，AI 總結不計（使用者決定 1，`plan-approved.md:9`）。量法：用 keep-segments 保留的 2 小時段落重放，量停止 → 終點；改之前約 30 分（`plan-approved.md:129-130`）。每一層子任務完成後各量一次，記進 progress.md（`plan-approved.md:131`）。影片「就緒」包不包含背景驗證、適用多長的會議，見 Q1。
+- **G1 速度（主目標）**：2 小時場從停止錄製到「`transcript.speakers.md` 以及影片、錄音成品都就緒」≤ 5 分鐘，AI 總結不計（使用者決定 1，`plan-approved.md:9`）。改之前約 30 分（`baseline.md` A 節；`plan-approved.md:130`）。每一層子任務完成後各量一次，記進 progress.md（`plan-approved.md:131`）。影片「就緒」包不包含背景驗證、適用多長的會議，見 Q1。
+  - **量法有缺口，見 Q6**：計畫的量法是「用 keep-segments 保留的 2 小時段落重放，量停止 → 終點」（`plan-approved.md:129`）。但單純重放時沒有「錄製中」這段時間，錄製中的增量轉錄不會發生，停止後只能整檔轉錄，光轉錄就要 5 分 56 秒（`baseline.md` A 節），5 分鐘必然做不到。所以 G1 要怎麼量，要在閘門 1 決定（Q6）。
+  - 另一個缺口：2026-10-20 保留的段落是照 D8 錄的，各段尺寸可能不同。如果 Q3 選 (a) 或 (b)（要錄製端配合的固定畫布），舊段落走不到 `-c:v copy` 路徑，影片部分只能用新錄的段落量（Q6 各選項的代價裡都要算進去）。
 - **G2 邊錄邊處理，但錄製優先**：錄製中可以先轉錄已關閉的段落；背景工作低優先權，一出現丟幀就暫停，停止後補做（使用者決定 2，`plan-approved.md:10`）。實機驗收：錄一場 ≥ 30 分鐘的會議，背景 ASR 在跑，丟幀為 0；停止後量完成時間（`plan-approved.md:133`）。
-- **G3 換做法（關鍵路徑）**，依 `plan-approved.md:25-33`：
-  1. 停止後先從各段 PCM 產出 16k wav，標記「音訊就緒」，觸發前處理；
-  2. 轉錄和講者分離平行；
-  3. 影片走固定畫布＋`-c:v copy` 串接，不符合條件時退回現行整支重編；
-  4. 錄製中增量轉錄，停止後只剩最後一段。
+- **G3 關鍵路徑上的做法：依閘門 1 的選項決定**。本檔不把做法寫成目標；目標只有 G1、G2 的時間與 G4 的品質。`plan-approved.md:25-33` 提出的做法列為**候選做法**，各項能不能採用取決於下列待決問題：
+
+  | 候選做法（`plan-approved.md:25-33`） | 取決於 |
+  |---|---|
+  | 停止後先從各段 PCM 產出 16k wav，標記「音訊就緒」，提早觸發前處理 | Q2（場次存在的定義、audioReady 怎麼呈現） |
+  | 轉錄和講者分離平行 | 無待決；GPU 爭用的實際收益要量（§4.4） |
+  | 影片走固定畫布＋`-c:v copy` 串接，不符合條件時退回現行整支重編 | Q3（畫布、幀率、碼率）；Q1（影片算不算在 5 分鐘內） |
+  | 錄製中增量轉錄，停止後只剩最後一段 | Q5（切點、丟幀判準、採用門檻）；Q6（G1 怎麼量） |
+
+  閘門 1 決定後，design 依決定寫成 spec 條文；某個候選做法被否決時，design 要說明 G1 還做不做得到。
 - **G4 品質不退步**：增量轉錄和整檔轉錄比對字錯率與時間戳；影片沿用既有判準，用缺陷 B、F、N 的情境重驗（`plan-approved.md:132`）。增量轉錄要多準才能採用，見 Q5。
-- **G5 失敗看得到**：ASR 失敗回非 0；拿掉靜默重轉，改成明確報錯並提示（C8）；preflight 分得出「音訊裝置無法啟動」和「權限沒有生效」，並附上裝置與 transport；停止路徑每個 return 都寫 log（`plan-approved.md:38-59`）。
+- **G5 失敗看得到**：ASR 失敗回非 0；拿掉靜默重轉，改成明確報錯並提示（C8）；preflight 分得出「音訊裝置無法啟動」和「權限沒有生效」，並附上裝置與 transport；停止路徑每個 return 都寫 log（`plan-approved.md:38-59`）。自動前處理有任何一步失敗時，不再發「前處理完成」通知，改發失敗通知；做法見 §4.5（不改 `meeting.sh prep` 的結束碼）。
 - **G6 五條鐵則**：`embeddings.json` 離開場次資料夾；人工確認的對應不被聲紋比對覆蓋；raw 逐字稿不再被原地改寫，正體版另存；SKILL 補上 annotate（`plan-approved.md:44-50`）。
-- **G7 並發安全**：`.pipeline-state.json` 的寫入者一律原子寫入＋flock。這是「音訊就緒就提早開始前處理」的前提（`plan-approved.md:60-62`），寫法沿用 `adr-r3-defaults-writers`：flock、讀後合併、mkstemp/rename、等鎖 5 秒逾時（`research-specs-adr.md:14`）。
+- **G7 並發安全**：`.pipeline-state.json` 的寫入者一律原子寫入＋flock。如果 Q2 採用提早觸發前處理，這是前提（`plan-approved.md:60-62`）；G5 要 `AutoPrepRunner` 讀狀態檔判斷成敗，也需要它，寫法沿用 `adr-r3-defaults-writers`：flock、讀後合併、mkstemp/rename、等鎖 5 秒逾時（`research-specs-adr.md:14`）。
 - **G8 結構重構**：拆長檔與長函式、集中重複的 helper（`plan-approved.md:95-107`），排在速度改完之後做，避免衝突。行為不變，以全量測試佐證。
 - **G9 R3 交下來的項目**：完成通知改用場次代號，不含場次名；`test_r3_lock` 計時容差（要不要改，要使用者核准，見 §4.3）；N-3 補行為測試；N-4 要放進子任務或明確列為不做（交 design）。
 
@@ -88,9 +103,10 @@
 
 **系統與對外契約**（本 repo 沒有 `contracts/`；實際的契約整理在 `research-code-contracts.md:19-54`）
 - CLI 結束碼：
-  - `meeting.sh`：`prep` 找不到場次回 3；轉錄或分離失敗仍回 0（`bin/meeting.sh:327-338`）。
+  - `meeting.sh prep`：0/2/3。少了參數或目錄不存在回 2（`need_dir`，`bin/meeting.sh:114-122`）；找不到場次回 3（`:340-347`）；轉錄、OCR、分離失敗仍回 0，只寫進 `.pipeline-state.json`（`:327-338`）。
   - `meeting record`：`stop` 0/3/5、`finish` 0/2/3/5、`status` 0/5（`bin/record.sh:40-74`）。
-  - `transcribe.sh`：0/2/3；`diarize.sh`：0/2/3/4/5；`_record_finalize.py`：0/2/3/5。
+  - `transcribe.sh`：0/2/3/4。0＝完成或 `--help`（`bin/transcribe.sh:13`）；2＝參數錯（`:18`）；3＝沒有產出任何逐字稿檔（`:166-170`）；4＝轉錄結果是空的（只有標頭沒有內容，`:301-306`）。另外檔頭是 `set -euo pipefail`（`:5`），中途其他指令失敗時會帶出該指令自己的結束碼（例如 1），不在上述集合內。
+  - `diarize.sh`：0/2/3/4/5（`bin/diarize.sh:17,20,25,28,44`）；`_record_finalize.py`：0/2/3/5。
 - 狀態檔 `record.status.json`、`finalizing/<runId>.status.json`（`RecordStatus`，`Core/Records.swift:33-60`）：新欄位只能加成 Optional、nil 時省略鍵，**不新增 `RecordPhase` 值**（`specs/meeting-record/adr/adr-r2-status-fields.md:24,35`）。舊版讀端遇到不認得的 phase 會整筆解不開（`Core/BackgroundFinalize.swift:111-113`）。
 - 「wav 出現＝場次存在」的時機契約（C1）：
   - `bin/_record_finalize.py:22`、`:1554`；
@@ -102,21 +118,28 @@
   - `manifest.json` 的 `outputCanvas`／`outputVideoBitrate`，e2e 判準 `c_canvas` 要求影片尺寸＝各段最大寬高（`tests/record/e2e_check.py:638-648`）；
   - `transcript.segments.json` 與 `transcript.quality.json` 必須成對（`bin/meeting.sh:254-264`）；
   - `embeddings.json`：寫入方、讀入方、兩份 SKILL 要一起改（`research-code-contracts.md:51`）。
-- 自動前處理：`AutoPrepRunner` 實際下的指令，以及結束碼 0 就發「前處理完成」（`Trigger/Completion.swift:143-148,174-176`）。
+- 自動前處理：`AutoPrepRunner` 經 `zsh -lc` 跑 `meeting.sh prep <場次>`（`Trigger/Completion.swift:145-150`），結束碼 0 就發「前處理完成」、非 0 發「前處理失敗」（`:177-185`）。因為 prep 在轉錄或分離失敗時仍回 0（見上），現況是失敗也會收到「前處理完成」。
 - 下游知識庫專案：`summary.md` 格式不在本 epic 範圍；若動到 `_render.py` 的輸出，要用對方的 `meetings._missing_sections()` 驗過（專案規則第 6 條）。
 - 上游：無。origin 就是本 repo，main ＝ `042c404`，沒有開著的 PR、沒有 CI（`research-upstream.md:7-22`）。
 
 ## 4. 限制
 
 ### 4.1 硬限制（不得推翻）
-- 五條鐵則（`CLAUDE.md`「專案特定」；`.claude/teams/rules.md` 專案規則 1–5）。增量轉錄拼出來的結果也算 raw：只能換來源，不能清洗輸出（`research-specs-adr.md:18`）。
-- `meeting.sh` 的子指令與結束碼不得破壞性變更；新情況以增補處理，結束碼集合不變。先例是 R3x-§2.2（`specs/meeting-record/spec.md:1996-2005`）。
-- 狀態通道只有狀態檔＋pid＋SIGTERM（`adr-control-channel.md:21-29`）；audioReady 和丟幀數只能用 Optional 欄位對外（`adr-r2-status-fields.md`）。
-- 全程本機；聲紋只留 `vault/`。
-- 測試失敗就改程式、不改測試；要改既有測試必須逐條經使用者核准，並記進 spec「整合修訂與例外」（`.claude/teams/rules.md` 通用規則 20）。
-- 公開 repo：spec、筆記、commit 不得出現真實會議名稱、客戶名稱、視窗標題（spec §6 第 39 條，`specs/meeting-record/spec.md:869`）。
-- 新的 Python 檔放 `bin/lib/`，`_lint.sh` 檔數維持 26。先例是 R3-§6 第 125 條（`research-specs-adr.md:19,44`）。所以計畫的 `bin/_asr_worker.py` 應改放 `bin/lib/_asr_worker.py`。
-- 錄製中的背景工作要沿用 R3x-D9 判斷「錄製中」的方式（`record.pid`＋`kill -0`＋phase），以及錄製中平行度降為 2（spec R3x §3.21–§3.25，`research-specs-adr.md:16`）。上一場背景收尾、這一場錄製、這一場 ASR 三方同時跑時的資源分配，要在 design 寫明。
+只列需求或規則明文的限制；先例、測試或 ADR 衍生的慣例放 §4.1.1。
+- **對外介面不做破壞性變更**：`meeting.sh` 的子指令與結束碼語意不得破壞性變更；`~/.claude/skills/meeting-*` 以 symlink 指回本 repo，改 `SKILL.md` 等於改全域（`.claude/teams/rules.md:68` 專案規則第 7 條；`CLAUDE.md`「對外介面」）。
+- **五條鐵則**：raw 不改、不編造負責人與期限、不確定的姓名不掛、雜訊段標「（聽不清）」、聲紋只存本機 `vault/voiceprints/`（`.claude/teams/rules.md:62-66` 專案規則 1–5；`CLAUDE.md`「專案特定」）。增量轉錄拼出來的結果也算 raw：只能換來源，不能清洗輸出（`research-specs-adr.md:18`）。
+- **機敏檔**：`.env`、金鑰、憑證不讀、不印、不提交（`.claude/teams/rules.md:18` 通用規則 5）。
+- **客戶資料邊界**：不同客戶的目錄、資料、文件不得交叉引用（`.claude/teams/rules.md:28` 通用規則 13、`:54`）。
+- **公開 repo**：remote 是 public（`.claude/teams/rules.md:15,52`）；spec、筆記、commit 不得出現真實會議名稱、客戶名稱、視窗標題（`specs/meeting-record/spec.md:869` §6 第 39 條）。
+- **不改測試**：測試失敗就改程式；要改既有測試必須逐條經使用者核准，並記進 spec「整合修訂與例外」（`.claude/teams/rules.md:37` 通用規則 20）。
+
+### 4.1.1 既有慣例（經使用者核准可改）
+下列各項是先例、測試或 ADR 衍生出來的，design 預設沿用；要改就在 spec 寫明理由並經閘門 2 核准。
+- **結束碼以增補處理**：新情況不新增結束碼，集合不變。先例是 R3x-§2.2（`specs/meeting-record/spec.md:1996-2005`）。（「不破壞」是 §4.1 的硬限制；「集合完全不變」是先例的做法。）
+- **狀態通道**只有狀態檔＋pid＋SIGTERM（`specs/meeting-record/adr/adr-control-channel.md:21-29`）；新欄位只用 Optional、不新增 `RecordPhase` 值（`adr-r2-status-fields.md:24,35`）。
+- **新的 Python 檔放 `bin/lib/`，`_lint.sh` 檔數維持 26**：先例是 R3-§6 第 125 條（`research-specs-adr.md:19,44`）。新模組的實際路徑（例如計畫寫的 `bin/_asr_worker.py`，`plan-approved.md:92`）屬於解法，由 design 依這條慣例決定。
+- **錄製中背景工作的判斷與平行度**：沿用 R3x-D9 判斷「錄製中」的方式（`record.pid`＋`kill -0`＋phase），錄製中平行度降為 2（spec R3x §3.21–§3.25，`research-specs-adr.md:16`）。上一場背景收尾、這一場錄製、這一場 ASR 三方同時跑時的資源分配，要在 design 寫明。
+- **`.pipeline-state.json` 寫法**沿用 `adr-r3-defaults-writers`（flock、讀後合併、mkstemp/rename、等鎖 5 秒逾時，`research-specs-adr.md:14`）。
 
 ### 4.2 本 epic 會推翻或修訂的既有定案（每條都要在 spec 寫明取代關係，並經使用者核准）
 依 `research-requirement.md:36-47`、`research-specs-adr.md:22-40`：
@@ -152,14 +175,24 @@
 - mlx-whisper（Metal）和 pyannote（MPS）平行時會搶 GPU，實際加速多少要量過才知道（`research-code-contracts.md:103`）。2 小時場分離約 3.5 分，關鍵路徑估計 4–4.5 分（`plan-approved.md:30-31`），離 5 分的餘裕不到 1 分。
 - pyannote 4 不傳 `return_embeddings` 時是否仍會回 `speaker_embeddings`：**未能確認**，要實跑驗證（`research-code-contracts.md:53`）。
 
-### 4.5 不做（本輪）
+### 4.5 範圍邊界
+
+**在範圍內：自動前處理失敗時要通知失敗（G5），但不改 `meeting.sh prep` 的結束碼**
+- 現況（以 `042c404` 核對）：
+  - `prep` 只在參數錯（2）與找不到場次（3）時回非 0；轉錄、OCR、分離失敗都只寫 `.pipeline-state.json`，最後仍回 0（`bin/meeting.sh:312-358`）。
+  - `AutoPrepRunner.finished` 只看結束碼：0 就發「前處理完成」（`tools/MeetingRecorder/Sources/Trigger/Completion.swift:177-185`）。所以轉錄或分離失敗時，使用者收到的是「完成」。
+  - `.pipeline-state.json` 目前也不足以判斷成敗：`diarize.sh` 失敗時 `run_diarize` 直接 `return 1`，沒有寫 `diarize failed`（`bin/meeting.sh:274`；只有 `_merge_speakers.py` 失敗才寫，`:278`）；寫入是非原子、無鎖（`:300-310`）；上一次執行留下的 stage 不會清掉，讀端分不出是不是這一次寫的。
+- 範圍：`AutoPrepRunner` 在 prep 回 0 之後讀該場的 `.pipeline-state.json`，有任何一個本次應跑的 stage 不是 `done` 就發失敗通知；prep 這一側要補齊每條失敗路徑的 stage 紀錄，並讓讀端分得出「這一次」的結果（例如每次 prep 開始時記下執行識別或時間）。具體欄位由 design 定，依 §4.1.1 的 `.pipeline-state.json` 寫法（G7）。
+- 不在範圍：`meeting.sh prep` 失敗時改回非 0。這會改變其他 session 依賴的結束碼語意（§4.1），維持回 0（`research-code-contracts.md:100`）。
+
+**不做（本輪）**
 - AI 總結的速度（使用者決定 1）。
 - 增量講者分離 embedding，列為衍生工作（`plan-approved.md:93`）。
-- `meeting.sh prep` 失敗時改回非 0：這是結束碼語意變更。建議維持回 0，`AutoPrepRunner` 改讀 `.pipeline-state.json` 判斷成敗（`research-code-contracts.md:100`）。列為衍生工作，要做的話另外請使用者決定。
+- `meeting.sh prep` 的結束碼語意變更（見上）。
 
 ## 5. 待解問題（閘門 1 請使用者決定）
 
-以下五題會影響範圍或驗收。每題都列出選項、代價與建議；**建議不等於已決定**。
+以下六題會影響範圍或驗收。每題都列出選項、代價與建議；**建議不等於已決定**。
 
 ### Q1 「5 分鐘」量到哪裡、適用多長的會議
 使用者決定的終點包含影片成品（`plan-approved.md:9`），但計畫的量法只量到 `transcript.speakers.md`（`:129`）。
@@ -181,11 +214,24 @@
 - 建議：(b)。保住「場次存在＝錄製完成」的既有定案，也不用改 `test_concurrency`。
 
 ### Q3 影片：畫布尺寸、幀率、碼率
-這題會推翻使用者先前的決定 D8（C5）、修訂 D7（C7），也可能改 §4.3.3（C6）。
-- (a) 畫布＝主顯示器像素（參考 `Probe.swift:102-109`），維持 60 fps；全場符合條件就 `-c:v copy`，碼率等於來源（不再 ×1.5），否則整場退回現行重編。代價：推翻 D8；小視窗會被放大或補邊（檔案變大）；e2e 的 `c_canvas` 與 `nextSegmentSize` 相關測試要改（需核准）；成品碼率變低，要用缺陷 B、F、N 的情境重驗。
-- (b) 固定 1920×1080 或 2560×1440，並降到 30 fps。代價：違反需求正本的「保留原樣全解析度」與 §4.3.3 的 55 fps 判準，還要改 fps 系列測試；好處是錄製中的編碼負擔最小，背景 ASR 比較有餘裕。
-- (c) 維持 D8 的可變尺寸，不走 copy，只加速 concat、驗證、ffprobe。代價：normalize 16.5 分不會消失，影片達不到 5 分（如果 Q1 選 (a) 或 (b)，G1 就做不到）。
-- 建議：(a)。這是唯一能讓影片進 5 分、又維持全解析度和 60 fps 的選項；`aac_at` 先量它對 149 秒串接的實際收益，再決定要不要申請改 `test_static_rules`。
+這題會碰到使用者先前的決定 D8（C5）、修訂 D7（C7），也可能改 §4.3.3（C6）。先釐清兩件事：
+- **D8 的內容有兩半**（`specs/meeting-record/spec.md:835` §6 第 5 條、§4.3.2 `:623`、§4.3.4 `:625`）：(i) 每段以「該段開檔當下的會議視窗像素」開檔；(ii) 收尾統一成各段最大寬高，置中補邊、不縮放。同一條明文寫「畫布＝`displayPixelSize()` 2992×1934」的前一版修訂**作廢**。
+- **需求正本的「全解析度」指的是視窗像素**：`req:179`、`req:264` 的畫布是 2992×1876（`spec.md:835`），不是主顯示器像素 2992×1934。
+
+選項：
+- (a) **開錄時鎖定當下的視窗像素，整場固定**。開錄時依會議視窗算出偶數像素尺寸（現行 `RecordingSession.swift:124` 已經在開錄時算一次），之後每段都用這個尺寸開檔；錄製中視窗變大或變小，由 SCK 的 `scalesToFit`（現行已設為 true，`:176`）加 `preservesAspectRatio` 等比縮進固定畫布、補邊。全場每段尺寸與編碼參數相同時串接走 `-c:v copy`，碼率等於來源（不再 ×1.5）；條件不符時整場退回現行重編。維持 60 fps。
+  - 和 D8 的關係：基準仍是會議視窗像素，**不是退回 `displayPixelSize`**；修訂的是 D8 的 (i)「每段跟著視窗變」改成「整場鎖開錄當下」，(ii)「收尾統一成各段最大寬高」因為各段一樣大而變得不必做（e2e 的 `c_canvas`＝各段最大寬高仍然成立，`tests/record/e2e_check.py:638-648`）。§4.3.4（縮放後下一段反映新尺寸）會被推翻，`nextSegmentSize(` 的靜態測試（`tests/record/test_static_rules.py:368-374`）要不要改由 design 判斷，改的話要核准。
+  - 代價：
+    - **開錄後把視窗放大，畫面會被縮小**：成品解析度停在開錄時的大小，字可能變糊；開錄時視窗很小的話整場都小。
+    - 開錄後把視窗縮小，畫面四周留邊，像素浪費；視窗拖到縮放比例不同的螢幕，同樣會被縮放。
+    - §4.3.4 是因為錄製中縮放視窗的實機情境而訂的（t6 缺陷 A），可見錄製中縮放確實會發生，上面兩項代價不是假設。
+    - `preservesAspectRatio` 在目標 macOS 版本的預設值與行為、SCK 段落（VFR、`time_base=1/600`，`spec.md` §4.6.14 的 dts 問題）走 copy 串接是否乾淨，都**未驗證**，要在 design 實測。
+    - 碼率降為來源碼率（修訂 D7），要用缺陷 B、F、N 的情境重驗。
+  - 推薦理由：這是唯一同時做到「影片可以進 5 分」「維持 60 fps」「解析度基準仍是視窗像素」的選項，而且只修訂 D8 的一半、不回到被作廢的做法。代價是開錄後放大視窗會失去解析度，這點要使用者明確接受。
+- (b) 畫布＝主顯示器像素（參考 `Probe.swift:102-109`），維持 60 fps，其餘同 (a)。**注意：這就是 D8 明文作廢的 `displayPixelSize()` 做法（`spec.md:835`），選它等於整個推翻 D8**。代價：小視窗會被放大或大幅補邊，檔案變大；解析度基準變成顯示器而不是視窗，跟需求正本的 2992×1876 不同；e2e 的 `c_canvas` 與 `nextSegmentSize` 相關測試要改（需核准）；碼率同 (a)。
+- (c) 固定 1920×1080 或 2560×1440，並降到 30 fps。代價：違反需求正本的「保留原樣全解析度」與 §4.3.3 的 55 fps 判準，還要改 fps 系列測試；好處是錄製中的編碼負擔最小，背景 ASR 比較有餘裕。
+- (d) 維持 D8 的可變尺寸，不走 copy，只加速 concat、驗證、ffprobe。代價：normalize 16.5 分不會消失，影片達不到 5 分（如果 Q1 選 (a) 或 (b)，G1 就做不到）。
+- 建議：(a)。理由與代價見上；要是使用者不接受「放大視窗會被縮小」，次選是 (d) 並把 Q1 改成 (c)（影片另訂目標），而不是 (b)。`aac_at` 先量它對 149 秒串接的實際收益，再決定要不要申請改 `test_static_rules`。
 
 ### Q4 既有測試的處理原則
 受影響的測試見 §4.3。
@@ -206,6 +252,15 @@
 - 品質門檻（字錯率差幾 %、時間戳差多少 ms）不論選哪個都要在 design 定數字，閘門 2 核准。
 - 建議：(a)。不會在 raw 裡製造重複；暫停後不恢復最保守，跟「保護錄製」的決定一致。
 
+### Q6 G1 怎麼量（重放時沒有「錄製中」）
+單純重放保留段落時，增量轉錄不會發生，停止後只能整檔轉錄（5 分 56 秒），G1 必然量不到 5 分（§2 G1）。另外，2026-10-20 的段落是照 D8 錄的，Q3 選 (a) 或 (b) 時舊段落走不到 copy 路徑。效能基準的資料由主 session 提供或量測（下方預設 6、C10）。
+- (a) **重放器模擬「段落關閉」事件**：依各段 `startedAt` 的間隔依序發出段落關閉，讓增量 worker 邊收邊處理，最後一段關閉時算「停止」，量停止 → 終點。可以用加速時鐘縮短量測時間。
+  - 代價：要寫一個重放工具（測試用，不是對外介面）；1× 重放 2 小時場就要 2 小時。加速時 worker 追不上的段數會比實際多，量到的停止後時間偏大（誤差方向保守）；要扣掉加速造成的誤差，就得記下停止當下 worker 還欠幾段，並用一次 1× 重放校正。重放時沒有錄製端（SCK 擷取與編碼）的負載，資源爭用比實際輕，這部分靠 G2 的實錄補。影片部分若 Q3 選 (a)／(b)，要用新錄的段落量。
+- (b) **實錄當驗收，重放只量停止後**：用一場實錄（≥ 30 分鐘）驗收增量 worker 確實跟得上；重放只量停止後的部分，假設錄製中已經完成 N−1 段（事先把前 N−1 段的轉錄結果備好），量最後一段＋講者分離＋merge＋影片。
+  - 代價：量法簡單、結果穩定；但「N−1 段都已完成」正是要驗證的假設，worker 因丟幀暫停時會欠段，這個量法量到的是最好情況；30 分鐘實錄也不能證明 2 小時場跟得上。
+- (c) 兩者並用：每層子任務完成後用 (a) 的加速重放量，記進 progress.md；最終驗收再做一次 1× 重放（或一場 ≥ 2 小時的實錄），並在 G2 的實錄裡記下停止當下 worker 欠幾段。代價：最終驗收要多花一段與會議等長的時間。
+- 建議：(c)。(a) 才真的走過增量 worker 的程式路徑，誤差方向保守；最終一次 1× 結果加上實錄的欠段數，能證明 (b) 只能假設的那件事。
+
 ### 不問、由 design 依預設處理的模糊點（閘門 1 可以推翻）
 1. **場次代號**：用既有的 `backgroundJobLabel`（`Core/BackgroundFinalize.swift:189-200`，不讀 session）。
 2. **confidence 預設**：
@@ -221,7 +276,8 @@
 
 ## 6. 衍生工作（不編號）
 - R2 留下的「完成通知含場次路徑」（`RecordingSession.swift:1248-1250`、`MenuBar.swift:1129`）；F2 試錄選錯 app；補尾膨脹；pyenv shim 卡住；增量講者分離；VAD 門檻調到 -45～-50 dBFS（要先做小聲講者的回歸測試）（`plan-approved.md:109`）。
-- `meeting.sh prep` 失敗時的結束碼（§4.5）。
-- 把 87 分鐘場的基準數字（遮罩後）補進 run 目錄，讓它有出處（`research-requirement.md:71`）。
+  - 其中「完成通知含場次路徑」和 G9 的「前處理通知含場次名」是同一類問題：通知文字帶出場次識別資訊，使用者分享螢幕時會外洩（R3-§6 第 135 條的理由，`specs/meeting-record/spec.md:1944`；§4.39.3 的字面只管錄製中告警通知，`:1793`，完成通知是比照同一理由）。R2 那則帶的是完整路徑，比場次名更多。**建議合併進 G9 一起處理**：改法相同（換成場次代號），驗收相同（實機看通知文字），分開做會讓同一類通知一半修了一半沒修。要注意 `MenuBar.swift` 也是結構重構的對象，design 要把檔案歸屬排開。閘門 1 若不同意合併，就維持衍生工作。
+- `meeting.sh prep` 失敗時改回非 0（§4.5 列為本輪不做；本輪改由 `AutoPrepRunner` 讀狀態檔判斷成敗）。
+- ~~把 87 分鐘場的基準數字（遮罩後）補進 run 目錄~~：已完成，見 run 目錄的 `baseline.md`（2026-10-21）。
 - `run.json` 五個 stage 都是 `pending`，沒有 plan-approved.md 的核准紀錄（`research-requirement.md:67`）。閘門紀錄由主 session 用 `save_run.py approve` 補記。
 - `config.json` 的 `requireVerifierPassBeforePublish` 沒有程式在檢查；`meeting-pipeline.js` 舊流程直接寫 summary.md，有違反鐵則 2 的風險（`b0-audit.md:53-55`）。docs-cleanup 要決定改接新流程還是標示棄用。
