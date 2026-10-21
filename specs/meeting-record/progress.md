@@ -248,3 +248,10 @@
 - [ ] 閘門 3
 - [ ] Build：Red（`r3x-red-py`、`r3x-red-swift`）→ 第 1 層（`r3x-core`、`r3x-parallel-finalize`、`r3x-cli`）→ 第 2 層（`r3x-capture`、`r3x-menubar`）
 - [ ] Test：§4.58 實機驗收（前置每一步先問使用者）
+
+### R3 Deliver 審查修正（2026-10-21，使用者同意在 R3 內先修再開 PR）
+- [x] 提醒事項去重鍵改為正規化 URL（`Core/ReminderKey.swift`、`R3xReminderKeyTests`；spec R3x §6 第 160 條，待使用者追認）
+- [x] `meeting search` 以相對路徑排序（`test_deliver_fixes.py::TestSearchNestedOrder`）
+- [x] diarize 補段落時連同品質檔一起換（`test_deliver_fixes.py::TestDiarizeQualityFile`）
+- [x] 多音檔不套 VAD（`test_deliver_fixes.py::TestTranscribeMultiAudioNoVad`；spec R3x §6 第 158 條，待使用者追認）
+- [x] spec R3x §6 第 159 條（menu bar 主執行緒試鎖補字面，待使用者追認）

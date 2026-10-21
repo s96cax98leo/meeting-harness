@@ -122,22 +122,23 @@ private final class RemindersJob: @unchecked Sendable {
     private func write(list: EKCalendar, existing: [EKReminder]) -> Never {
         var byURL: [String: EKReminder] = [:]
         for r in existing {
-            if let u = r.url?.absoluteString, u.hasPrefix(reminderURLPrefix), byURL[u] == nil { byURL[u] = r }
+            // 鍵與下方查詢用同一個正規化（reminderURLKey；R3x §6 第 160 條）
+            if let u = r.url?.absoluteString, let k = reminderURLKey(u, prefix: reminderURLPrefix)?.key, byURL[k] == nil { byURL[k] = r }
         }
         var created = 0, updated = 0
         for item in items {
-            guard item.url.hasPrefix(reminderURLPrefix), let url = URL(string: item.url) else {
+            guard let (key, url) = reminderURLKey(item.url, prefix: reminderURLPrefix) else {
                 reporter.finish(code: 5, message: "項目的 url 不是 \(reminderURLPrefix) 開頭：\(item.uid)")
             }
             let r: EKReminder
-            if let old = byURL[item.url] {
+            if let old = byURL[key] {
                 r = old
                 updated += 1
             } else {
                 r = EKReminder(eventStore: store)
                 r.calendar = list
                 r.url = url
-                byURL[item.url] = r
+                byURL[key] = r
                 created += 1
             }
             r.title = item.title

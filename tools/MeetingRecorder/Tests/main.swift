@@ -76,6 +76,7 @@ let mrtSuites: [(String, [MRTCase])] = [
     ("R3RecordLibVectorTests", mrtR3RecordLibVectorTests),
     ("R3DesignTokenTests", mrtR3DesignTokenTests),
     ("R3xBackgroundTests", mrtR3xBackgroundTests),
+    ("R3xReminderKeyTests", mrtR3xReminderKeyTests),
 ]
 
 let mrtFilter = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""

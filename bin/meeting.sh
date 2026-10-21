@@ -251,8 +251,17 @@ run_diarize() {
     echo "    · 補段落時間戳（在暫存目錄重轉一次，raw 不動）"
     segtmp="$(mktemp -d)"
     MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$segtmp/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
-    [[ -s "$segtmp/transcript.segments.json" ]] \
-      && cp "$segtmp/transcript.segments.json" "$sess/錄音/transcript.segments.json"
+    # 段落檔與品質檔是同一次轉錄的一對（鐵則 4）：段落檔換掉時品質檔也換成這次重轉的版本，
+    # 不沿用舊的；這次沒產生品質檔就刪掉舊的並警告（_render.py 讀不到就不標「（聽不清）」）。
+    if [[ -s "$segtmp/transcript.segments.json" ]]; then
+      cp "$segtmp/transcript.segments.json" "$sess/錄音/transcript.segments.json"
+      if [[ -f "$segtmp/transcript.quality.json" ]]; then
+        cp "$segtmp/transcript.quality.json" "$sess/錄音/transcript.quality.json"
+      else
+        rm -f "$sess/錄音/transcript.quality.json"
+        echo "    ⚠ 重轉沒有產生 transcript.quality.json（speakers.md 不會標「（聽不清）」）"
+      fi
+    fi
     if [[ ! -e "$sess/錄音/transcript.raw.md" && -s "$segtmp/transcript.raw.md" ]]; then
       cp "$segtmp/transcript.raw.md" "$sess/錄音/transcript.raw.md"
       [[ -f "$segtmp/transcript.raw.md.QUALITY_WARNING" ]] \
