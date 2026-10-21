@@ -98,3 +98,21 @@ func stageManagerNotice(globallyEnabled: Bool?) -> String? {
     guard globallyEnabled == true else { return nil }
     return "幕前調度已開啟：會議視窗不在目前舞台時會被縮成側邊縮圖，錄影解析度會跟著變小。錄會議時讓會議視窗留在目前舞台，或先關閉幕前調度"
 }
+
+// MARK: - meeting-speed：probe stream 開不起來（spec §3.10、§4.10.1）
+
+/// probe 開不起來 → deviceFailed（不看 peak）；開得起來 → check(systemAudioCheck(…))。
+enum AudioProbeVerdict: Equatable { case check(SystemAudioCheck), deviceFailed }
+
+func audioProbeVerdict(opened: Bool, targetPeakDBFS: Double, displayPeakDBFS: Double?,
+                       thresholdDBFS: Double) -> AudioProbeVerdict {
+    guard opened else { return .deviceFailed }
+    return .check(systemAudioCheck(targetPeakDBFS: targetPeakDBFS, displayPeakDBFS: displayPeakDBFS,
+                                   thresholdDBFS: thresholdDBFS))
+}
+
+/// spec §3.10 字面：`音訊裝置無法啟動（輸入：<input>／<inputTransport>；輸出：<output>／<outputTransport>）`。
+func audioDeviceFailedMessage(input: String, inputTransport: String,
+                              output: String, outputTransport: String) -> String {
+    "音訊裝置無法啟動（輸入：\(input)／\(inputTransport)；輸出：\(output)／\(outputTransport)）"
+}
