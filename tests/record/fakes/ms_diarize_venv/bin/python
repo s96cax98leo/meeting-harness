@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# ms_diarize_venv/bin/python —— 假的 diarize venv（MH_DIARIZE_VENV 指向 fakes/ms_diarize_venv；meeting-speed spec §4.6、§4.8）。
+# - `python -c "import pyannote.audio"` → 回 0（環境就緒）
+# - `python <…>/_diarize_pyannote.py <wav> <out.json>` → 不跑模型：在 FAKE_DIAR_LOG 記一行 JSON
+#   {"wav", "out", "embeddingsOut", "start", "end"}，睡 FAKE_DIAR_SLEEP 秒（預設 0），FAKE_DIAR_EXIT 非 0 時以該值結束、
+#   不寫檔；否則寫固定的 diarization.json（SPEAKER_00／SPEAKER_01），MH_EMBEDDINGS_OUT 有值時寫兩個講者的向量
+#   （FAKE_DIAR_VECTORS 可給 JSON 覆寫 speakers）。
+# - `python <…>/_diarize_pyannote.py --embed-speaker …` → 交給 fakes/ms_embed_speaker.py（同參數）。
+# - 其他 → 交給 MS_REAL_PYTHON（沒設時 /usr/bin/env python3）。
+set -uo pipefail
+now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
+here="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ "${1:-}" == "-c" && "${2:-}" == *"import pyannote.audio"* ]]; then exit 0; fi
+if [[ "${1:-}" == *"_diarize_pyannote.py" ]]; then
+  shift
+  if [[ "${1:-}" == "--embed-speaker" ]]; then exec "${MS_REAL_PYTHON:-python3}" "${here}/ms_embed_speaker.py" "$@"; fi
+  wav="${1:-}"; out="${2:-}"
+  t0="$(now)"
+  sleep "${FAKE_DIAR_SLEEP:-0}"
+  rc="${FAKE_DIAR_EXIT:-0}"
+  t1="$(now)"
+  if [[ -n "${FAKE_DIAR_LOG:-}" ]]; then
+    printf '{"wav": "%s", "out": "%s", "embeddingsOut": "%s", "start": %s, "end": %s, "exit": %s}\n' \
+      "${wav}" "${out}" "${MH_EMBEDDINGS_OUT:-}" "${t0}" "${t1}" "${rc}" >> "${FAKE_DIAR_LOG}"
+  fi
+  if [[ "${rc}" != 0 ]]; then echo '{"error": "範例分離失敗（替身）"}' >&2; exit "${rc}"; fi
+  cat > "${out}" <<'JSON'
+{"segments": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}, {"start": 2.0, "end": 4.0, "speaker": "SPEAKER_01"}],
+ "segmentsOverlapped": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}, {"start": 2.0, "end": 4.0, "speaker": "SPEAKER_01"}],
+ "numSpeakers": 2, "meta": {"engine": "fake"}}
+JSON
+  if [[ -n "${MH_EMBEDDINGS_OUT:-}" ]]; then
+    default_vecs='{"SPEAKER_00": [1.0, 0.0, 0.0], "SPEAKER_01": [0.0, 1.0, 0.0]}'
+    printf '{"model": "fake", "dim": 3, "speakers": %s}\n' "${FAKE_DIAR_VECTORS:-${default_vecs}}" > "${MH_EMBEDDINGS_OUT}"
+  fi
+  echo '{"status": "ok", "segments": 2, "numSpeakers": 2}'
+  exit 0
+fi
+exec "${MS_REAL_PYTHON:-python3}" "$@"

@@ -144,7 +144,8 @@ class TestR3VttRaw(unittest.TestCase):
         self.assertIn("assign_speaker", src)
         self.assertRegex(src, r"_merge_speakers\.py:\d+", "照抄的判準要在註解寫明出處行號（_merge_speakers.py:<行>）")
 
-    # spec §4.29.3：缺段落檔時 diarize 不動 raw（內容與 mtime）、之後段落檔存在、替身收到非場次目錄的輸出目錄
+    # spec §4.29.3，meeting-speed spec §6 第 20 條（使用者 2026-10-21 核准）：缺段落檔時 diarize 不動 raw
+    # （內容與 mtime）、不呼叫轉錄替身、回 1、輸出含「缺 transcript.segments.json」
     def test_diarize_keeps_raw(self):
         sb = Sandbox(self)
         sess = m.make_audio_session(sb.root)
@@ -159,16 +160,9 @@ class TestR3VttRaw(unittest.TestCase):
         r = sb.meeting("diarize", sess, timeout=180, **env)
         self.assertEqual((raw.read_bytes(), raw.stat().st_mtime_ns), before,
                          f"transcript.raw.md 的內容與 mtime 應不變\nstdout:{r.stdout}\nstderr:{r.stderr}")
-        self.assertTrue((rec / "transcript.segments.json").is_file() or (rec / "segments.json").is_file(),
-                        "diarize 之後段落檔應存在")
-        calls = m.read_asr_calls(log)
-        self.assertTrue(calls, "應呼叫轉錄替身")
-        for argv in calls:
-            self.assertIn("--output-dir", argv)
-            od = os.path.realpath(argv[argv.index("--output-dir") + 1])
-            self.assertFalse(od == os.path.realpath(sess) or od.startswith(os.path.realpath(sess) + os.sep),
-                             f"轉錄的輸出目錄不得是場次目錄：{od}")
-        self.assertEqual(r.returncode, 0, f"stdout:{r.stdout}\nstderr:{r.stderr}")
+        self.assertEqual(m.read_asr_calls(log), [], "缺 transcript.segments.json 時不得呼叫轉錄替身")
+        self.assertEqual(r.returncode, 1, f"stdout:{r.stdout}\nstderr:{r.stderr}")
+        self.assertIn("缺 transcript.segments.json", r.stdout + r.stderr)
 
     # spec §4.29.5：6 組 fixture 的 VTT 與 _merge_speakers.py 對每一段掛的真名一致
     def test_render_copy_matches_merge(self):

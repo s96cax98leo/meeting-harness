@@ -47,12 +47,6 @@ class TestRegression(unittest.TestCase):
         self.assertIn("Apple Events", tab[0])
         self.assertIn("選用", tab[0])
 
-    # spec §4.12.4
-    def test_diarize_and_merge_untouched(self):
-        r = subprocess.run(["git", "-C", str(REPO), "diff", "--exit-code", "main", "--",
-                            "bin/diarize.sh", "bin/_merge_speakers.py"], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, "bin/diarize.sh、bin/_merge_speakers.py 應與 main 完全相同")
-
     # spec §4.13.7
     def test_git_governance_content(self):
         guard = json.loads((REPO / ".claude" / "teams" / "guard.config.json").read_text(encoding="utf-8"))
