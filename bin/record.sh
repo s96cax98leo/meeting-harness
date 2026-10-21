@@ -966,7 +966,7 @@ PY
     echo "錄製器已在收尾，等結果（不再送停止訊號）…"
   else
     kill -TERM "${pid}" 2>/dev/null
-    echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+    echo "已送出停止，收尾中（長場次要等一下）…"
   fi
   t0="$(date +%s)"
   while :; do
@@ -1266,13 +1266,12 @@ cmd_finish() {
 
 # R2 控制（spec R2-§2.2、§3.9、§3.14 的 controlAvailability／requestControl、§4.16.5–§4.16.8）。
 # 一支 python 做完：判斷可否控制 → 取 flock 寫控制檔 → 需要時送 SIGUSR1 → 等狀態檔反映。
+# python 本體拆成三段（共用 helper、可否控制＋寫控制檔、送訊號＋等反映；meeting-speed spec §4.13.1），
+# 由 cmd_control 串起來以 python3 -c 執行；sys.argv 的位置與拆分前相同。
 # 結束碼：0 已套用（或本來就是目標狀態）；3 沒有可控制的錄製或沒有回應。
-cmd_control() { # <pause|resume|mute|unmute|mark> 參數…
-  local word="$1"
-  shift
-  check_unknown "" "" "$@" || return 2
-  if [[ $# -gt 0 ]]; then err "✗ ${word} 不接參數：$*"; return 2; fi
-  python3 - "${word}" "${STATUS_FILE}" "${PID_FILE}" "${CONTROL_FILE}" "${CONTROL_LOCK}" "${CONTROL_WAIT_SECONDS}" <<'PY'
+
+control_py_lib() { # 共用 helper：參數、讀檔、程序存活、時間格式
+  cat <<'PY'
 import datetime, fcntl, json, math, os, signal, sys, tempfile, time
 word, st_path, pid_path, ctl_path, lock_path, wait_s = sys.argv[1:7]
 wait_s = float(wait_s)
@@ -1330,6 +1329,11 @@ def recorded(st):  # 同 Core recordedSeconds；舊狀態檔沒有 recordingStar
     return max(0, math.floor(e))
 
 
+PY
+}
+
+control_py_request() { # 1. 可否控制 2. flock 下寫控制檔
+  cat <<'PY'
 # 1. 可否控制（§3.14 controlAvailability 的順序；回 3 時不碰控制檔）
 st = load(st_path)
 try:
@@ -1378,6 +1382,11 @@ with open(lock_path, "a") as lk:
         json.dump(ctl, fh, ensure_ascii=False)
     os.replace(tmp, ctl_path)
 
+PY
+}
+
+control_py_signal() { # 3. 已是目標狀態就回 0 4. 送 SIGUSR1、等狀態檔反映
+  cat <<'PY'
 # 3. 本來就是目標狀態 → 不送訊號、直接回 0
 if word != "mark" and (st.get(FIELD[word][0]) is True) == FIELD[word][1]:
     print({"pause": "已經是暫停中", "resume": "本來就在錄製中", "mute": "麥克風本來就是靜音",
@@ -1418,6 +1427,15 @@ else:
     print({"resume": "已繼續錄製", "mute": "麥克風已靜音", "unmute": "麥克風已取消靜音"}[word])
 sys.exit(0)
 PY
+}
+
+cmd_control() { # <pause|resume|mute|unmute|mark> 參數…
+  local word="$1"
+  shift
+  check_unknown "" "" "$@" || return 2
+  if [[ $# -gt 0 ]]; then err "✗ ${word} 不接參數：$*"; return 2; fi
+  python3 -c "$(control_py_lib; control_py_request; control_py_signal)" \
+    "${word}" "${STATUS_FILE}" "${PID_FILE}" "${CONTROL_FILE}" "${CONTROL_LOCK}" "${CONTROL_WAIT_SECONDS}"
 }
 
 sub="${1:-}"
