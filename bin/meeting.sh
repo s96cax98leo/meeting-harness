@@ -51,6 +51,9 @@ meeting — 會議錄音/錄影 → 逐字稿 → 會議紀錄（本機、離線
                                       把「你確認過」的講者存進聲紋庫，之後每場自動認出同一個人
   meeting voiceprint list | remove <姓名>
                                       看／刪聲紋庫（存在 vault/voiceprints/，本機、不進版控）
+  meeting search <會議根目錄> <關鍵字>  搜各場次的 summary／逐字稿／meeting.record.json（大小寫不分、照字面）
+  meeting sync [off|reported|calibrated]
+                                      看／設定系統聲音的延遲補償模式（預設 off；下一次收尾起生效）
   meeting doctor                      檢查工具鏈（ASR 模型、講者分離環境與模型授權）
   meeting version                     顯示版本（git commit）
 
@@ -242,18 +245,42 @@ run_diarize() {
   [[ -z "${MH_TYPE:-}" ]] && load_profile "$sess"
   echo "  ▶ 講者分離（pyannote；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
   if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
-    local audio; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
-    echo "    · 補段落時間戳（重轉一次）"
-    rm -f "$sess/錄音/transcript.raw.md"
-    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
-    [[ -s "$sess/錄音/transcript.md" ]] || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
+    # raw 逐字稿不改（鐵則 1，spec §4.29.3）：在暫存目錄重轉一次，只取段落檔；
+    # 既有的 transcript.raw.md 與衍生檔一律不動，只有原本就沒有 raw 時才補上。
+    local audio segtmp; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
+    echo "    · 補段落時間戳（在暫存目錄重轉一次，raw 不動）"
+    segtmp="$(mktemp -d)"
+    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$segtmp/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
+    # 段落檔與品質檔是同一次轉錄的一對（鐵則 4）：段落檔換掉時品質檔也換成這次重轉的版本，
+    # 不沿用舊的；這次沒產生品質檔就刪掉舊的並警告（_render.py 讀不到就不標「（聽不清）」）。
+    if [[ -s "$segtmp/transcript.segments.json" ]]; then
+      cp "$segtmp/transcript.segments.json" "$sess/錄音/transcript.segments.json"
+      if [[ -f "$segtmp/transcript.quality.json" ]]; then
+        cp "$segtmp/transcript.quality.json" "$sess/錄音/transcript.quality.json"
+      else
+        rm -f "$sess/錄音/transcript.quality.json"
+        echo "    ⚠ 重轉沒有產生 transcript.quality.json（speakers.md 不會標「（聽不清）」）"
+      fi
+    fi
+    if [[ ! -e "$sess/錄音/transcript.raw.md" && -s "$segtmp/transcript.raw.md" ]]; then
+      cp "$segtmp/transcript.raw.md" "$sess/錄音/transcript.raw.md"
+      [[ -f "$segtmp/transcript.raw.md.QUALITY_WARNING" ]] \
+        && cp "$segtmp/transcript.raw.md.QUALITY_WARNING" "$sess/錄音/transcript.raw.md.QUALITY_WARNING"
+    fi
+    [[ -s "$sess/錄音/transcript.md" || ! -s "$sess/錄音/transcript.raw.md" ]] \
+      || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
+    rm -rf "$segtmp"
   fi
   bash "$BIN/diarize.sh" "$sess" || { echo "    ✗ 分離失敗（見上面訊息）"; return 1; }
   python3 "$BIN/_merge_speakers.py" \
     "$sess/錄音/transcript.segments.json" "$sess/錄音/diarization.json" \
     "$sess/錄音/transcript.speakers.md" "$sess/錄音/speakers.map.json" \
-    && { state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"; } \
     || { state_set "$sess" diarize failed; return 1; }
+  # 後處理（spec §4.31.10）：在 speakers.md 插註記與「（聽不清）」；沒有事件、沒有品質檔時不改檔。
+  # 失敗只警告，speakers.md 維持 _merge_speakers.py 的原樣。
+  python3 "$BIN/_render.py" "$sess" --annotate-speakers >/dev/null \
+    || echo "    ⚠ speakers.md 註記後處理失敗（維持原樣）"
+  state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"
 }
 
 # 找出所有場次目錄（含 錄音/ 的音/視訊檔：m4a/mp3/wav/mov/mp4/m4v）
@@ -463,6 +490,18 @@ case "$cmd" in
   summarize-local) sess="$(need_dir "${2:-}" "場次目錄")" || exit $?; shift 2 || true; bash "$BIN/summarize-local.sh" "$sess" "$@" ;;
   local)  local_pipeline "${2:-}" "${3:-}" ;;
   record) shift; record_cmd "$@"; exit $? ;;
+  # R3 頂層子指令（spec R3-§2.2、§3.19）：search、sync、reminders 是保留字，不再當成根目錄
+  # （名為 search 的根目錄要寫 meeting ./search；§7 疑慮 46）。
+  search) shift; python3 "$BIN/lib/_search.py" "$@"; exit $? ;;
+  sync)   shift; python3 "$BIN/lib/_record_lib.py" sync "$@"; exit $? ;;
+  reminders)
+    shift
+    if [[ -f "$BIN/lib/_reminders.py" ]]; then
+      python3 "$BIN/lib/_reminders.py" "$@"; exit $?
+    fi
+    echo "✗ meeting reminders 尚未提供（bin/lib/_reminders.py 不存在）。" >&2
+    echo "  名為 reminders 的根目錄請寫： meeting.sh ./reminders" >&2
+    exit 2 ;;
   "")     usage; exit 1 ;;
   -*)     echo "✗ 未知的選項：$cmd" >&2; echo "  指令說明： meeting.sh help" >&2; exit 2 ;;
   *)

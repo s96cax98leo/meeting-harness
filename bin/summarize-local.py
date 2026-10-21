@@ -140,6 +140,20 @@ date: {date}
 
 現在開始輸出總結："""
 
+def recording_sections(sess):
+    """「## 標記」「## 錄製註記」兩段：以 importlib 呼叫 bin/_render.py 的 render_recording_sections（同一個函式，
+    不另寫一份；spec §3.18、§4.31.9），雲端與地端的 summary.md 段落一致。兩段都沒有時回 ""。不寫 .pyc。"""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("_render", os.path.join(here, "_render.py"))
+    mod = importlib.util.module_from_spec(spec)
+    dwb, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = dwb
+    return mod.render_recording_sections(sess)
+
 def strip_fences(t):
     t = t.strip()
     if t.startswith("```"):
@@ -202,7 +216,11 @@ def main():
     out = strip_fences(ollama_gen(model, prompt, num_ctx=num_ctx))
 
     dest = os.path.join(sess, "summary.md")
-    open(dest, "w", encoding="utf-8").write(out + "\n")
+    text = out + "\n"
+    extra = recording_sections(sess)
+    if extra:                           # 模型輸出原樣在前；沒有標記、沒有事件時與現行輸出相同
+        text = out.rstrip() + "\n\n" + extra
+    open(dest, "w", encoding="utf-8").write(text)
     print(json.dumps({"status": "ok", "summaryPath": dest, "model": model,
                       "chars": len(out), "mode": a.mode}, ensure_ascii=False))
 

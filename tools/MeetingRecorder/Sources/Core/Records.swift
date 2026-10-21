@@ -52,6 +52,11 @@ struct RecordStatus: Codable, Equatable {
     var pausedAt: String? = nil
     var markers: Int? = nil
     var recentLevels: RecentLevels? = nil
+    // ---- R3（spec §3.17）：只在捨棄成功時寫 true，其餘 nil（省略鍵）----
+    var discarded: Bool? = nil
+    // ---- R3x（spec §3.21、§3.26）：每場狀態檔一律 background true；排隊中 queued true；nil 時省略鍵 ----
+    var background: Bool? = nil
+    var queued: Bool? = nil
 }
 
 /// spec §3.10：status 的 recentLevels。JSON 鍵恰為 3 個；system／mic 為 nil 時寫 null（不省略）。
@@ -252,6 +257,8 @@ struct RecordMeta: Codable, Equatable {
     // ---- R2（spec §3.11）：R2 錄製實例開錄時寫空陣列；nil 時省略鍵（舊場次沒有這兩鍵）----
     var pauseEvents: [PauseEvent]? = nil
     var micMuteEvents: [MicMuteEvent]? = nil
+    // ---- R3（spec §3.17）：開錄時一筆 t=0，之後每筆輸出裝置 deviceEvents 一筆；nil 時省略鍵 ----
+    var outputLatencies: [OutputLatency]? = nil
 }
 
 /// t6 第二輪（缺陷 D，§4.4.9）：錄製結束時寫進 record.status.json 與 record.log 的最終結果。

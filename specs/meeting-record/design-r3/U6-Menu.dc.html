@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>U6 選單依階段</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@500;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1000px; box-sizing: border-box; padding: 56px 64px; background: #0F1115; color: #ECEEF2; font-family: 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: baseline; gap: 20px">
+<h1 style="margin: 0; font-size: 40px; font-weight: 700">U6 選單依階段</h1>
+<span style="font-size: 16px; color: #9AA3B2">原本 18 項扁平列出；改成只給當下用得到的</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; align-items: start">
+<sc-for list="{{menus}}" as="m" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">{{m.dir}} <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 14px; font-weight: 500; color: #9AA3B2">{{m.sub}}</span></div>
+<div style="box-sizing: border-box; padding: 8px; border-radius: 16px; background: rgba(28,31,39,0.97); border: 1px solid #3A404D; box-shadow: 0 18px 40px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 2px; font-size: 14px">
+<sc-for list="{{m.rows}}" as="r" hint-placeholder-count="10">
+<sc-if value="{{r.isHeader}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px 8px">
+<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="{{r.dot}}"></circle></svg>
+<span style="font-weight: 700">{{r.label}}</span>
+<span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-weight: 600; font-variant-numeric: tabular-nums">{{r.key}}</span>
+</div>
+</sc-if>
+<sc-if value="{{r.isMeter}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px; font-size: 12px; color: #C3C9D4">
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 40px">系統</span><span style="flex-grow: 1; height: 5px; border-radius: 3px; background: #2A2F3A"><span style="display: block; width: 64%; height: 5px; border-radius: 3px; background: #ECEEF2"></span></span></div>
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 40px">麥克風</span><span style="flex-grow: 1; height: 5px; border-radius: 3px; background: #2A2F3A"><span style="display: block; width: 30%; height: 5px; border-radius: 3px; background: #2DD4BF"></span></span></div>
+</div>
+</sc-if>
+<sc-if value="{{r.isWarn}}" hint-placeholder-val="{{false}}">
+<div style="margin: 0 4px 6px; padding: 8px 10px; border-radius: 10px; background: rgba(245,165,36,0.14); color: #F7C46C; font-size: 13px">{{r.label}}</div>
+</sc-if>
+<sc-if value="{{r.isSep}}" hint-placeholder-val="{{false}}">
+<div style="height: 1px; margin: 4px 10px; background: #2E333E"></div>
+</sc-if>
+<sc-if value="{{r.isItem}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; padding: 8px 12px; border-radius: 8px; background: {{r.bg}}; color: {{r.fg}}">
+<span>{{r.label}}</span>
+<span style="margin-left: auto; font-size: 12px; color: {{r.keyFg}}">{{r.key}}</span>
+</div>
+</sc-if>
+</sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+renderVals() {
+const it = (label, key, o) => Object.assign({ isItem: true, label, key: key || '', bg: 'transparent', fg: '#ECEEF2', keyFg: '#8E96A5' }, o || {});
+const dim = (label, key) => it(label, key, { fg: '#5B6372', keyFg: '#4A515E' });
+const hot = (label, key) => it(label, key, { bg: '#FF4D4F', fg: '#FFFFFF', keyFg: 'rgba(255,255,255,0.8)' });
+const sep = { isSep: true };
+const hd = (label, key, dot) => ({ isHeader: true, label, key, dot });
+const meter = { isMeter: true };
+const warn = (label) => ({ isWarn: true, label });
+return {
+menus: [
+{ dir: 'A ★', sub: '待機', rows: [
+hd('待機中', '', '#5B6372'), sep,
+hot('開始錄製：Teams', '⌃⌥⌘R'), it('錄其他視窗', '▸'), it('存到：會議錄音', '▸'), sep,
+it('上一場：10/13 14:05・42 分鐘'), sep,
+it('設定…', '⌘,'), it('結束 MeetingRecorder', '⌘Q')
+] },
+{ dir: 'A ★', sub: '錄製中（整份換掉）', rows: [
+hd('錄製中', '42:07', '#FF4D4F'), meter, warn('麥克風已連續 15 秒幾乎沒有聲音'), sep,
+it('暫停錄製', '⌃⌥⌘P'), it('麥克風靜音', '⌃⌥⌘M'), it('加標記（已有 2 個）', '⌃⌥⌘B'), sep,
+hot('停止錄製並收尾', '⌃⌥⌘R'), it('捨棄這次錄製…'), sep,
+it('顯示錄製小窗'), it('打開場次資料夾'), sep, it('設定…', '⌘,')
+] },
+{ dir: 'B', sub: '骨架固定，隱藏區塊', rows: [
+hd('錄製中', '42:07', '#FF4D4F'), meter, sep,
+it('停止錄製並收尾', '⌃⌥⌘R'), it('暫停錄製', '⌃⌥⌘P'), it('麥克風靜音', '⌃⌥⌘M'), it('加標記', '⌃⌥⌘B'), sep,
+it('目前視窗：Teams'), it('存到：會議錄音'), sep,
+it('打開場次資料夾'), it('設定…', '⌘,'), it('結束 MeetingRecorder', '⌘Q')
+] },
+{ dir: 'C', sub: '全部列出，灰掉不能用的', rows: [
+hd('錄製中', '42:07', '#FF4D4F'), sep,
+dim('開始錄製', '⌃⌥⌘R'), it('停止錄製並收尾'), it('暫停錄製', '⌃⌥⌘P'), it('麥克風靜音', '⌃⌥⌘M'), it('加標記', '⌃⌥⌘B'), sep,
+dim('選擇視窗', '▸'), dim('存到', '▸'), dim('開錄前檢查'), sep,
+it('打開場次資料夾'), dim('補做收尾'), dim('查看上一場'), sep, it('設定…', '⌘,')
+] }
+]
+};
+}
+}
+</script>
+</body>
+</html>

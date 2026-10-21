@@ -1,0 +1,357 @@
+[
+  {
+    "name": "R2 §4.18.1：暫停前",
+    "t": 50.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 49.8
+  },
+  {
+    "name": "R2 §4.18.1：暫停中取暫停點",
+    "t": 80.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 69.8
+  },
+  {
+    "name": "R2 §4.18.1：繼續後扣暫停長度",
+    "t": 130.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 99.8
+  },
+  {
+    "name": "R2 §4.18.1：早於第一段起點夾成 0",
+    "t": 0.1,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 0.0
+  },
+  {
+    "name": "R2 §4.18.1：再加沒配對的 pause 150",
+    "t": 160.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      },
+      {
+        "t": 150.0,
+        "outputT": 119.8,
+        "wallClock": "2026-10-12T21:02:30+08:00",
+        "kind": "pause"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 119.8
+  },
+  {
+    "name": "沒配對的 pause：暫停中",
+    "t": 90.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 69.8
+  },
+  {
+    "name": "沒配對的 pause：暫停前",
+    "t": 60.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 59.8
+  },
+  {
+    "name": "沒有暫停",
+    "t": 12.5,
+    "first_start": 0.182,
+    "pauses": [],
+    "l_out": 0.0,
+    "expect": 12.318
+  },
+  {
+    "name": "剛好在 resume 那一刻",
+    "t": 20.0,
+    "first_start": 0.0,
+    "pauses": [
+      {
+        "t": 10.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 20.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:20+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 10.0
+  },
+  {
+    "name": "剛好在 pause 那一刻",
+    "t": 10.0,
+    "first_start": 0.0,
+    "pauses": [
+      {
+        "t": 10.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 20.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:20+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 10.0
+  },
+  {
+    "name": "兩組暫停：第二組暫停中",
+    "t": 35.0,
+    "first_start": 0.0,
+    "pauses": [
+      {
+        "t": 10.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 20.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:20+08:00",
+        "kind": "resume"
+      },
+      {
+        "t": 30.0,
+        "outputT": 20.0,
+        "wallClock": "2026-10-12T21:00:30+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 45.0,
+        "outputT": 20.0,
+        "wallClock": "2026-10-12T21:00:45+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 20.0
+  },
+  {
+    "name": "兩組暫停：都結束之後",
+    "t": 50.0,
+    "first_start": 0.0,
+    "pauses": [
+      {
+        "t": 10.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 20.0,
+        "outputT": 10.0,
+        "wallClock": "2026-10-12T21:00:20+08:00",
+        "kind": "resume"
+      },
+      {
+        "t": 30.0,
+        "outputT": 20.0,
+        "wallClock": "2026-10-12T21:00:30+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 45.0,
+        "outputT": 20.0,
+        "wallClock": "2026-10-12T21:00:45+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 25.0
+  },
+  {
+    "name": "§3.11 範例起點 0.182",
+    "t": 61.0,
+    "first_start": 0.182,
+    "pauses": [
+      {
+        "t": 30.0,
+        "outputT": 29.818,
+        "wallClock": "2026-10-12T21:00:30+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 40.0,
+        "outputT": 29.818,
+        "wallClock": "2026-10-12T21:00:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.0,
+    "expect": 50.818
+  },
+  {
+    "name": "l_out 0.18：暫停前",
+    "t": 50.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.18,
+    "expect": 49.98
+  },
+  {
+    "name": "l_out 0.18：繼續後",
+    "t": 130.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      }
+    ],
+    "l_out": 0.18,
+    "expect": 99.98
+  },
+  {
+    "name": "l_out 0.18：沒配對的 pause",
+    "t": 160.0,
+    "first_start": 0.2,
+    "pauses": [
+      {
+        "t": 70.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:10+08:00",
+        "kind": "pause"
+      },
+      {
+        "t": 100.0,
+        "outputT": 69.8,
+        "wallClock": "2026-10-12T21:01:40+08:00",
+        "kind": "resume"
+      },
+      {
+        "t": 150.0,
+        "outputT": 119.8,
+        "wallClock": "2026-10-12T21:02:30+08:00",
+        "kind": "pause"
+      }
+    ],
+    "l_out": 0.18,
+    "expect": 119.98
+  },
+  {
+    "name": "l_out 0.18：沒有暫停",
+    "t": 12.5,
+    "first_start": 0.182,
+    "pauses": [],
+    "l_out": 0.18,
+    "expect": 12.498
+  }
+]

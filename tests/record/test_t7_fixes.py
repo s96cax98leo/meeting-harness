@@ -49,6 +49,10 @@ class T7Fixes(unittest.TestCase):
     def test_hotkey_feedback_notification(self):
         code = src(r2.MENUBAR)
         self.assertIn("controlFeedback(cmd, markerSeq: written.markerSeq)", code)
+        # R3 §6 第 120 條：通知呼叫在 feedbackRoute( 為 .notification 的分支內
+        self.assertIn("feedbackRoute(", code)
+        self.assertRegex(code, r"\.notification\b[^\n]*(?:\n[^\n]*){0,8}?controlFeedback\(cmd, markerSeq: written\.markerSeq\)",
+                         "回饋通知只在 feedbackRoute 為 .notification 的分支內發")
         for action in ("mute", "pause", "mark"):
             self.assertRegex(code, rf'action:\s*"{action}",\s*feedback:\s*true',
                              f"快捷鍵 {action} 應帶 feedback: true")
@@ -59,6 +63,9 @@ class T7Fixes(unittest.TestCase):
         self.assertIn("statusItemObscured(", code)
         self.assertIn("auxiliaryTopLeftArea", code)
         self.assertIn("occlusionState", code)
+        # R3 §6 第 121 條：以 obscuredCheckSeconds 計時重複檢查、呼叫 obscuredAction(
+        self.assertIn("obscuredCheckSeconds", code)
+        self.assertIn("obscuredAction(", code)
 
     # §6 第 108 條：自動前處理經登入 shell 跑，PATH 才有使用者裝的 mlx_whisper 等工具
     def test_autoprep_runs_through_login_shell(self):

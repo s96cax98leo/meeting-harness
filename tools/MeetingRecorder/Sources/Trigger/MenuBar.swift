@@ -1,9 +1,25 @@
 // Trigger/MenuBar.swift —— menu bar 常駐實例（design §8、§8.2；spec §3.4.1、§4.11、§4.20、§4.21、§4.23）
 // 只做 AppKit 接線：每秒讀 record.status.json 與 kill -0，交給 Core 的 menuBarModel 算圖示、計時、狀態列與選單可用性。
+// R3（spec §4.38、§4.39、§4.27.4）：選單列＝U1-C 錄製膠囊（8 種外觀自繪，顏色一律取自 Core 的 menuBarCapsuleStyle）；
+//   toolTip／VoiceOver＝menuBarAccessibilityLabel；停止前先 stopTargetDecision；新告警發分級通知（notificationPolicy）。
+// R3（spec §4.40）：錄製小窗（Trigger/HUD.swift）依 hudVisible 顯示；圖示是否被擋住每 obscuredCheckSeconds 檢查一次
+//   交給 obscuredAction；快捷鍵回饋依 feedbackRoute。
+// R3（spec §4.41；U6-A；ADR adr-r3-menu-stages.md）：選單依階段整份換掉——menuStage 決定階段，menuGroups(stage:) 決定
+//   項目與分隔線，menuItems(stage:) 以外的項目隱藏；階段內暫時不能用的仍灰掉（§4.20.6）。標題列加階段圓點、
+//   錄製中有即時音量條（Trigger/LevelMeterView.swift）與告警列、「顯示錄製小窗」；收尾中「取消收尾」；
+//   失敗時「錯誤詳情…」開失敗詳情小視窗（Trigger/FailureDetail.swift）。
 // menu bar 實例自己不擷取、不呼叫 SCK：
-//   「開始錄製」「錄這個視窗」＝以 open -n -a 自己帶 quick-start；視窗清單＝以 open -n -a 自己帶 windows --json；
-//   「停止錄製」＝ SIGTERM 給錄製實例；暫停／麥克風靜音／加標記＝ requestControl 寫控制檔後送 SIGUSR1（spec §4.20.8）。
+//   「開始錄製」「錄其他視窗」＝以 open -n -a 自己帶 quick-start；視窗清單＝以 open -n -a 自己帶 windows --json；
+//   「停止錄製並收尾」「取消收尾」＝ stopTargetDecision 確認後 SIGTERM 給錄製實例；
+//   暫停／麥克風靜音／加標記＝ requestControl 寫控制檔後送 SIGUSR1（spec §4.20.8）。
 // 登入項目只在偏好設定視窗的勾選框處理（Trigger/Preferences.swift），這裡任何流程都不註冊。
+// R3（spec §4.43.5）：menubar.settings.json 的 onboardingCompletedAt 為 nil 時，啟動後顯示首次引導（Trigger/Onboarding.swift）；
+//   設定視窗的「重新執行首次設定…」也從這裡開。
+// R3（spec §4.44；F3-A）：會議偵測提示（Trigger/MeetingDetect.swift）——設定的 meetingDetect 打開、且不在錄製中才提示；
+//   通知的「開始錄製」走既有 quick-start（startRecording），「這場不用」讓本 episode 不再提示。
+// R3x（spec §4.50.5、§4.50.9、§4.54.4–§4.54.7；design R3x-D7）：refresh 另讀每場狀態檔（loadBackgroundJobs），
+//   以 applyBackgroundFinalize 疊上「背景收尾中」階段與附註；取消收尾在該階段走 backgroundCancelDecision（確認框只寫場次代號）；
+//   自動前處理以 autoPrepCandidates 去重；會議偵測不把背景收尾算成錄製中。
 import AppKit
 import Carbon
 import UserNotifications
@@ -16,22 +32,43 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// 錄製中的即時音量條（自訂 view；spec §4.41.4）
     private let levelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let levelMeter = LevelMeterView()
+    /// 告警列：最新告警訊息（spec §4.41.3）；資訊列、不可點
+    private let alertItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// 失敗時開失敗詳情小視窗（spec §4.41.5）
+    private let failureDetailItem = NSMenuItem(title: "錯誤詳情…", action: #selector(showFailureDetail), keyEquivalent: "")
     private let detailItem = NSMenuItem(title: "複製完整訊息與補救指令", action: #selector(copyDetail), keyEquivalent: "")
     private let startItem = NSMenuItem(title: "開始錄製（用上次的設定）", action: #selector(startRecording), keyEquivalent: "r")
-    private let windowsItem = NSMenuItem(title: "錄這個視窗", action: nil, keyEquivalent: "")
+    private let windowsItem = NSMenuItem(title: "錄其他視窗", action: nil, keyEquivalent: "")
     private let windowsMenu = NSMenu()
     private let saveToItem = NSMenuItem(title: "存到", action: nil, keyEquivalent: "")
     private let saveToMenu = NSMenu()
     private let pauseItem = NSMenuItem(title: "暫停錄製", action: #selector(togglePause), keyEquivalent: "p")
     private let muteItem = NSMenuItem(title: "麥克風靜音", action: #selector(toggleMute), keyEquivalent: "m")
     private let markItem = NSMenuItem(title: "加標記", action: #selector(addMarker), keyEquivalent: "b")
-    private let stopItem = NSMenuItem(title: "停止錄製", action: #selector(stopRecording), keyEquivalent: "")
+    private let stopItem = NSMenuItem(title: "停止錄製並收尾", action: #selector(stopRecording), keyEquivalent: "")
+    /// F2 捨棄這次錄製（spec §4.42.2）：沒有快捷鍵；確認對話框在 Trigger/Discard.swift
+    private let discardItem = NSMenuItem(title: "捨棄這次錄製…", action: #selector(discardRecording), keyEquivalent: "")
+    /// 收尾中才出現：對錄製實例再送一次 SIGTERM，由 FinalizeRunner 視為取消（spec §4.41.6、§4.28.6）
+    private let cancelFinalizeItem = NSMenuItem(title: "取消收尾", action: #selector(cancelFinalize), keyEquivalent: "")
+    /// 本場強制顯示錄製小窗（不寫設定；spec §4.41.3）
+    private let showHUDItem = NSMenuItem(title: "顯示錄製小窗", action: #selector(showHUDForThisRun), keyEquivalent: "")
     private let openItem = NSMenuItem(title: "打開場次資料夾", action: #selector(openSession), keyEquivalent: "")
     private let lastItem = NSMenuItem(title: "顯示上一場成品", action: #selector(showLastSession), keyEquivalent: "")
-    private let prefsItem = NSMenuItem(title: "偏好設定…", action: #selector(openPreferences), keyEquivalent: ",")
+    private let prefsItem = NSMenuItem(title: "設定…", action: #selector(openPreferences), keyEquivalent: ",")
     private let quitItem = NSMenuItem(title: "結束 MeetingRecorder 選單", action: #selector(quitMenu), keyEquivalent: "q")
     private var timer: Timer?
+    /// 目前選單排的是哪個階段（nil＝還沒排過）；階段改變時整份換掉（spec §4.41.3）
+    private var shownStage: MenuStage?
+    /// 選單展開期間每 levelMeterRefreshSeconds 更新音量條
+    private var meterTimer: Timer?
+    /// 「顯示錄製小窗」強制顯示 HUD 的那一場（只對同一個 runId 有效，不寫設定）
+    private var hudForcedRunId: String?
+    /// 最近一次載入的視窗清單裡恰有一個 ★ 時，那一列的 app 名稱（「開始錄製：<app 名稱>」；spec §4.41.3）
+    private var starredAppName: String?
+    private var failureDetail: FailureDetailController?
     /// r2HotKeys 四組各自的實例（註冊失敗的是 nil）；持有到 process 結束
     private var hotKeys: [HotKey?] = []
     private var failedHotKeyIDs = Set<UInt32>()
@@ -46,11 +83,32 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 本次執行期間看過處於進行中（recording／stopping／finalizing）的 runId（spec §4.23.3）
     private var seenInProgress = Set<String>()
     private var completionPosted = Set<String>()
-    /// 已檢查過「圖示被瀏海擋住」的 runId（每場只提醒一次，§6 第 106 條）
-    private var obscureChecked = Set<String>()
-    /// 「錄這個視窗」子選單讀清單用的輪詢
+    /// 本次 menu bar 程序已排過前處理的 runId（spec §3.26、§4.54.5；修正輪 B1）
+    private var autoPrepEnqueued = Set<String>()
+    /// 選單列圖示是否被瀏海擋住或被系統藏起來（錄製中每 obscuredCheckSeconds 檢查一次；nil＝這次錄製還沒檢查過；
+    /// spec §4.40.3、§6 第 121 條）
+    private var iconObscured: Bool?
+    /// 已排過開錄後第一次檢查的 runId（計時顯示、寬度定下來後再看）
+    private var obscureFirstCheckRunId: String?
+    private var obscuredTimer: Timer?
+    /// 錄製小窗 U2-C（Trigger/HUD.swift）；何時顯示由 hudVisible 決定
+    private lazy var hud: HUDController = {
+        let h = HUDController(home: home)
+        h.actions = self
+        return h
+    }()
+    /// 「錄其他視窗」子選單讀清單用的輪詢
     private var windowsTimer: Timer?
     private var preferences: PreferencesWindowController?
+    /// 首次引導（U4-A；spec §4.43.5）
+    private var onboarding: OnboardingWindowController?
+    /// F3 會議偵測（spec §4.44）
+    private var meetingDetector: MeetingDetector?
+    /// 新告警通知（spec §4.39.2、§4.39.3）：上一次看到的 warnings 與它屬於哪一場
+    private var alertRunId: String?
+    private var seenWarnings: [RecordWarning] = []
+    /// 選單列深淺色切換時立即重畫膠囊（不等下一秒的 refresh）
+    private var appearanceObservation: NSKeyValueObservation?
 
     init(home: URL) {
         self.home = home
@@ -65,11 +123,19 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     private var defaultsURL: URL { home.appendingPathComponent("record.defaults.json") }
 
     func setup() {
-        menu.autoenablesItems = false     // 當下不能用的項目灰掉而不是隱藏（spec §4.11.6、§4.20.6）
+        // 不屬目前階段的項目隱藏；階段內當下不能用的灰掉（spec §4.41.3、§4.20.6）
+        menu.autoenablesItems = false
         windowsMenu.autoenablesItems = false
         saveToMenu.autoenablesItems = false
         statusLine.isEnabled = false
         levelItem.isEnabled = false
+        levelItem.view = levelMeter
+        alertItem.isEnabled = false
+        let alertConfig = NSImage.SymbolConfiguration(paletteColors: [darkroomColor(DarkroomColor.attention)])
+        let alertImage = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "告警")?
+            .withSymbolConfiguration(alertConfig)
+        alertImage?.isTemplate = false
+        alertItem.image = alertImage
         // 選單上顯示的快捷鍵與下方 Carbon hot key 同一組（spec §4.20.5、§4.20.6）
         startItem.keyEquivalentModifierMask = [.control, .option, .command]
         pauseItem.keyEquivalentModifierMask = [.control, .option, .command]
@@ -78,39 +144,36 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         prefsItem.keyEquivalentModifierMask = [.command]
         quitItem.keyEquivalentModifierMask = [.command]
         quitItem.toolTip = "只結束 menu bar，不會停止正在進行的錄製"
-        for i in [detailItem, startItem, pauseItem, muteItem, markItem, stopItem, openItem, lastItem, prefsItem, quitItem] {
+        for i in [detailItem, failureDetailItem, startItem, pauseItem, muteItem, markItem, stopItem, discardItem,
+                  cancelFinalizeItem, showHUDItem, openItem, lastItem, prefsItem, quitItem] {
             i.target = self
         }
         windowsItem.submenu = windowsMenu
         saveToItem.submenu = saveToMenu
         windowsMenu.delegate = self
         saveToMenu.delegate = self
-        menu.addItem(statusLine)
-        menu.addItem(levelItem)
-        menu.addItem(detailItem)
-        menu.addItem(.separator())
-        menu.addItem(startItem)
-        menu.addItem(windowsItem)
-        menu.addItem(saveToItem)
-        menu.addItem(.separator())
-        menu.addItem(pauseItem)
-        menu.addItem(muteItem)
-        menu.addItem(markItem)
-        menu.addItem(stopItem)
-        menu.addItem(.separator())
-        menu.addItem(openItem)
-        menu.addItem(lastItem)
-        menu.addItem(.separator())
-        menu.addItem(prefsItem)
-        menu.addItem(quitItem)
+        // 項目與分隔線由 refresh 依 menuGroups(stage:) 排（第一次 refresh 就會排）
         menu.delegate = self              // 開選單時立即 refresh（spec §4.11.9）
         item.menu = menu
+        // 使用者 ⌘ 拖動圖示後，重開仍在同一個位置（spec §4.38.4）
+        item.autosaveName = "MeetingRecorderStatusItem"
+        // 深色／淺色、增加對比、減少透明度改變時重畫膠囊（spec §4.38.3）
+        appearanceObservation = item.button?.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.redrawButton() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.redrawButton() }
         setupNotifications()
         refresh()
         // 加進 .common mode：選單展開時 run loop 在 event tracking mode，只排在 .default 的 timer 不會觸發（spec §4.11.9）
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        // 圖示是否被擋住：錄製中持續檢查，結果驅動 auto 模式的 HUD 與快捷鍵回饋路徑（spec §4.40.3、§6 第 121 條）
+        let o = Timer(timeInterval: obscuredCheckSeconds, repeats: true) { [weak self] _ in self?.checkObscured() }
+        RunLoop.main.add(o, forMode: .common)
+        obscuredTimer = o
         // 四組快捷鍵（Carbon hot key，不需要輔助使用授權）；任一組失敗不影響其他組與選單（spec §4.20.5）
         for spec in r2HotKeys {
             guard let code = hotKeyCode(spec.key) else { continue }
@@ -131,6 +194,28 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
                     .line("\(isoNow()) 快捷鍵 \(spec.display) 註冊失敗（可能被別的 app 佔用），請改用選單或 Shortcuts 捷徑")
             }
         }
+        // F3 會議偵測（spec §4.44.2）：每 meetingDetectPollSeconds 輪詢；設定關掉或錄製中不提示
+        let detector = MeetingDetector(home: home, enabled: { [weak self] in
+            guard let self else { return false }
+            return loadMenuBarSettings(home: self.home).meetingDetect
+        }, recordingInProgress: { [weak self] in
+            guard let self else { return false }
+            return self.model.canStop || menuStage(self.model) == .recording || menuStage(self.model) == .finalizing
+        })
+        meetingDetector = detector
+        detector.start()
+        // 首次引導（spec §4.43.5）：還沒看過就在啟動後顯示（快捷鍵註冊結果已知，試錄步才標得出註冊失敗）
+        if loadMenuBarSettings(home: home).onboardingCompletedAt == nil {
+            DispatchQueue.main.async { [weak self] in self?.showOnboarding() }
+        }
+    }
+
+    /// 開首次引導；已開就帶到前面
+    private func showOnboarding() {
+        let o = onboarding ?? OnboardingWindowController(home: home, prefsStore: prefsStore, failedHotKeyIDs: failedHotKeyIDs,
+                                                         iconObscured: { [weak self] in self?.statusIconObscuredNow() })
+        onboarding = o
+        o.present()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -140,6 +225,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             rebuildSaveToMenu()
         } else {
             refresh()
+            startMeterTimer()
         }
     }
 
@@ -147,7 +233,23 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         if menu === windowsMenu {
             windowsTimer?.invalidate()
             windowsTimer = nil
+        } else if menu === self.menu {
+            meterTimer?.invalidate()
+            meterTimer = nil
         }
+    }
+
+    /// 選單展開期間每 levelMeterRefreshSeconds（0.5 秒）重讀狀態檔、更新音量條（spec §4.41.4）；
+    /// 加進 .common mode，選單展開（event tracking mode）時照常觸發
+    private func startMeterTimer() {
+        meterTimer?.invalidate()
+        let t = Timer(timeInterval: levelMeterRefreshSeconds, repeats: true) { [weak self] _ in
+            guard let self, !self.levelItem.isHidden else { return }
+            let st = readStatus(self.statusURL)
+            self.levelMeter.update(system: st?.recentLevels?.system, mic: st?.recentLevels?.mic, muted: self.model.micMuted)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        meterTimer = t
     }
 
     private func refresh() {
@@ -155,32 +257,68 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         var st = raw
         let pid = st?.pid ?? readPid(pidURL) ?? 0
         let alive = pidAlive(pid)
+        // R3x（spec §4.54.4、§4.54.5）：每場狀態檔 <home>/finalizing/*.status.json；完成通知與自動前處理
+        // 對共用狀態檔與每一個每場狀態檔都看（同一 runId 只發一次、只排一次）
+        let jobs = loadBackgroundJobs(home: home)
         trackCompletion(raw)
-        checkObscured(raw)
+        for job in jobs { trackCompletion(job.status) }
+        enqueueAutoPrep([raw].compactMap { $0 } + jobs.map { $0.status })
+        scheduleFirstObscuredCheck(raw)
         // 點下「停止錄製」後立即顯示「收尾中…」，不等錄製實例寫出 stopping（spec §4.11.7）
         if var s = st, s.runId == stopRequestedRunId, s.phase == .recording {
             s.phase = .stopping
             st = s
         }
         status = st
-        let m = menuBarModel(status: st, pidAlive: alive, now: Date())
+        // 背景收尾（spec §4.54.1、§6 第 155、157 條）：menuBarModel 不變，結果再疊上每場狀態檔
+        let base = menuBarModel(status: st, pidAlive: alive, now: Date())
+        let m = applyBackgroundFinalize(base, status: raw, jobs: jobs)
         model = m
         updateButton(m)
-        // 狀態列：不可點，但用 labelColor 而非系統灰色；過長截斷，完整內容放 toolTip（spec §4.11.8）
+        if !hudEligible(m) { iconObscured = nil }   // 這次錄製結束：下一場重新判斷
+        updateHUD(m)
+        notifyNewAlerts(raw)
+        // 依階段整份換掉（spec §4.41.3）：階段改變才重排項目與分隔線；menuItems(stage:) 以外的一律隱藏
+        let stage = menuStage(m)
+        if stage != shownStage { rebuildMenu(stage) }
+        let alertText = latestAlertMessage(raw)
+        let levelsShown = !m.levelLine.isEmpty && st?.recentLevels != nil
+        let shown = menuItems(stage: stage)
+        for id in MenuItemID.allCases {
+            var visible = shown.contains(id)
+            switch id {
+            case .levels: visible = visible && levelsShown        // 資訊列：有值才顯示
+            case .alert: visible = visible && alertText != nil    // 有告警類 warning 才顯示
+            default: break
+            }
+            menuItem(id).isHidden = !visible
+        }
+        // 標題列：menuFont 的 bold、labelColor（不用系統灰色）；過長截斷，完整內容放 toolTip（spec §4.11.8、§4.41.3）
         statusLine.attributedTitle = NSAttributedString(
             string: truncatedStatusTitle(m.statusLine, limit: 40),
-            attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)])
+            attributes: [.foregroundColor: NSColor.labelColor,
+                         .font: NSFont.boldSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize)])
         statusLine.toolTip = m.statusLine
-        // 收音指示列：只在錄製中（levelLine 非空）顯示（spec §4.20.6）
-        levelItem.isHidden = m.levelLine.isEmpty
-        levelItem.attributedTitle = NSAttributedString(
-            string: m.levelLine,
-            attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)])
-        // 失敗類的完整訊息（停止原因、補救指令）狀態列放不下：另給一項可複製（設計審查 N-1）
-        detailItem.isHidden = m.detailText == m.statusLine
+        statusLine.image = stageDotImage(m.appearance)
+        // 即時音量條（spec §4.41.4）；選單展開期間另由 meterTimer 每 levelMeterRefreshSeconds 更新
+        levelMeter.update(system: st?.recentLevels?.system, mic: st?.recentLevels?.mic, muted: m.micMuted)
+        // 告警列：最新告警訊息 40 字截斷、完整放 toolTip；字色深色 attentionText、淺色 attentionTextOnLight（§4.41.3）
+        if let alertText {
+            let dark = isDarkAppearance(menu.effectiveAppearance)
+            alertItem.attributedTitle = NSAttributedString(
+                string: truncatedStatusTitle(alertText, limit: 40),
+                attributes: [.foregroundColor: darkroomColor(dark ? DarkroomColor.attentionText
+                                                                  : DarkroomColor.attentionTextOnLight),
+                             .font: NSFont.menuFont(ofSize: 0)])
+            alertItem.toolTip = alertText
+        }
+        // 失敗類的完整訊息（停止原因、補救指令）狀態列放不下：可複製，或開失敗詳情小視窗（設計審查 N-1、§4.41.5）
         detailItem.toolTip = m.detailText
+        failureDetailItem.isEnabled = stage == .failed
         let ready = startReady()
         startItem.isEnabled = m.canStart && ready
+        // 「開始錄製（用上次的設定）」：最近一次載入的視窗清單恰有一個 ★ 時改「開始錄製：<app 名稱>」（§4.41.3）
+        startItem.title = starredAppName.map { "開始錄製：\($0)" } ?? "開始錄製（用上次的設定）"
         windowsItem.isEnabled = m.canStart && ready
         saveToItem.isEnabled = ready
         let root = effectiveRoot()
@@ -190,50 +328,244 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         pauseItem.isEnabled = m.canControl
         muteItem.state = m.micMuted ? .on : .off
         muteItem.isEnabled = m.canControl
+        let markers = st?.markers ?? 0
+        markItem.title = markers > 0 ? "加標記（已有 \(markers) 個）" : "加標記"
         markItem.isEnabled = m.canControl
         stopItem.isEnabled = m.canStop
+        discardItem.isEnabled = canDiscard(st)
+        // 取消收尾：背景收尾階段＝有可取消的那一場（與狀態列顯示的同一場，spec §4.54.7、修正輪 I7、I8）；
+        // 其他階段照 R3：只在錄製實例真的進了收尾（狀態檔 phase=finalizing）時可按；收尾前的停止階段錄製實例會略過訊號
+        cancelFinalizeItem.isEnabled = stage == .backgroundFinalizing
+            ? backgroundCancelCandidate(jobs) != nil
+            : raw?.phase == .finalizing
+        // 顯示錄製小窗：只在 HUD 可能顯示的外觀有效；已顯示時灰掉
+        showHUDItem.isEnabled = hudEligible(m) && !hud.isShown
         openItem.isEnabled = m.canOpenSession
         lastItem.isEnabled = lastSessionPath() != nil
     }
 
-    /// 圖示＋計時（spec §4.20.4）：圖示一律 template image；錄製中與告警態染紅；計時用等寬數字，每秒更新寬度不抖動。
+    /// MenuItemID → 選單項
+    private func menuItem(_ id: MenuItemID) -> NSMenuItem {
+        switch id {
+        case .status: return statusLine
+        case .levels: return levelItem
+        case .alert: return alertItem
+        case .copyDiagnostics: return detailItem
+        case .failureDetail: return failureDetailItem
+        case .start: return startItem
+        case .recordWindow: return windowsItem
+        case .saveTo: return saveToItem
+        case .pauseResume: return pauseItem
+        case .mute: return muteItem
+        case .mark: return markItem
+        case .stop: return stopItem
+        case .discard: return discardItem
+        case .cancelFinalize: return cancelFinalizeItem
+        case .showHUD: return showHUDItem
+        case .openSession: return openItem
+        case .showLast: return lastItem
+        case .preferences: return prefsItem
+        case .quit: return quitItem
+        }
+    }
+
+    /// 依 menuGroups(stage:) 整份重排：組與組之間一條分隔線（spec §4.41.7）
+    private func rebuildMenu(_ stage: MenuStage) {
+        shownStage = stage
+        menu.removeAllItems()
+        for (i, group) in menuGroups(stage: stage).enumerated() {
+            if i > 0 { menu.addItem(NSMenuItem.separator()) }
+            for id in group { menu.addItem(menuItem(id)) }
+        }
+    }
+
+    /// 標題列左側 10pt 圓點（spec §4.41.3）：待機 textDisabled、準備中與錄製中 recording、暫停 attention、
+    /// 收尾中 processing、失敗 recording 空心環。顏色取自 DarkroomColor；非 template。
+    private func stageDotImage(_ a: MenuBarAppearance) -> NSImage {
+        let hex: String
+        var hollow = false
+        switch a {
+        case .idle: hex = DarkroomColor.textDisabled
+        case .preparing, .recording, .recordingMuted, .recordingAlert: hex = DarkroomColor.recording
+        case .paused: hex = DarkroomColor.attention
+        case .finalizing: hex = DarkroomColor.processing
+        case .failed:
+            hex = DarkroomColor.recording
+            hollow = true
+        }
+        let color = darkroomColor(hex)
+        let d: CGFloat = 10
+        let image = NSImage(size: NSSize(width: d, height: d), flipped: false) { rect in
+            if hollow {
+                let ring: CGFloat = 1.5
+                let p = NSBezierPath(ovalIn: rect.insetBy(dx: ring / 2, dy: ring / 2))
+                p.lineWidth = ring
+                color.setStroke()
+                p.stroke()
+            } else {
+                color.setFill()
+                NSBezierPath(ovalIn: rect).fill()
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    /// 選單列圖示（spec §4.38.3）：待機＝SF Symbol record.circle（template）；其他 7 種＝自繪的錄製膠囊（非 template），
+    /// 形狀、符號、字與顏色一律取自 menuBarCapsuleStyle。toolTip 與 VoiceOver＝menuBarAccessibilityLabel（§4.38.7），
+    /// 不含場次名（toolTip 會出現在螢幕上，使用者可能正在分享整個螢幕；§6 第 135 條）。
     private func updateButton(_ m: MenuBarModel) {
         guard let button = item.button else { return }
-        // 錄製中與告警態用紅色符號（paletteColors、非 template）；其他狀態用 template image，淺色／深色 menu bar 都清楚。
-        // t7（spec §6 第 107 條）：macOS 26 選單列上 template image＋button 染色會畫成透明，不得改回那種寫法。
-        let red = m.state == .recording || m.state == .warning
-        var image = NSImage(systemSymbolName: m.symbolName, accessibilityDescription: m.accessibilityText)
-        if red {
-            image = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
-            image?.isTemplate = false
+        let label = menuBarAccessibilityLabel(appearance: m.appearance, alertBadge: m.alertBadge, spoken: m.spokenDuration,
+                                              alertText: latestAlertMessage(status), status: m.statusLine)
+        let dark = isDarkAppearance(button.effectiveAppearance)
+        let workspace = NSWorkspace.shared
+        let settings = loadMenuBarSettings(home: home)
+        let image: NSImage?
+        if let capsule = capsuleImage(m, dark: dark,
+                                      increaseContrast: workspace.accessibilityDisplayShouldIncreaseContrast,
+                                      reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
+                                      showTimer: settings.showTimer) {
+            image = capsule
         } else {
-            image?.isTemplate = true
+            // 待機的 MenuBarState 是 .idle，symbolName 就是 "record.circle"（R2 的對映保留，§6 第 128、129 條）
+            let symbol = m.state == .idle ? m.symbolName : "record.circle"
+            let idle = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            idle?.isTemplate = true     // 待機跟系統選單列上色（淺色、深色、增加對比都由系統處理）
+            image = idle
         }
+        image?.accessibilityDescription = label
         button.image = image
-        if m.timerText.isEmpty {
-            button.imagePosition = .imageOnly
-            button.attributedTitle = NSAttributedString(string: "")
-        } else {
-            button.imagePosition = .imageLeading
-            let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            let title = NSMutableAttributedString()
-            if m.micMuted, let mic = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil) {
-                mic.isTemplate = true
-                let attachment = NSTextAttachment()
-                attachment.image = mic
-                title.append(NSAttributedString(string: " ", attributes: [.font: font]))
-                title.append(NSAttributedString(attachment: attachment))
-            }
-            title.append(NSAttributedString(string: " " + m.timerText, attributes: [.font: font]))
-            button.attributedTitle = title
+        button.imagePosition = .imageOnly
+        button.attributedTitle = NSAttributedString(string: "")
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+    }
+
+    /// 只重畫圖示（外觀或輔助使用設定改變時）
+    private func redrawButton() {
+        updateButton(model)
+    }
+
+    /// 告警類中 t 最大的一筆的訊息（menuBarAccessibilityLabel 的 alertText；§4.38.7）
+    private func latestAlertMessage(_ st: RecordStatus?) -> String? {
+        st?.warnings.filter { $0.kind.isAlert }.max(by: { $0.t < $1.t })?.message
+    }
+
+    /// 錄製膠囊（U1-C；spec §4.38.3、§4.38.5、design-r3/README.md §2）。待機回 nil（改用 template symbol）。
+    /// dark＝status item 按鈕的 effectiveAppearance；increaseContrast＝系統「增加對比」（深一階的底色由 Core 決定）；
+    /// reduceTransparency＝系統「減少透明度」：外框膠囊（準備中、需處理）沒有底色，這時墊上選單列的參考底
+    /// （menuBarDark／menuBarLight），字的對比與 §4.38.6 的計算一致；實心膠囊本來就不透明。
+    private func capsuleImage(_ m: MenuBarModel, dark: Bool, increaseContrast: Bool, reduceTransparency: Bool,
+                              showTimer: Bool) -> NSImage? {
+        let style = menuBarCapsuleStyle(m.appearance, alertBadge: m.alertBadge, dark: dark,
+                                        increaseContrast: increaseContrast)
+        guard style.shape != .templateSymbol else { return nil }
+        let metric = DarkroomMetric.self
+        let height = CGFloat(metric.capsuleHeight)
+        let padH = CGFloat(metric.capsulePaddingH)
+        let gap = CGFloat(metric.capsuleGap)
+        let dot = CGFloat(metric.capsuleDot)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(DarkroomType.capsule.size),
+                                                    weight: darkroomFontWeight(DarkroomType.capsule.weight))
+        let textColor = darkroomColor(style.text ?? DarkroomColor.onSignal)
+        // 設定「選單列計時」關掉時不畫計時，膠囊照畫（§4.38.3）
+        let timer = style.showsTimer && showTimer ? m.timerText : ""
+        let words = [style.label, timer].filter { !$0.isEmpty }.joined(separator: " ")
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+        let textSize = words.isEmpty ? .zero : (words as NSString).size(withAttributes: attrs)
+        let hasGlyph = style.glyph != .none
+        let split = style.shape == .split
+        // 靜音分段膠囊左段：mic.slash（paletteColors 白、非 template）
+        var mic: NSImage? = nil
+        if split {
+            let config = NSImage.SymbolConfiguration(pointSize: CGFloat(DarkroomType.capsule.size) - 2, weight: .bold)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [darkroomColor(DarkroomColor.onSignal)]))
+            mic = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)?.withSymbolConfiguration(config)
+            mic?.isTemplate = false
         }
-        button.toolTip = m.accessibilityText
-        button.setAccessibilityLabel(m.accessibilityText)
+        let micSize = mic?.size ?? .zero
+        let leftWidth = split ? CGFloat(metric.muteSegmentPaddingLeading) + ceil(micSize.width)
+            + CGFloat(metric.muteSegmentPaddingTrailing) : 0
+        let mainWidth = padH * 2 + (hasGlyph ? dot : 0) + (hasGlyph && !words.isEmpty ? gap : 0) + ceil(textSize.width)
+        let capsuleWidth = leftWidth + mainWidth
+        let badgeD = CGFloat(metric.badgeDiameter)
+        let badgeStroke = CGFloat(metric.badgeStroke)
+        let imageWidth = capsuleWidth + (style.badge ? 2 : 0)    // 角標壓在右上角，略超出膠囊
+        let borderWidth = CGFloat(style.borderWidth)
+        let fill = style.fill.map(darkroomColor)
+        let border = style.border.map(darkroomColor)
+        let backdrop = style.fill == nil && reduceTransparency
+            ? darkroomColor(dark ? DarkroomColor.menuBarDark : DarkroomColor.menuBarLight) : nil
+        let glyph = style.glyph
+        let image = NSImage(size: NSSize(width: imageWidth, height: height), flipped: true) { _ in
+            let rect = NSRect(x: 0, y: 0, width: capsuleWidth, height: height)
+            let inset = rect.insetBy(dx: borderWidth / 2, dy: borderWidth / 2)
+            let radius = inset.height / 2
+            let body = NSBezierPath(roundedRect: inset, xRadius: radius, yRadius: radius)
+            if let backdrop {
+                backdrop.setFill()
+                body.fill()
+            }
+            if let fill {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2).addClip()
+                fill.setFill()
+                rect.fill()
+                if split {
+                    darkroomColor(DarkroomColor.mutedSegment).setFill()
+                    NSRect(x: 0, y: 0, width: leftWidth, height: height).fill()
+                }
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            if let border, borderWidth > 0 {
+                border.setStroke()
+                body.lineWidth = borderWidth
+                body.stroke()
+            }
+            if let mic {
+                let r = NSRect(x: CGFloat(metric.muteSegmentPaddingLeading), y: (height - micSize.height) / 2,
+                               width: micSize.width, height: micSize.height)
+                mic.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+            var x = leftWidth + padH
+            if hasGlyph {
+                textColor.setFill()
+                let y = (height - dot) / 2
+                if glyph == .pause {   // 暫停符號：兩條
+                    let barW: CGFloat = 2.5, barGap: CGFloat = 2.5, barH = dot + 1
+                    let x0 = x + (dot - barW * 2 - barGap) / 2
+                    for bx in [x0, x0 + barW + barGap] {
+                        NSBezierPath(roundedRect: NSRect(x: bx, y: (height - barH) / 2, width: barW, height: barH),
+                                     xRadius: 1, yRadius: 1).fill()
+                    }
+                } else {               // 錄製點（.dot；分段膠囊的右段也是點）
+                    NSBezierPath(ovalIn: NSRect(x: x, y: y, width: dot, height: dot)).fill()
+                }
+                x += dot + (words.isEmpty ? 0 : gap)
+            }
+            if !words.isEmpty {
+                (words as NSString).draw(at: NSPoint(x: x, y: (height - textSize.height) / 2), withAttributes: attrs)
+            }
+            if style.badge {   // 有告警的角標：attention 底、onAttention 描邊（灰階也分得出，WCAG 1.4.1）
+                let r = NSRect(x: imageWidth - badgeD - badgeStroke / 2, y: badgeStroke / 2, width: badgeD, height: badgeD)
+                let p = NSBezierPath(ovalIn: r)
+                darkroomColor(DarkroomColor.attention).setFill()
+                p.fill()
+                darkroomColor(DarkroomColor.onAttention).setStroke()
+                p.lineWidth = badgeStroke
+                p.stroke()
+            }
+            return true
+        }
+        image.isTemplate = false    // 紅、黃、紫都是自訂色，不給系統上色（macOS 26 template＋染色會畫成透明，§6 第 107 條）
+        return image
     }
 
     // MARK: - 開始錄製
 
-    /// 開始與「錄這個視窗」都要 record.defaults.json 讀得到、有 harness（spec §4.20.6）
+    /// 開始與「錄其他視窗」都要 record.defaults.json 讀得到、有 harness（spec §4.20.6）
     private func startReady() -> Bool {
         RecordDefaults.load(defaultsURL)?.harness != nil
     }
@@ -267,7 +599,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         switch action {
         case "start":
             if model.canStart { startRecording() }
-        // 快捷鍵按下後一律發通知回饋（t7，§6 第 105 條：圖示被瀏海擋住時看不到任何反應，使用者會一直重按）
+        // 快捷鍵回饋依 feedbackRoute（spec §4.40.5）：HUD 看得到走 HUD、圖示看得到不發、兩者都看不到才發通知
         case "mute": sendControl(model.micMuted ? .unmute : .mute, action: "mute", feedback: true)
         case "pause": sendControl(model.paused ? .resume : .pause, action: "pause", feedback: true)
         case "mark": sendControl(.mark, action: "mark", feedback: true)
@@ -275,7 +607,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         }
     }
 
-    // MARK: - 錄這個視窗（spec §4.21.4）
+    // MARK: - 錄其他視窗（spec §4.21.4）
 
     private func placeholder(_ title: String) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -312,6 +644,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
 
     private func showWindowRows(_ rows: [WindowListRow]) {
         windowsMenu.removeAllItems()
+        // ★＝meeting != nil（spec §3.8.2）；恰有一個時開始錄製項顯示它的 app 名稱（不放視窗標題）
+        let starred = rows.filter { $0.meeting != nil }
+        starredAppName = starred.count == 1 ? starred[0].app : nil
         guard !rows.isEmpty else {
             windowsMenu.addItem(placeholder("沒有可錄的視窗"))
             return
@@ -389,33 +724,67 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     }
 
     private func sendControl(_ cmd: ControlCommand, action: String, feedback: Bool = false) {
-        guard debouncer.accept(action, at: ProcessInfo.processInfo.systemUptime) else { return }
         let recordPid = readPid(pidURL)
         let availability = controlAvailability(status: readStatus(statusURL), recordPid: recordPid,
                                                pidAlive: recordPid.map(pidAlive) ?? false)
+        performControl(cmd, action: action, availability: availability, feedback: feedback)
+    }
+
+    /// 選單、快捷鍵與 HUD 共用：依 controlAvailability 的結果寫控制檔、送 SIGUSR1（同一動作 1 秒內只算一次）
+    private func performControl(_ cmd: ControlCommand, action: String, availability: ControlAvailability,
+                                feedback: Bool) {
+        guard debouncer.accept(action, at: ProcessInfo.processInfo.systemUptime) else { return }
         switch availability {
         case .unavailable(let message):
-            notify(title: "MeetingRecorder 沒辦法操作錄製", body: message)
+            notify(title: "MeetingRecorder 沒辦法操作錄製", body: message, kind: .failure)
         case .ready(let pid, let runId):
             let written: RecordControl
             do {
                 written = try requestControl(cmd, home: home, runId: runId)
             } catch {
-                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "寫控制檔失敗：\(error.localizedDescription)")
+                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "寫控制檔失敗：\(error.localizedDescription)",
+                       kind: .failure, runId: runId)
                 return
             }
             if kill(pid, SIGUSR1) != 0 {
-                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "通知錄製實例失敗（errno \(errno)）")
+                notify(title: "MeetingRecorder 沒辦法操作錄製", body: "通知錄製實例失敗（errno \(errno)）",
+                       kind: .failure, runId: runId)
             } else if feedback {
-                notify(title: "MeetingRecorder", body: controlFeedback(cmd, markerSeq: written.markerSeq))
+                switch feedbackRoute(hudVisible: hud.isShown, iconVisible: iconObscured != true) {
+                case .hud, .none:   // HUD 或選單列圖示看得到：下一次 refresh 就反映新狀態，不另發通知
+                    break
+                case .notification:
+                    notify(title: "MeetingRecorder", body: controlFeedback(cmd, markerSeq: written.markerSeq),
+                           kind: .hotkeyFeedback, runId: runId)
+                }
             }
         }
     }
 
-    /// 通知在背景送（Notifier.post 最多等 3 秒，不得卡住主執行緒）
-    private func notify(title: String, body: String) {
+    /// 通知在背景送（Notifier.post 最多等 3 秒，不得卡住主執行緒）；依種類分級（spec §4.39.1）
+    private func notify(title: String, body: String, kind: NotificationKind, runId: String? = nil) {
         let log = Logger(path: logURL.path, append: true)
-        DispatchQueue.global(qos: .utility).async { Notifier.post(title: title, body: body, log: log) }
+        let policy = notificationPolicy(kind: kind, runId: runId,
+                                        timeSensitiveAllowed: loadMenuBarSettings(home: home).timeSensitiveAlerts)
+        DispatchQueue.global(qos: .utility).async { Notifier.post(title: title, body: body, log: log, policy: policy) }
+    }
+
+    /// 錄製中出現新告警時發一則通知（spec §4.39.2、§4.39.3）。第一次看到某一場時只記下當下的 warnings、不補發
+    /// （menu bar 中途重開不洗版）；之後只發 newAlertWarnings 的最新一則。內文用固定句，不放場次名與視窗標題。
+    private func notifyNewAlerts(_ st: RecordStatus?) {
+        guard let st else { return }
+        guard alertRunId == st.runId else {
+            alertRunId = st.runId
+            seenWarnings = st.warnings
+            return
+        }
+        let fresh = newAlertWarnings(previous: seenWarnings, current: st.warnings)
+        seenWarnings = st.warnings
+        guard st.phase == .recording, let latest = fresh.max(by: { $0.t < $1.t }) else { return }
+        hud.newAlert(message: latest.message)   // HUD 顯示中才自動展開 8 秒（§4.40.7）
+        let more = fresh.count > 1 ? "（另有 \(fresh.count - 1) 則新告警）" : ""
+        notify(title: "MeetingRecorder 錄製中有告警", body: alertNotificationBody(latest.kind) + more,
+               kind: .alertWarning, runId: st.runId)
     }
 
     // MARK: - 停止、打開場次、上一場成品
@@ -425,12 +794,184 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         NSPasteboard.general.setString(model.detailText, forType: .string)
     }
 
+    /// 停止前先確認 record.pid 真的是持有 record.lock 的錄製實例（spec §4.27.4）：
+    /// 只有 stopTargetDecision 回 .signal(pid:) 才送 SIGTERM；拒絕時說明原因、不送任何訊號。
     @objc private func stopRecording() {
-        guard model.canStop, let st = status else { return }
-        let pid = readPid(pidURL) ?? st.pid
-        guard pid > 0, kill(pid, SIGTERM) == 0 else { return }
-        stopRequestedRunId = st.runId
+        guard model.canStop else { return }
+        let recordPid = readPid(pidURL)
+        let current = readStatus(statusURL)
+        let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
+                                          pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current?.pid,
+                                          command: recordPid.flatMap(executablePath))
+        performStop(decision, current: current)
+    }
+
+    /// 選單與 HUD 共用：只有 stopTargetDecision 回 .signal(pid:) 才送 SIGTERM
+    private func performStop(_ decision: StopTarget, current: RecordStatus?) {
+        guard case let .signal(pid) = decision else {
+            if case .refuse(let why) = decision {
+                Logger(path: logURL.path, append: true).line("\(isoNow()) 停止錄製被拒（\(why.rawValue)）：不送訊號")
+                notify(title: "MeetingRecorder 沒有停止錄製", body: stopRefusalText(why), kind: .failure,
+                       runId: current?.runId)
+            }
+            return
+        }
+        guard kill(pid, SIGTERM) == 0 else { return }
+        stopRequestedRunId = current?.runId
         refresh()
+    }
+
+    // MARK: - 捨棄這次錄製（F2；spec §4.42.2）
+
+    /// 只在錄製中（含暫停）可捨棄；已點過停止、收尾中與之後都不行
+    private func canDiscard(_ st: RecordStatus?) -> Bool {
+        guard model.canStop, let st, st.phase == .recording else { return false }
+        return st.runId != stopRequestedRunId
+    }
+
+    /// 先顯示確認對話框（打開期間錄製照常）；使用者按「捨棄並移到垃圾桶」後，再確認一次停止目標
+    /// （stopTargetDecision，與「停止錄製」同一套），才寫 record.discard.json 並送 SIGTERM。
+    /// 跳過收尾與移到垃圾桶由錄製實例做（§4.42.3）。按「繼續錄製」沒有任何副作用。
+    @objc private func discardRecording() {
+        guard let st = status, canDiscard(st) else { return }
+        let runId = st.runId
+        guard confirmDiscard(spokenDuration: model.spokenDuration) else { return }
+        // 對話框開著的期間錄製可能已經結束或換了一場：只對同一場、仍在錄製中的實例捨棄
+        let current = readStatus(statusURL)
+        guard let current, current.runId == runId, current.phase == .recording else {
+            notify(title: "MeetingRecorder 沒有捨棄錄製", body: "這次錄製已經停止或在收尾，沒有捨棄", kind: .failure,
+                   runId: runId)
+            return
+        }
+        let recordPid = readPid(pidURL)
+        let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
+                                          pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current.pid,
+                                          command: recordPid.flatMap(executablePath))
+        guard case .signal = decision else {
+            performStop(decision, current: current)   // 拒絕：說明原因、不送任何訊號
+            return
+        }
+        do {
+            try writeDiscardRequest(home: home, runId: runId)
+        } catch {
+            notify(title: "MeetingRecorder 沒有捨棄錄製", body: "寫 \(discardRequestFileName) 失敗：\(error.localizedDescription)",
+                   kind: .failure, runId: runId)
+            return
+        }
+        Logger(path: logURL.path, append: true).line("\(isoNow()) 使用者確認捨棄這次錄製：送 SIGTERM")
+        performStop(decision, current: current)
+    }
+
+    // MARK: - 取消收尾（spec §4.41.6）
+
+    /// 收尾中再送一次 SIGTERM：錄製實例的 FinalizeRunner 視為取消（§4.28.6），結果為 phase=failed「收尾已取消」。
+    /// 與停止同一套：只有 stopTargetDecision 回 .signal(pid:) 才送；拒絕時說明原因、不送任何訊號。
+    /// R3x（spec §4.50.5、§6 第 149 條）：背景收尾階段（.backgroundFinalizing）改走 cancelBackgroundFinalize；
+    /// .finalizing 階段照 R3（stopTargetDecision，不加確認框）。
+    @objc private func cancelFinalize() {
+        if menuStage(model) == .backgroundFinalizing {
+            cancelBackgroundFinalize()
+            return
+        }
+        let current = readStatus(statusURL)
+        guard current?.phase == .finalizing else { return }
+        let recordPid = readPid(pidURL)
+        let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
+                                          pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current?.pid,
+                                          command: recordPid.flatMap(executablePath))
+        guard case let .signal(pid) = decision else {
+            if case .refuse(let why) = decision {
+                Logger(path: logURL.path, append: true).line("\(isoNow()) 取消收尾被拒（\(why.rawValue)）：不送訊號")
+                notify(title: "MeetingRecorder 沒有取消收尾", body: stopRefusalText(why), kind: .failure,
+                       runId: current?.runId)
+            }
+            return
+        }
+        Logger(path: logURL.path, append: true).line("\(isoNow()) 使用者取消收尾：送 SIGTERM")
+        guard kill(pid, SIGTERM) == 0 else { return }
+        refresh()
+    }
+
+    /// 背景收尾的取消（Q4 (a)；spec §4.50.5、§4.50.9，修正輪 I8）：
+    /// (1) 重讀每場狀態檔，以 backgroundCancelCandidate 為目標（與狀態列顯示的同一場）；
+    /// (2) NSAlert 顯示 backgroundCancelPrompt（只用場次代號，不放會議名、視窗標題），按「取消收尾」才繼續；
+    /// (3) 確認後再讀一次，候選換了一場 → 記一行、不送訊號；
+    /// (4) backgroundCancelDecision 回 .signal(pid:) 才送 SIGTERM（record.lock 以 retrySeconds: 0 試鎖）。
+    private func cancelBackgroundFinalize() {
+        let log = Logger(path: logURL.path, append: true)
+        let jobs = loadBackgroundJobs(home: home)
+        guard let target = backgroundCancelCandidate(jobs) else {
+            log.line("\(isoNow()) 取消收尾被拒（\(BackgroundCancelRefusal.noJob.rawValue)）：沒有背景收尾中的場次，不送訊號")
+            return
+        }
+        let runId = target.status.runId
+        let others = jobs.filter { job in
+            let s = backgroundJobState(job)
+            return (s == .running || s == .queued) && job.status.runId != runId
+        }.count
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.icon = NSApp.applicationIconImage
+        alert.messageText = "取消收尾？"
+        alert.informativeText = backgroundCancelPrompt(target: target, others: others)
+        // 第一顆＝預設鍵（Return）：不取消
+        alert.addButton(withTitle: "繼續收尾")
+        let cancel = alert.addButton(withTitle: "取消收尾")
+        cancel.hasDestructiveAction = true
+        cancel.keyEquivalent = ""
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        // 確認框開著的期間可能已收完或換了一場：重讀，只對確認框上的那一場送
+        guard let job = backgroundCancelCandidate(loadBackgroundJobs(home: home)), job.status.runId == runId else {
+            log.line("\(isoNow()) 取消收尾：確認後背景收尾的對象已改變（\(backgroundJobLabel(target))），不送訊號")
+            notify(title: "MeetingRecorder 沒有取消收尾", body: "這場的收尾已經結束或換成別場，沒有送出取消",
+                   kind: .failure, runId: runId)
+            return
+        }
+        let jobPid = job.status.pid
+        let decision = backgroundCancelDecision(job: job, recordLockHeld: recordLockHeld(), pidAlive: pidAlive(jobPid),
+                                                command: executablePath(jobPid))
+        guard case let .signal(pid) = decision else {
+            if case .refuse(let why) = decision {
+                log.line("\(isoNow()) 取消收尾被拒（\(why.rawValue)）：不送訊號")
+                notify(title: "MeetingRecorder 沒有取消收尾", body: backgroundCancelRefusalText(why), kind: .failure,
+                       runId: runId)
+            }
+            return
+        }
+        log.line("\(isoNow()) 使用者取消背景收尾（\(backgroundJobLabel(job))）：送 SIGTERM")
+        guard kill(pid, SIGTERM) == 0 else { return }
+        refresh()
+    }
+
+    // MARK: - 顯示錄製小窗、錯誤詳情（spec §4.41.3、§4.41.5）
+
+    /// 本場強制顯示 HUD（不寫設定）；只在 HUD 可能顯示的外觀（錄製中、靜音、告警、暫停）有效
+    @objc private func showHUDForThisRun() {
+        guard let runId = status?.runId, hudEligible(model) else { return }
+        hudForcedRunId = runId
+        refresh()
+    }
+
+    @objc private func showFailureDetail() {
+        let c = failureDetail ?? FailureDetailController()
+        failureDetail = c
+        c.present(FailureDetailContent(detailText: model.detailText, sessionPath: status?.session ?? "",
+                                       logPath: logURL.path))
+    }
+
+    /// record.lock 是否被別的程序持有：試鎖一次（不重試、不阻塞），拿到就立刻放掉。
+    /// 打不開鎖檔（.unavailable）視為沒有持有，寧可不送訊號（spec §4.27.1）。
+    private func recordLockHeld() -> Bool {
+        switch acquireRecordLock(home: home, retrySeconds: 0) {
+        case .acquired(let fd):
+            close(fd)
+            return false
+        case .heldByOther:
+            return true
+        case .unavailable:
+            return false
+        }
     }
 
     @objc private func openSession() {
@@ -452,7 +993,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
 
     @objc private func openPreferences() {
         let p = preferences ?? PreferencesWindowController(home: home, prefsStore: prefsStore,
-                                                           failedHotKeyIDs: failedHotKeyIDs)
+                                                           failedHotKeyIDs: failedHotKeyIDs,
+                                                           onRerunOnboarding: { [weak self] in self?.showOnboarding() })
         preferences = p
         p.present()
     }
@@ -471,31 +1013,76 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let reveal = UNNotificationAction(identifier: revealActionID, title: "在 Finder 顯示", options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: completionCategoryID, actions: [reveal], intentIdentifiers: [], options: []),
+            meetingDetectCategory(),     // F3：「開始錄製」「這場不用」（spec §4.44.3）
         ])
     }
 
-    /// 錄製中第一次 refresh（計時已顯示、寬度已定）時看圖示是否被瀏海擋住或被系統藏起來；是就發一次通知（§6 第 106 條）
-    private func checkObscured(_ st: RecordStatus?) {
-        guard let st, st.phase == .recording, !obscureChecked.contains(st.runId) else { return }
-        obscureChecked.insert(st.runId)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, let window = self.item.button?.window else { return }
-            let frame = window.frame
-            let screen = window.screen ?? NSScreen.main
-            var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
-            if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
-                notchMinX = sc.frame.minX + l.maxX
-                notchMaxX = sc.frame.minX + r.minX
-            }
-            let visible = window.occlusionState.contains(.visible)
-            if statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
-                                  notchMinX: notchMinX, notchMaxX: notchMaxX) {
-                Logger(path: self.logURL.path, append: true)
-                    .line("\(isoNow()) 選單列圖示看不到（x \(Int(frame.minX))–\(Int(frame.maxX))、visible \(visible)）：已提醒使用者")
-                self.notify(title: "MeetingRecorder 正在錄製，但選單列圖示被擋住了",
-                            body: "可按住 ⌘ 把右上角其他圖示拖走騰出空間；暫停 ⌃⌥⌘P、靜音 ⌃⌥⌘M、標記 ⌃⌥⌘B 按下後都會跳通知")
-            }
+    /// HUD 可能顯示的外觀（錄製中、靜音、告警、暫停；spec §4.40.1）
+    private func hudEligible(_ m: MenuBarModel) -> Bool {
+        hudVisible(mode: .always, obscured: false, appearance: m.appearance)
+    }
+
+    /// HUD 顯示與否＝hudVisible（設定的 hudMode、圖示是否被擋住、目前外觀）；收尾中與之後不顯示
+    private func updateHUD(_ m: MenuBarModel) {
+        let settings = loadMenuBarSettings(home: home)
+        // 「顯示錄製小窗」按過的那一場視同 always（不寫設定；換一場就失效；spec §4.41.3）
+        let forced = hudForcedRunId != nil && hudForcedRunId == status?.runId
+        let visible = hudVisible(mode: forced ? .always : settings.hudMode, obscured: iconObscured ?? false,
+                                 appearance: m.appearance)
+        let label = menuBarAccessibilityLabel(appearance: m.appearance, alertBadge: m.alertBadge, spoken: m.spokenDuration,
+                                              alertText: latestAlertMessage(status), status: m.statusLine)
+        hud.update(model: m, status: status, visible: visible, hudPosition: settings.hudPosition,
+                   screen: item.button?.window?.screen, accessibilityLabel: label)
+    }
+
+    /// 開錄後第一次 refresh 時排一次檢查（計時已顯示、寬度已定），之後由 obscuredTimer 每 obscuredCheckSeconds 檢查
+    private func scheduleFirstObscuredCheck(_ st: RecordStatus?) {
+        guard let st, st.phase == .recording, obscureFirstCheckRunId != st.runId else { return }
+        obscureFirstCheckRunId = st.runId
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.checkObscured() }
+    }
+
+    /// 看選單列圖示是否被瀏海擋住或被系統藏起來（spec §4.40.3、§6 第 121 條）。結果交給 obscuredAction：
+    /// auto 模式下狀態改變時顯示／收起 HUD；同一結果也決定快捷鍵回饋走哪條路（feedbackRoute）。
+    private func checkObscured() {
+        guard hudEligible(model) else {
+            iconObscured = nil
+            return
         }
+        guard let window = item.button?.window else { return }
+        let frame = window.frame
+        let visible = window.occlusionState.contains(.visible)
+        guard let obscured = statusIconObscuredNow() else { return }
+        let previous = iconObscured
+        iconObscured = obscured
+        let mode = loadMenuBarSettings(home: home).hudMode
+        switch obscuredAction(previous: previous, current: obscured, mode: mode, recording: true) {
+        case .showHUD:
+            Logger(path: logURL.path, append: true)
+                .line("\(isoNow()) 選單列圖示看不到（x \(Int(frame.minX))–\(Int(frame.maxX))、visible \(visible)）：顯示錄製小窗")
+            updateHUD(model)
+        case .hideHUD:
+            Logger(path: logURL.path, append: true).line("\(isoNow()) 選單列圖示又看得到了：收起錄製小窗")
+            updateHUD(model)
+        case .none:
+            break
+        }
+    }
+
+    /// 選單列圖示此刻是否被瀏海擋住或被系統藏起來（statusItemObscured）；取不到按鈕視窗回 nil。
+    /// 錄製中的定時檢查與首次引導的「選單列空間」一步共用。
+    private func statusIconObscuredNow() -> Bool? {
+        guard let window = item.button?.window else { return nil }
+        let frame = window.frame
+        let screen = window.screen ?? NSScreen.main
+        var notchMinX: CGFloat? = nil, notchMaxX: CGFloat? = nil
+        if let sc = screen, let l = sc.auxiliaryTopLeftArea, let r = sc.auxiliaryTopRightArea {
+            notchMinX = sc.frame.minX + l.maxX
+            notchMaxX = sc.frame.minX + r.minX
+        }
+        let visible = window.occlusionState.contains(.visible)
+        return statusItemObscured(itemMinX: frame.minX, itemMaxX: frame.maxX, visible: visible,
+                                  notchMinX: notchMinX, notchMaxX: notchMaxX)
     }
 
     private func trackCompletion(_ st: RecordStatus?) {
@@ -505,16 +1092,32 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             seenInProgress.insert(st.runId)
         case .done where st.code == 0 && seenInProgress.contains(st.runId) && !completionPosted.contains(st.runId):
             completionPosted.insert(st.runId)
-            if !st.session.isEmpty { prefsStore.update { $0.lastSession = st.session } }
-            postCompletion(st)
+            if st.discarded == true {
+                // 捨棄成功（spec §4.42.3）：場次已移到垃圾桶，不記 lastSession、不給「在 Finder 顯示」
+                postDiscarded(st)
+            } else {
+                if !st.session.isEmpty { prefsStore.update { $0.lastSession = st.session } }
+                postCompletion(st)
+            }
         default:
             break
         }
+    }
+
+    /// 自動前處理（spec §4.23.1、§4.54.5、§6 第 150 條；修正輪 B1）：statuses＝共用狀態檔＋每一個每場狀態檔。
+    /// 去重交給 Core 的 autoPrepCandidates（本程序已排過的 runId 集合 autoPrepEnqueued）；
+    /// lastAutoPrepRunId 照舊寫入（啟動前先記），保留跨重啟語意。一次只跑一個、其餘排隊由 AutoPrepRunner 負責。
+    private func enqueueAutoPrep(_ statuses: [RecordStatus]) {
         let prefs = prefsStore.current
-        if let session = shouldAutoPrep(autoPrep: prefs.autoPrep, status: st, seenInProgressRunIds: seenInProgress,
-                                        lastAutoPrepRunId: prefs.lastAutoPrepRunId) {
-            prefsStore.update { $0.lastAutoPrepRunId = st.runId }   // 啟動前先記，同一場不會跑兩次
-            autoPrep.enqueue(session)
+        let picks = autoPrepCandidates(autoPrep: prefs.autoPrep, statuses: statuses, seenInProgressRunIds: seenInProgress,
+                                       lastAutoPrepRunId: prefs.lastAutoPrepRunId, enqueuedRunIds: autoPrepEnqueued)
+        for st in picks {
+            // 候選已通過 shouldAutoPrep（autoPrepCandidates 內）；這裡取它回傳的 session（同一份判準，結果一定非 nil）
+            guard let session = shouldAutoPrep(autoPrep: true, status: st, seenInProgressRunIds: seenInProgress,
+                                               lastAutoPrepRunId: prefs.lastAutoPrepRunId) else { continue }
+            autoPrepEnqueued.insert(st.runId)
+            prefsStore.update { $0.lastAutoPrepRunId = st.runId }   // 啟動前先記
+            autoPrep.enqueue(session, runId: st.runId)
         }
     }
 
@@ -526,6 +1129,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         content.body = st.session
         content.categoryIdentifier = completionCategoryID
         content.userInfo = ["session": st.session]
+        Notifier.apply(notificationPolicy(kind: .completion, runId: st.runId, timeSensitiveAllowed: false), to: content)
         let req = UNNotificationRequest(identifier: completionNotificationID(runId: st.runId), content: content,
                                         trigger: nil)
         let center = UNUserNotificationCenter.current()
@@ -535,11 +1139,37 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         }
     }
 
+    /// 捨棄完成：以同一個完成通知識別碼取代錄製實例的通知；不放場次名與路徑
+    private func postDiscarded(_ st: RecordStatus) {
+        let log = Logger(path: logURL.path, append: true)
+        let policy = notificationPolicy(kind: .completion, runId: st.runId, timeSensitiveAllowed: false)
+        let id = completionNotificationID(runId: st.runId)
+        DispatchQueue.global(qos: .utility).async {
+            Notifier.post(title: "已捨棄這次錄製", body: "錄音資料夾已移到垃圾桶，可從垃圾桶復原。", log: log, identifier: id,
+                          policy: policy)
+        }
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.actionIdentifier == revealActionID,
            let s = response.notification.request.content.userInfo["session"] as? String, !s.isEmpty {
             DispatchQueue.main.async { revealSessionProduct(s) }
+        }
+        // F3（spec §4.44.3）：「開始錄製」走既有 quick-start（用上次的設定）；「這場不用」本 episode 不再提示
+        if response.notification.request.content.categoryIdentifier == meetingDetectCategoryID {
+            switch response.actionIdentifier {
+            case meetingDetectStartActionID:
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.refresh()
+                    if self.model.canStart { self.startRecording() }
+                }
+            case meetingDetectDismissActionID:
+                DispatchQueue.main.async { [weak self] in self?.meetingDetector?.dismissCurrentEpisode() }
+            default:
+                break
+            }
         }
         completionHandler()
     }
@@ -550,7 +1180,95 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     }
 }
 
-/// 「錄這個視窗」每一列帶的視窗資訊
+// MARK: - HUD 按鈕的執行端（與選單同一條控制路徑；Trigger/HUD.swift）
+
+extension MenuBarController: HUDActions {
+    func hudControl(_ cmd: ControlCommand, action: String, availability: ControlAvailability) {
+        performControl(cmd, action: action, availability: availability, feedback: false)
+    }
+
+    func hudStop(_ decision: StopTarget, status current: RecordStatus?) {
+        guard model.canStop else { return }
+        performStop(decision, current: current)
+    }
+
+    func hudRecordLockHeld() -> Bool {
+        recordLockHeld()
+    }
+
+    func hudExecutablePath(_ pid: Int32) -> String? {
+        executablePath(pid)
+    }
+}
+
+// MARK: - 膠囊與通知的小工具
+
+/// DarkroomColor 的 "#RRGGBB" → sRGB NSColor（Core 不 import AppKit，只放字串；spec §3.20）。格式不對時用 labelColor。
+private func darkroomColor(_ hex: String) -> NSColor {
+    let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+    guard digits.count == 6, let v = UInt32(digits, radix: 16) else { return .labelColor }
+    return NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                   blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+}
+
+/// TypeToken.weight（"regular"／"semibold"／"bold"）→ NSFont.Weight
+private func darkroomFontWeight(_ w: String) -> NSFont.Weight {
+    switch w {
+    case "bold": return .bold
+    case "semibold": return .semibold
+    default: return .regular
+    }
+}
+
+/// 選單列是否深色（含「增加對比」的深色外觀）
+private func isDarkAppearance(_ a: NSAppearance) -> Bool {
+    let match = a.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
+    return match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+}
+
+/// 程序的執行檔完整路徑（等同 ps -o comm=；stopTargetDecision 的 command）；取不到回 nil
+private func executablePath(_ pid: Int32) -> String? {
+    var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+    let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+    return n > 0 ? String(cString: buf) : nil
+}
+
+/// 停止被拒的說明（不含場次名）
+private func stopRefusalText(_ r: StopRefusal) -> String {
+    switch r {
+    case .noLock: return "找不到正在錄製的實例（record.lock 沒有被持有），沒有送出停止"
+    case .noPid: return "找不到 record.pid，沒有送出停止"
+    case .pidDead: return "record.pid 的程序已經不在，請執行 meeting record finish 收尾"
+    case .pidMismatch: return "record.pid 與狀態檔的 pid 不一致，為了安全沒有送出停止"
+    case .notRecorder: return "record.pid 指向的不是 MeetingRecorder，為了安全沒有送出停止"
+    }
+}
+
+/// 背景收尾取消被拒的說明（spec §3.26 BackgroundCancelRefusal；不含場次名）
+private func backgroundCancelRefusalText(_ r: BackgroundCancelRefusal) -> String {
+    switch r {
+    case .recording: return "正在錄製下一場，不能取消上一場的收尾（停止這場後再取消）"
+    case .noJob: return "找不到背景收尾中的場次，沒有送出取消"
+    case .ownerGone: return "這場的收尾程序已經不在，請執行 meeting record finish 收尾"
+    case .pidDead: return "這場收尾的程序已經不在，請執行 meeting record finish 收尾"
+    case .notRecorder: return "這場收尾的 pid 指向的不是 MeetingRecorder，為了安全沒有送出取消"
+    }
+}
+
+/// 告警通知的內文（spec §4.39.3）：依種類用固定句，不帶場次名、視窗標題或檔名
+private func alertNotificationBody(_ kind: WarningKind) -> String {
+    switch kind {
+    case .silenceSystem: return "系統聲音已連續 15 秒幾乎沒有聲音：檢查會議 app 的輸出與音量"
+    case .silenceMic: return "麥克風已連續 15 秒幾乎沒有聲音：檢查麥克風是否被拔掉或靜音"
+    case .black: return "會議視窗畫面已連續 5 秒全黑：確認會議畫面是否正常（錄製照常進行）"
+    case .suspended: return "會議視窗的擷取已暫停超過 5 秒（多半是被最小化）：把視窗還原"
+    case .diskLow: return "磁碟可用空間低於 2 GB，已自動停止並收尾"
+    case .segmentWriteFailed: return "段落寫檔失敗，檔案保留；詳見 record.log"
+    case .deviceChange, .audioFormatChange: return "錄製中有新狀況，打開選單看詳情"
+    }
+}
+
+/// 「錄其他視窗」每一列帶的視窗資訊
 private final class WindowChoice: NSObject {
     let windowID: UInt32
     let bundleID: String

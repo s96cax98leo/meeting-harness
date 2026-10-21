@@ -170,3 +170,88 @@
 - [ ] §4.25.5 第一輪剩下的實機項目（§4.9.1 重錄、§4.3.5、§4.2.3、§4.11.1）
 - [ ] 設計審查（`has_ui=true`，§6 第 92 條）
 - [ ] 閘門 3（R2；與第一輪閘門 3 分開記錄）
+
+## R3 第三輪（2026-10-13；plan §10）
+
+### R3 Plan／Design
+- [x] intent〈R3 第三輪〉與閘門 1（`56aacca`；`run.json` 的 `r3-plan` 已核准；R3-Q1＝A、R3-Q8＝B，其餘預設）
+- [x] design.md〈R3 第三輪設計〉（R3-D1–R3-D20）、spec.md 檔尾〈R3 第三輪〉（修正輪起 §2.4 不再就地更新，`sync` 改頂層 `meeting sync`）（§3.15–§3.20、§4.26–§4.47、§6 第 117–133 條、§7 疑慮 43–51）、plan §10、ADR 四則（`adr-r3-*.md`）、run 目錄 `r3-subtasks.json`
+- [x] Claude Design 出稿 → 使用者挑稿（U1＝C、U2＝C、U4＝A、U5＝A、U6＝A、U7＝A、F2＝A、F3＝A；設計語言「暗房」）→ 存 `design-r3/`（`README.md`＋9 個原始稿；存前後掃名稱：沒有）
+- [x] 補 spec 的 UI 外觀條文（§3.20 `DesignTokens.swift`、§4.38.3／5–8、§4.40.4／7–8、§4.41.2–5／7、§4.42.2、§4.43.5–7／9、§4.44.3–4）、§6 第 129、130 條的新舊字面、新增第 134、135 條、§7 疑慮 52–56；design.md R3-D21（設計稿定案）、R3-D22（字型不打包）
+- [x] 使用者決定（閘門 2，2026-10-13）：疑慮 52 採 (a) 14pt bold、53 用 `NSAlert`、54 字型不打包、57 選 (b) 現在加行事曆 entitlement（§6 第 138 條生效，entitlements 恰為三項）
+- [x] 確認提醒事項權限的 Info.plist 鍵名（§7 疑慮 45；第 3 層合併後解決，`NSRemindersFullAccessUsageDescription`＋舊鍵並存）
+- [x] skeptic 一致性檢查（兩個 skeptic；修正輪 A–J 已改，`design.md` R3-D30）
+- [x] 修正輪複查：改由 integrator 合併後驗證（層檢查 0 問題、verify、相關 unittest、check_rules、名稱掃描）取代，使用者於閘門 2 核准
+- [x] 閘門 2 使用者核准（2026-10-13；`save_run.py approve`，stage 鍵 `r3-design`；含 §6 第 117–139 條的既有測試修改，撤回的 117、122、125 除外；第 136、137、139 條核准，第 138 條依疑慮 57 生效）
+
+### R3 Build（plan §10.1、§10.3；修正輪 6 層）——已完成（2026-10-13）
+
+| 層 | 子任務 | 狀態 | 合併 commit |
+|---|---|---|---|
+| Red | `r3-red-py` | 已合併 | `b4c8ae1` |
+| Red | `r3-red-swift` | 已合併 | `9b347c5` |
+| 1 | `r3-core` | 已合併 | `1d89f0b` |
+| 1 | `r3-vtt-raw` | 已合併 | `0154b59` |
+| 1 | `r3-record-lib` | 已合併 | `a2cb1e8` |
+| 1 | `r3-finalize-guard` | 已合併 | `2751571` |
+| 1 | `r3-sync-measure` | 已合併 | `cb6f933` |
+| 1 | `r3-docs` | 已合併 | `6fd631a` |
+| 2 | `r3-lock` | 已合併（併入原 r3-latency-log） | `db49336` |
+| 2 | `r3-menubar-states` | 已合併（併入原 r3-notify；entitlements 已於第 3 層確認 3 項） | `8f0ccc4` |
+| 2 | `r3-search` | 已合併 | `34f6766` |
+| 2 | `r3-transcript-vad` | 已合併 | `004c83d` |
+| 2 | `r3-annotations` | 已合併 | `79d5b0c` |
+| 3 | `r3-finalize-runner` | 已合併 | `9149dcd` |
+| 3 | `r3-hud` | 已合併 | `c8ebd9c` |
+| 3 | `r3-reminders` | 已合併（entitlement 依疑慮 57 選 (b)） | `ea14cb0` |
+| 4 | `r3-discard` | 已合併 | `8174033` |
+| 4–5 之間 | test_concurrency 判斷條件修正（§6 第 140 條） | 已合併 | `02e547c` |
+| 5 | `r3-segment-scheduler` | 已合併 | `82d0996` |
+| 5 | `r3-menu-stages` | 已合併 | `2c9dcad` |
+| 6 | `r3-sync-compensate` | 已合併 | `54ceee1` |
+| 6 | `r3-onboarding-settings` | 已合併（併入原 r3-meeting-detect） | `3478f69` |
+
+- [x] 每層整合＋plan §10.3 的測試指令（第 4–6 層與 §6 第 140 條修正都已合併，`3478f69`）
+- [x] 第 6 層（於 `3478f69` 加本次文件 commit 實跑）：
+  - [x] 全量 Python：304 項 OK（`TMPDIR` 暫存、`LC_ALL=en_US.UTF-8`、`MH_CLIENT_NAMES_FILE` 指向 run 目錄清單）
+  - [x] Swift：123 項 OK（`tools/MeetingRecorder/Tests/run.sh`，失敗 0）
+  - [x] 建置：`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 回 0
+  - [x] entitlements 恰為 3 項（依疑慮 57 選 (b)、§6 第 138 條）
+  - [x] verify：`bash bin/_lint.sh`（26 個檔）＋`bash bin/meeting.sh doctor` 回 0
+  - [x] `check_rules.py`（`specs/meeting-record/*.md`、`adr/*.md`）與 `--git . 3478f69..HEAD` 通過
+  - [x] 名稱掃描（樹與 commit 訊息）：沒有
+- [x] build 收尾補記（2026-10-13）：各子任務自行決定、spec 未寫的事項補進 spec（R3 段開頭逐條紀錄、§6 第 141 條、§7 疑慮 60–63、§4.47.12–13）與 `design.md` R3-D13
+- **R3 Build 完成（2026-10-13）**。下一步：`sdlc-test`（R3 Test；閘門 3 一併追認 §6 第 141 條、決定 §7 疑慮 61）。
+
+### R3 Test（`r3-field-check`，使用者在場；spec §4.47）
+- [ ] 使用者同意後覆蓋安裝、重開 menu bar
+- [ ] §4.47.1 E4、§4.47.2 E2（決定 S-C 預設）
+- [ ] §4.47.3 HUD `sharingType`、§4.47.4 Time Sensitive
+- [ ] §4.47.5 提醒事項、§4.47.6 F3、§4.47.7 F2、§4.47.8 首次引導
+- [ ] §4.47.9 `keep-segments` 真實多人會議（調 VAD 門檻）
+- [ ] §4.47.10 全套 e2e 迴歸、§4.47.11 設計審查
+- [ ] 閘門 3（R3，stage 鍵 `r3-test`）
+
+### R3 Deliver
+- [ ] 依 plan §10.5 拆包（先問使用者）；推送前掃名稱（只回報有／沒有）
+- [ ] 閘門 4（stage 鍵 `r3-deliver`）
+
+### R3x（背景收尾與收尾平行化，2026-10-17）
+- [x] 閘門 1：intent 核准（run 目錄 `r3x-intent-draft.md`；Q1 併進 R3、Q2–Q4 (a)、Q5 實機時再改 harness、Q6 不做）
+- [x] Design：`spec.md`〈R3 補充輪（R3x）〉、`design.md`〈R3x 設計〉、`plan.md` §11、run 目錄 `r3x-subtasks.json`（7 個子任務、Red＋2 層）
+- [x] Design 修正輪（2026-10-17）：skeptic 的 B1、I1–I11、N2–N5 依主 session 決定改寫（對照見 `design.md` R3x-D15）
+- [x] 閘門 2：§6 第 145–157 條與 `design.md` R3x-D13 五項決定（使用者 2026-10-17 核准）
+- [x] Red：r3x-red-py（7e99e34）、r3x-red-swift（cfbb7a3）；Red 層補字面 03b6f48
+- [x] 第 1 層：r3x-core（2cf0553）、r3x-parallel-finalize（1ef7700）、r3x-cli（5c63d2d）
+- [x] 第 2 層：r3x-capture（469ac1c）、r3x-menubar（c28a4f3）
+- [ ] test：全量回歸、verifier、實機驗收（§4.58）
+- [ ] 閘門 3
+- [ ] Build：Red（`r3x-red-py`、`r3x-red-swift`）→ 第 1 層（`r3x-core`、`r3x-parallel-finalize`、`r3x-cli`）→ 第 2 層（`r3x-capture`、`r3x-menubar`）
+- [ ] Test：§4.58 實機驗收（前置每一步先問使用者）
+
+### R3 Deliver 審查修正（2026-10-21，使用者同意在 R3 內先修再開 PR）
+- [x] 提醒事項去重鍵改為正規化 URL（`Core/ReminderKey.swift`、`R3xReminderKeyTests`；spec R3x §6 第 160 條，待使用者追認）
+- [x] `meeting search` 以相對路徑排序（`test_deliver_fixes.py::TestSearchNestedOrder`）
+- [x] diarize 補段落時連同品質檔一起換（`test_deliver_fixes.py::TestDiarizeQualityFile`）
+- [x] 多音檔不套 VAD（`test_deliver_fixes.py::TestTranscribeMultiAudioNoVad`；spec R3x §6 第 158 條，待使用者追認）
+- [x] spec R3x §6 第 159 條（menu bar 主執行緒試鎖補字面，待使用者追認）

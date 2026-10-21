@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_render.py <場次目錄> [--summary] [--actions] [--vtt] [--all]
+"""_render.py <場次目錄> [--summary] [--actions] [--vtt] [--all] [--annotate-speakers]
 
 由 `<場次>/meeting.record.json`（schema/meeting-record.v1.json）渲染所有對外產物：
 
@@ -8,7 +8,15 @@
                   ——下游知識庫專案 的 tools/meetings.py 是照這幾個標題檢查的。
   actions.csv     交辦事項表（任何試算表/任務系統都吃）
   actions.ics     iCalendar VTODO（RFC 5545），可直接匯入行事曆/提醒事項
-  錄音/transcript.vtt  WebVTT（W3C）逐字稿，帶 <v 講者> 標籤
+  錄音/transcript.vtt  WebVTT（W3C）逐字稿；對得到真名的段落帶 <v 講者> 標籤
+                  （講者歸屬與 _merge_speakers.py 相同）
+
+有錄製資料（錄音/tracks/、markers）時：summary.md 在五個必備段之後加「## 標記」「## 錄製註記」
+（render_recording_sections，地端 summarize-local.py 也呼叫它）；VTT 加 NOTE 註記；
+transcript.quality.json 列出的段落在衍生檔前加「（聽不清）」。沒有標記、沒有事件時輸出與 R2 相同。
+
+--annotate-speakers 只做 錄音/transcript.speakers.md 的後處理（meeting diarize 在
+_merge_speakers.py 之後呼叫）：插註記行與「（聽不清）」，冪等，不產其他檔；沒有註記可加時不改檔。
 
 沒有參數時＝--all（有什麼來源就產什麼）。
 單一真相：只改 meeting.record.json 再重跑本程式，所有產物一致。
@@ -229,48 +237,440 @@ def _ts(sec):
     mnt, s = divmod(rem, 60)
     return f"{int(h):02d}:{int(mnt):02d}:{s:06.3f}"
 
-def render_vtt(sess, path):
-    """逐字稿 → WebVTT。有講者分離就帶 <v 講者>。來源是 raw segments（不改 raw 本身）。"""
+# ── 講者歸屬：與 _merge_speakers.py 用同一套（spec §4.29.2；該檔不改） ──────────
+# 段落→講者以 importlib 載入 bin/_merge_speakers.py 既有的 assign_speaker／load_speaker_segments／UNKNOWN，
+# 它 main() 內的套名判準、MH_MIN_SPEAKER_SEC 併入、退到含重疊那份照抄於下方函式（註解寫出處行號），
+# 一致性由 tests/record/test_r3_vtt_raw.py::test_render_copy_matches_merge 保證。
+_MERGE = None
+
+def _merge_module():
+    """以 importlib 載入 bin/_merge_speakers.py（有 __main__ 保護，匯入不會執行 main）。不寫 .pyc。"""
+    global _MERGE
+    if _MERGE is None:
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location("_merge_speakers", os.path.join(here, "_merge_speakers.py"))
+        mod = importlib.util.module_from_spec(spec)
+        dwb, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.dont_write_bytecode = dwb
+        _MERGE = mod
+    return _MERGE
+
+def load_name_map(path):
+    """speakers.map.json → {代號: 真名}。照抄 _merge_speakers.py:70-82（main 內的套名判準）：
+    dict 值有 apply 就聽 apply，沒有就看 confidence ≥ 0.7；字串值直接套。不夠的不掛名（鐵則 3）。"""
+    name_map = {}
+    if path and os.path.exists(path):
+        raw_map = json.load(open(path, encoding="utf-8"))
+        for k, v in raw_map.items():
+            if isinstance(v, dict):
+                ok = v.get("apply") if "apply" in v else (float(v.get("confidence", 1.0)) >= 0.7)
+                if ok and v.get("name"):
+                    name_map[k] = v["name"]
+            elif v:
+                name_map[k] = v
+    return name_map
+
+def _fold_minor_speakers(ssegs):
+    """照抄 _merge_speakers.py:91-111：MH_MIN_SPEAKER_SEC > 0 時，把總時長過短的講者併入最近的主要講者
+    （只動主要講者段，不動含重疊那份；與原程式相同）。"""
+    min_sec = float(os.environ.get("MH_MIN_SPEAKER_SEC", "0") or 0)
+    if min_sec > 0:
+        tot = {}
+        for sp in ssegs:
+            tot[sp["speaker"]] = tot.get(sp["speaker"], 0.0) + (sp["end"] - sp["start"])
+        major = {s for s, d in tot.items() if d >= min_sec} or set(tot)
+        def nearest_major(seg):
+            best, bd = None, float("inf")
+            for sp in ssegs:
+                if sp["speaker"] not in major:
+                    continue
+                mid = (seg["start"] + seg["end"]) / 2
+                d = 0 if sp["start"] <= mid <= sp["end"] else min(abs(mid - sp["start"]), abs(mid - sp["end"]))
+                if d < bd:
+                    bd, best = d, sp["speaker"]
+            return best
+        for sp in ssegs:
+            if sp["speaker"] not in major:
+                sp["speaker"] = nearest_major(sp) or sp["speaker"]
+
+def speaker_assigner(rec_dir):
+    """回傳 (assign, name_map)；assign(seg) → 講者代號（證據不足為 UNKNOWN）。沒有講者分段時回傳 (None, {})。
+    歸屬本身用 _merge_speakers.assign_speaker（_merge_speakers.py:47）；
+    「主要段判不出來就退到含重疊那份再試一次」照抄 _merge_speakers.py:113-119。"""
+    dp = os.path.join(rec_dir, "diarization.json")
+    if not os.path.isfile(dp):
+        return None, {}
+    ms = _merge_module()
+    ssegs, ssegs_all = ms.load_speaker_segments(dp)          # _merge_speakers.py:20
+    if not ssegs:
+        return None, {}
+    _fold_minor_speakers(ssegs)
+    unknown = ms.UNKNOWN                                       # _merge_speakers.py:45
+
+    def assign(seg):
+        spk = ms.assign_speaker(seg, ssegs)
+        if spk == unknown and ssegs_all:
+            alt = ms.assign_speaker(seg, ssegs_all)   # 退到含重疊那份再試一次
+            if alt != unknown:
+                return alt
+        return spk
+    return assign, load_name_map(os.path.join(rec_dir, "speakers.map.json"))
+
+# ── 錄製註記與標記（spec §3.18、§4.31；design R3-D5） ─────────────────────────
+# 來源：錄音/tracks/record.meta.json（pauseEvents、micMuteEvents、deviceEvents）、錄音/tracks/manifest.json
+# （levels、segments.startedAt）、meeting.record.json.markers（沒有才取 錄音/markers.json）。全部換成成品時間；
+# 錄製時鐘 → 成品時間用 bin/lib/_record_lib.py 的 output_time（與 Swift outputTime 同一份共用向量）。
+# 只寫 transport，不寫裝置名稱、uid、視窗標題（spec §4.31.7）。
+LONG_SILENCE_DB = -60.0      # 兩路都 ≤ 這個值（含 null）才算靜音
+LONG_SILENCE_SEC = 30.0      # 連續 ≥ 這麼久才標「長靜音」
+_RECLIB = None
+
+def _record_lib():
+    """以 importlib 載入 bin/lib/_record_lib.py（不寫 .pyc）。"""
+    global _RECLIB
+    if _RECLIB is None:
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location("_record_lib", os.path.join(here, "lib", "_record_lib.py"))
+        mod = importlib.util.module_from_spec(spec)
+        dwb, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.dont_write_bytecode = dwb
+        _RECLIB = mod
+    return _RECLIB
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+def _mmss(t):
+    total = int(max(round(float(t), 3), 0.0))
+    m, s = divmod(total, 60)
+    return f"{m:02d}:{s:02d}"
+
+def _markers(sess, rec):
+    """[(t, label, speaker 或 None)]，依 t 遞增。meeting.record.json.markers 優先，沒有才取 錄音/markers.json。"""
+    lib = _record_lib()
+    raw = rec.get("markers") if isinstance(rec, dict) else None
+    from_record = isinstance(raw, list)
+    if not from_record:
+        mj = _read_json(os.path.join(sess, "錄音", "markers.json"))
+        raw = mj.get("markers") if isinstance(mj, dict) else mj
+    out = []
+    for m in raw if isinstance(raw, list) else []:
+        if not isinstance(m, dict):
+            continue
+        t, label = lib._num(m.get("t")), m.get("label")
+        if t is None or t < 0 or not isinstance(label, str) or not label.strip():
+            continue
+        spk = m.get("speaker") if from_record else None   # markers.json 沒有講者；不推測（鐵則 3）
+        out.append((t, label.strip(), spk.strip() if isinstance(spk, str) and spk.strip() else None))
+    return sorted(out, key=lambda x: x[0])
+
+def _transport(dev):
+    tr = dev.get("transport") if isinstance(dev, dict) else None
+    return tr if isinstance(tr, str) and tr else "unknown"
+
+def recording_events(sess):
+    """錄製事件（成品時間）：[{kind, start, end, from, to}]，依 start 遞增。
+    kind ∈ pause（end＝start＋暫停長度，不在成品時間軸上）、mute、device（end 為 None）、silence。沒有 tracks 時 []。"""
+    lib = _record_lib()
+    tracks = os.path.join(sess, "錄音", "tracks")
+    meta = _read_json(os.path.join(tracks, "record.meta.json"))
+    manifest = _read_json(os.path.join(tracks, "manifest.json"))
+    meta = meta if isinstance(meta, dict) else {}
+    manifest = manifest if isinstance(manifest, dict) else {}
+    if not meta and not manifest:
+        return []
+    pauses = [e for e in (meta.get("pauseEvents") or []) if isinstance(e, dict)]
+    segs = [s for s in (manifest.get("segments") or []) if isinstance(s, dict)]
+    starts = [x for x in (lib._num(s.get("startedAt")) for s in segs) if x is not None]
+    ends = [x for x in (lib._num(s.get("finishedAt")) for s in segs) if x is not None]
+    first = min(starts) if starts else 0.0
+    lv = manifest.get("levels") if isinstance(manifest.get("levels"), dict) else {}
+    sysl = lv.get("system") if isinstance(lv.get("system"), list) else []
+    mic = lv.get("mic") if isinstance(lv.get("mic"), list) else []
+    window = lib._num(lv.get("windowSeconds")) or lib.LEVEL_WINDOW
+    n = max(len(sysl), len(mic))
+    record_end = max(ends + [n * window if window > 0 else 0.0] + [0.0])
+
+    def ot(t):
+        return lib.output_time(t, first, pauses)
+
+    events = []
+    pairs = lib.pause_pairs(pauses)
+    for p, r in pairs:
+        a = ot(p)
+        events.append({"kind": "pause", "start": a, "end": round(a + max((r if r is not None else record_end) - p, 0.0), 3)})
+
+    open_t = None
+    mute_pairs = []
+    for e in meta.get("micMuteEvents") or []:
+        t = lib._num((e or {}).get("t")) if isinstance(e, dict) else None
+        if t is None:
+            continue
+        if e.get("muted") is True and open_t is None:
+            open_t = t
+        elif e.get("muted") is False and open_t is not None:
+            mute_pairs.append((open_t, t))
+            open_t = None
+    if open_t is not None:
+        mute_pairs.append((open_t, max(record_end, open_t)))
+    for a, b in mute_pairs:
+        oa, ob = ot(a), ot(b)
+        if ob > oa:
+            events.append({"kind": "mute", "start": oa, "end": ob})
+
+    for e in meta.get("deviceEvents") or []:
+        if not isinstance(e, dict) or e.get("kind") != "output":
+            continue
+        t = lib._num(e.get("t"))
+        if t is not None:
+            events.append({"kind": "device", "start": ot(t), "end": None,
+                           "from": _transport(e.get("from")), "to": _transport(e.get("to"))})
+
+    if n and window > 0:
+        def paused(c):
+            return any(p <= c and (r is None or c < r) for p, r in pairs)
+
+        def quiet(v):
+            v = lib._num(v)
+            return v is None or v <= LONG_SILENCE_DB
+
+        runs, start = [], None
+        for i in range(n + 1):
+            ok = i < n and not paused((i + 0.5) * window) and \
+                quiet(sysl[i] if i < len(sysl) else None) and quiet(mic[i] if i < len(mic) else None)
+            if ok and start is None:
+                start = i
+            elif not ok and start is not None:
+                runs.append((start * window, i * window))
+                start = None
+        merged = []
+        for a, b in runs:                       # 成品時間軸上相接的（中間只隔暫停）視為同一段
+            oa, ob = ot(a), ot(b)
+            if merged and oa <= merged[-1][1] + 1e-6:
+                merged[-1][1] = max(merged[-1][1], ob)
+            elif ob > oa:
+                merged.append([oa, ob])
+        for oa, ob in merged:
+            if ob - oa >= LONG_SILENCE_SEC - 1e-6:
+                events.append({"kind": "silence", "start": oa, "end": ob})
+
+    order = {"pause": 0, "mute": 1, "device": 2, "silence": 3}
+    return sorted(events, key=lambda e: (e["start"], order[e["kind"]]))
+
+_NOTE_KIND = {"pause": "暫停（未錄）", "mute": "麥克風靜音", "silence": "長靜音"}
+
+def render_recording_sections(sess, rec=None):
+    """summary.md 的「## 標記」「## 錄製註記」兩段（spec §3.18）；兩段都沒有時回 ""。
+    _render.py 的 summary 與 bin/summarize-local.py 的地端 summary 都呼叫這一個函式。
+    rec 為 None 時讀 <sess>/meeting.record.json（讀不到就只用 錄音/markers.json）。"""
+    if rec is None:
+        rec = _read_json(os.path.join(sess, "meeting.record.json"))
+    out = []
+    marks = _markers(sess, rec)
+    if marks:
+        out.append("## 標記")
+        out += [f"- {_mmss(t)} {label}" + (f"（{spk}）" if spk else "") for t, label, spk in marks]
+        out.append("")
+    evs = recording_events(sess)
+    if evs:
+        out.append("## 錄製註記")
+        for e in evs:
+            if e["kind"] == "device":
+                out.append(f"- {_mmss(e['start'])} 輸出裝置切換：{e['from']} → {e['to']}")
+            else:
+                out.append(f"- {_mmss(e['start'])}–{_mmss(e['end'])} {_NOTE_KIND[e['kind']]}")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n" if out else ""
+
+def annotation_lines(sess, rec=None):
+    """逐字稿衍生檔的註記行：[(成品時間, "〔…〕")]，依時間遞增（spec §3.18 註記行）。"""
+    if rec is None:
+        rec = _read_json(os.path.join(sess, "meeting.record.json"))
+    items = []
+    for e in recording_events(sess):
+        a = _mmss(e["start"])
+        if e["kind"] == "pause":
+            txt = f"〔暫停 {a}–{_mmss(e['end'])}，這段沒有錄〕"
+        elif e["kind"] == "mute":
+            txt = f"〔麥克風靜音 {a}–{_mmss(e['end'])}〕"
+        elif e["kind"] == "silence":
+            txt = f"〔長靜音 {a}–{_mmss(e['end'])}〕"
+        else:
+            txt = f"〔輸出裝置切換：{e['from']} → {e['to']}〕"
+        items.append((e["start"], txt))
+    items += [(t, f"〔{label}〕") for t, label, _ in _markers(sess, rec)]
+    return sorted(items, key=lambda x: x[0])   # sorted 是穩定排序：同時間依事件、標記的先後
+
+def align_index(t, segs):
+    """t 對齊到哪一段（spec §4.31.3）：start ≤ t < end 掛該段；否則掛「start > t 的第一段」（兩段之間掛下一段；
+    離最近一段 > 2 秒的獨立成行，在 VTT 與 speakers.md 都落在同一個位置：下一段之前）；之後沒有段落回 None（放檔尾）。"""
+    for i, s in enumerate(segs):
+        if s["start"] <= t < s["end"]:
+            return i
+    for i, s in enumerate(segs):
+        if s["start"] > t:
+            return i
+    return None
+
+def unclear_flags(rec_dir, segs):
+    """transcript.quality.json 列出的段落（start／end 相同，容許 0.01 秒）→ 每段是否要加「（聽不清）」。"""
+    q = _read_json(os.path.join(rec_dir, "transcript.quality.json"))
+    spans = []
+    for x in q if isinstance(q, list) else []:
+        if isinstance(x, dict) and isinstance(x.get("start"), (int, float)) and isinstance(x.get("end"), (int, float)):
+            spans.append((float(x["start"]), float(x["end"])))
+    return [any(abs(s["start"] - a) <= 0.01 and abs(s["end"] - b) <= 0.01 for a, b in spans) for s in segs]
+
+UNCLEAR = "（聽不清）"
+
+def render_vtt(sess, path, rec=None):
+    """逐字稿 → WebVTT。來源是 raw segments（不改 raw 本身）。
+    講者歸屬與 transcript.speakers.md 相同（speaker_assigner）；只有對得到真名的講者才加 <v 名字>，
+    代號與 SPEAKER_? 一律不加（鐵則 3：不確定的姓名不掛）。
+    錄製註記與標記放 NOTE 區塊（不佔 cue），依 align_index 排在所掛段落的 cue 之前；
+    transcript.quality.json 列出的段落文字前加「（聽不清）」（spec §4.30.6、§4.31.1）。"""
     rec_dir = os.path.join(sess, "錄音")
     segp = os.path.join(rec_dir, "transcript.segments.json")
     if not os.path.isfile(segp):
         return 0
     segs = json.load(open(segp, encoding="utf-8")).get("segments", [])
-    spk = []
-    dp = os.path.join(rec_dir, "diarization.json")
-    if os.path.isfile(dp):
-        spk = json.load(open(dp, encoding="utf-8")).get("segments", [])
-    names = {}
-    mp = os.path.join(rec_dir, "speakers.map.json")
-    if os.path.isfile(mp):
-        raw = json.load(open(mp, encoding="utf-8"))
-        for k, v in raw.items():
-            if isinstance(v, dict):
-                if float(v.get("confidence", 1.0)) >= 0.7 and v.get("name"):
-                    names[k] = v["name"]
-            elif v:
-                names[k] = v
+    assign, names = speaker_assigner(rec_dir)
 
     def who(s):
-        best, bo = None, 0.0
-        for sp in spk:
-            ov = max(0.0, min(s["end"], sp["end"]) - max(s["start"], sp["start"]))
-            if ov > bo:
-                bo, best = ov, sp["speaker"]
-        if best and bo / max(s["end"] - s["start"], 1e-6) >= 0.3:
-            return names.get(best, best)
-        return None
+        if assign is None:
+            return None
+        name = names.get(assign({"start": float(s["start"]), "end": float(s["end"])}))
+        return name if name and not str(name).startswith("SPEAKER_") else None
+
+    cues = [(i, s) for i, s in enumerate(segs, 1) if (s.get("text") or "").strip()]
+    timed = [{"start": float(s["start"]), "end": float(s["end"])} for _, s in cues]
+    unclear = unclear_flags(rec_dir, timed)
+    notes = {}
+    for t, txt in annotation_lines(sess, rec):
+        notes.setdefault(align_index(t, timed), []).append(txt)
 
     lines = ["WEBVTT", ""]
-    for i, s in enumerate(segs, 1):
-        txt = (s.get("text") or "").strip()
-        if not txt:
-            continue
-        v = who(s) if spk else None
+    for k, (i, s) in enumerate(cues):
+        for txt in notes.get(k, []):
+            lines += [f"NOTE {txt}", ""]
+        txt = (UNCLEAR if unclear[k] else "") + (s.get("text") or "").strip()
+        v = who(s)
         lines += [str(i), f"{_ts(s['start'])} --> {_ts(s['end'])}",
                   (f"<v {v}>{txt}" if v else txt), ""]
+    for txt in notes.get(None, []):
+        lines += [f"NOTE {txt}", ""]
     open(path, "w", encoding="utf-8").write("\n".join(lines))
     return len(segs)
+
+_HEADER_RE = re.compile(r"\*\*\[[^\n]*\]\*\* _\( [0-9:]+ \)_")
+_NOTE_RE = re.compile(r"〔[^\n]*〕")
+
+def _rebuild_blocks(rec_dir):
+    """照 _merge_speakers.py:121-134 的併段規則重建 block：[{header, text, raw_text, segs}]。
+    段落與歸屬用 _merge_speakers.load_whisper_segments 與 speaker_assigner（同一套歸屬）；
+    text 已在 transcript.quality.json 列出的段落前加「（聽不清）」。資料不足回 None。"""
+    segp = os.path.join(rec_dir, "transcript.segments.json")
+    if not os.path.isfile(segp):
+        return None
+    assign, names = speaker_assigner(rec_dir)
+    if assign is None:
+        return None
+    ms = _merge_module()
+    wsegs = ms.load_whisper_segments(segp)
+    if not wsegs:
+        return None
+    unclear = unclear_flags(rec_dir, wsegs)
+    blocks, cur = [], None
+    for k, s in enumerate(wsegs):
+        spk = assign(s)
+        piece = (UNCLEAR if unclear[k] else "") + s["text"]
+        if cur and spk == cur["spk"]:
+            cur["raw_text"] += s["text"]
+            cur["text"] += piece
+            cur["segs"].append(k)
+        else:
+            cur = {"spk": spk, "start": s["start"], "raw_text": s["text"], "text": piece, "segs": [k]}
+            blocks.append(cur)
+    for b in blocks:
+        b["header"] = f"**[{names.get(b['spk'], b['spk'])}]** _( {ms.fmt_ts(b['start'])} )_"
+    return blocks, wsegs
+
+def annotate_speakers(sess):
+    """transcript.speakers.md 的後處理（spec §4.31.10）：在所掛段落所屬 block 的標頭行之前插註記行
+    （之後沒有段落的放檔尾），並在 transcript.quality.json 列出的段落文字前加「（聽不清）」。
+    以同一套歸屬重建 block；標頭數對不上時整檔不動，個別 block 的文字對不上時不動該 block，都在 stderr 記一行。
+    先拿掉自己上次插的註記行再重插，所以冪等；除插入的行與「（聽不清）」外其他位元組不變。回傳是否改了檔。"""
+    rec_dir = os.path.join(sess, "錄音")
+    p = os.path.join(rec_dir, "transcript.speakers.md")
+    if not os.path.isfile(p):
+        return False
+    built = _rebuild_blocks(rec_dir)
+    if built is None:
+        return False
+    blocks, wsegs = built
+    orig = open(p, encoding="utf-8").read()
+    lines = orig.split("\n")
+    heads = [i for i, ln in enumerate(lines) if _HEADER_RE.fullmatch(ln)]
+    if len(heads) != len(blocks) or not orig.endswith("\n"):
+        print(f"[render] {p}：block 數與重建結果不同（{len(heads)} ≠ {len(blocks)}），不加註記", file=sys.stderr)
+        return False
+
+    # 拆成：檔頭、各 block（標頭、文字行），去掉上次插入的註記行
+    prefix = lines[:heads[0]]
+    while prefix and _NOTE_RE.fullmatch(prefix[-1]):
+        prefix.pop()
+    bodies = []
+    for j, h in enumerate(heads):
+        last = j == len(heads) - 1
+        region = lines[h + 1:(heads[j + 1] if not last else len(lines) - 1)]
+        if last:
+            k = blocks[j]["text"].count("\n") + 1
+            body, tail = region[:k], region[k:]
+            if any(not _NOTE_RE.fullmatch(x) for x in tail):
+                print(f"[render] {p}：檔尾有無法辨識的行，不加註記", file=sys.stderr)
+                return False
+        else:
+            while region and _NOTE_RE.fullmatch(region[-1]):
+                region.pop()
+            if not region or region[-1] != "":
+                print(f"[render] {p}：第 {j + 1} 個 block 之後的格式與預期不同，不加註記", file=sys.stderr)
+                return False
+            body = region[:-1]
+        bodies.append(body)
+
+    notes = {}
+    for t, txt in annotation_lines(sess):
+        k = align_index(t, wsegs)
+        notes.setdefault(None if k is None else next(j for j, b in enumerate(blocks) if k in b["segs"]), []).append(txt)
+
+    out = list(prefix)
+    for j, (h, b) in enumerate(zip(heads, blocks)):
+        header, body = lines[h], "\n".join(bodies[j])
+        if header == b["header"] and body in (b["raw_text"], b["text"]):
+            body = b["text"]
+        else:
+            print(f"[render] {p}：第 {j + 1} 個 block 與重建結果不同，該 block 不動", file=sys.stderr)
+        out += notes.get(j, []) + [header] + body.split("\n")
+        if j < len(blocks) - 1:
+            out.append("")
+    out += notes.get(None, []) + [""]
+    new = "\n".join(out)
+    if new == orig:
+        return False
+    open(p, "w", encoding="utf-8").write(new)
+    return True
 
 def main():
     if len(sys.argv) < 2:
@@ -290,16 +690,22 @@ def main():
             sys.exit(3)
 
     done = []
+    if "--annotate-speakers" in flags and annotate_speakers(sess):
+        done.append("錄音/transcript.speakers.md（註記）")
     if rec and "--summary" in flags:
         p = os.path.join(sess, "summary.md")
-        open(p, "w", encoding="utf-8").write(render_summary(rec))
+        text = render_summary(rec)
+        extra = render_recording_sections(sess, rec)
+        if extra:                       # 沒有標記、沒有事件時與 R2 逐位元相同（spec §4.31.5）
+            text += "\n" + extra
+        open(p, "w", encoding="utf-8").write(text)
         done.append(f"summary.md（{rec['meeting'].get('type')} 模板）")
     if rec and "--actions" in flags:
         n = render_actions_csv(rec, os.path.join(sess, "actions.csv"))
         render_actions_ics(rec, os.path.join(sess, "actions.ics"))
         done.append(f"actions.csv / actions.ics（{n} 筆）")
     if "--vtt" in flags:
-        n = render_vtt(sess, os.path.join(sess, "錄音", "transcript.vtt"))
+        n = render_vtt(sess, os.path.join(sess, "錄音", "transcript.vtt"), rec)
         if n:
             done.append(f"錄音/transcript.vtt（{n} 段）")
     print(json.dumps({"status": "ok", "session": sess, "rendered": done}, ensure_ascii=False))

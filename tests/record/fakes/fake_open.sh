@@ -17,6 +17,9 @@
 #      stream_died_5    start → phase=failed code=5；preflight → 同 recording
 #      stale_status     寫一份 runId 不相符的 phase=done code=0（record.sh 應忽略）
 #      no_status        什麼都不寫（windows 也不寫 --log），模擬權限問題
+# R3（spec §4.26.7、§6 第 136 條）：FAKE_OPEN_LOCK=1 時（預設關），preflight／start 在寫狀態檔之前模擬錄製實例取
+#   <home>/record.lock（flock LOCK_EX|LOCK_NB，1 秒內每 100 ms 重試）：拿不到就什麼都不寫（app 端判定「已有錄製在跑」）；
+#   拿到就分出一個背景子程序持鎖（最多 60 秒），其 pid 逐行附加到 <FAKE_OPEN_CALLS>.lockholders（測試結束時由測試收掉）。
 # 結束碼一律 0（真的 open 不回傳 app 的結束碼）。
 set -uo pipefail
 
@@ -67,6 +70,35 @@ if sub not in ("preflight", "start") or scenario == "no_status":
 if not home:
     sys.stderr.write("fake_open.sh：沒有 --home 也沒有 MH_RECORD_HOME\n")
     sys.exit(97)
+
+if os.environ.get("FAKE_OPEN_LOCK") == "1":
+    import fcntl
+    os.makedirs(home, exist_ok=True)
+    lfd = os.open(os.path.join(home, "record.lock"), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+    got = False
+    for _ in range(11):
+        try:
+            fcntl.flock(lfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            got = True
+            break
+        except OSError:
+            time.sleep(0.1)
+    if not got:
+        sys.exit(0)
+    child = os.fork()
+    if child == 0:
+        os.setsid()
+        nul = os.open(os.devnull, os.O_RDWR)
+        for k in (0, 1, 2):
+            os.dup2(nul, k)
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            time.sleep(0.2)
+        os._exit(0)
+    holders = (os.environ.get("FAKE_OPEN_CALLS") or os.path.join(home, "fake_open.calls")) + ".lockholders"
+    with open(holders, "a", encoding="utf-8") as fh:
+        fh.write(f"{child}\n")
+    os.close(lfd)
 
 ITEMS = ["signing", "screen_permission", "relaunch_needed", "mic_permission", "system_audio_rms",
          "mic_rms", "disk", "window_exists", "session_collision", "power", "already_running",

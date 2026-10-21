@@ -594,3 +594,160 @@ R2 相對 `meeting-record-r1-baseline` 預計**修改既有檔**（新增檔不�
 - **R2-2 不再細拆**：spec §2.4（封閉清單）、`surface.py`、`test_surface_parsers.py`（直接讀 spec 的 §2.4.3 範例）、`record.sh` 的 help、`meeting.sh` 的 usage、SKILL.md／README 的 `record-cli` 區塊互相一致性檢查（§4.24.1、§4.24.2；第一輪 §5「t5 與 t4、t1 必須同一包」同一理由）；拆開時先合的那包在 `main` 上一定有紅燈。specs 放 R2-2 而不是 R2-1，也是因為 spec §2.4 已更新而 `surface.py` 在 R2-2，放 R2-1 會讓 `test_parse_help_accepts_spec_example` 在兩包之間紅。
 - **代價**：R2-1 審查時 spec 還不在 `main`，PR 說明要附 `feature/meeting-record` 上 `specs/meeting-record/spec.md` R2 節的連結（推送後才有）；R2-1 的 Capture／Trigger 靜態檢查（`test_r2_static.py`）在 R2-2 才進 `main`，R2-2 合併前在整合分支全量跑時一併驗。若要少一次 PR，可兩包合一（31–35 檔，標 important），本 plan 預設分開。
 - **做法**：分支 `feature/meeting-record-r2-app`（從已含第一輪三包的 `main` 開出，揀 r2b、r2d、r2e、r2f）、`feature/meeting-record-r2-cli`（從 R2-1 開出，揀 specs 與 r2a、r2c、r2g）；子任務的 `owns` 不重疊，依檔案範圍揀 commit 不會衝突。每包推送前照 §5.1 做客戶名稱掃描（範圍加上這兩個分支）。推送與開 PR 都是不可逆節點，由使用者當下同意後主 session 執行；本規劃不構成同意。
+
+## 10. R3 第三輪（2026-10-13）：錄製穩定、逐字稿源頭、狀態可見、UI 重設計、會前會後、影音一致
+
+- 上游：`intent.md`〈R3 第三輪〉（閘門 1 已核准）、`design.md`〈R3 第三輪設計〉、`spec.md`〈R3 第三輪〉（§3.15–§3.20、§4.26–§4.47、§6 第 117–139 條；第 117、122、125 條已撤回）；選定設計稿 `design-r3/`（`README.md`＋原始稿）。
+- epic 分支 `feature/meeting-record-r3`（worktree `.worktrees/meeting-record-r3`）；子任務分支 `feature/meeting-record-r3--<id>`、worktree `.worktrees/meeting-record-r3--<id>`（`sdlc-build` 的命名）。`<id>` 是描述性 slug，**不是任務編號**。
+- 大小只寫相對大小 S／M／L（`.claude/teams/rules.md:23`，不寫人天、工時）。
+- 分層由 `depends_on` 機械算出（`sdlc-build`：test 子任務先在 Red 平行做完；其餘每層取「相依都已完成」的子任務）。**同一層的 `owns` 不重疊**；改同一支檔的子任務一律以 `depends_on` 串成序列鏈（`design.md` R3-D1）。
+- 與 intent R3-8 的差異（理由見 `design.md` R3-D1、R3-D30）：新增 `r3-core`（Swift 測試執行器全編全過的限制）與 `r3-docs`（文件先寫）；`r3-lock`、`r3-menubar-states` 因依賴 `r3-core` 移到第 2 層；`SegmentScheduler` 的純狀態機併入 `r3-core`，`r3-segment-scheduler` 只做接線。修正輪：`r3-latency-log` 併入 `r3-lock`、`r3-notify` 併入 `r3-menubar-states`、`r3-meeting-detect` 併入 `r3-onboarding-settings`，共 6 層；新 Python 檔放 `bin/lib/`；`bin/_merge_speakers.py` 不改；`sync` 改頂層 `meeting sync`。
+- **UI 子任務的外觀依據**（2026-10-13 稿已選定，`design.md` R3-D21）：`spec.md` 的外觀條文（§4.38.3、§4.38.5–§4.38.8、§4.40.4、§4.40.7–§4.40.8、§4.41.2–§4.41.5、§4.41.7、§4.42.2、§4.43.5–§4.43.7、§4.43.9、§4.44.3）與 `design-r3/README.md`。設計 token 與膠囊樣式表是 Core 常數（`r3-core` 做、`R3DesignTokenTests` 驗）；AppKit 子任務只畫，不得自訂色值、字級、尺寸或字面。
+
+### 10.1 子任務與分層（修正輪：6 層，`design.md` R3-D30）
+
+| 層 | id | kind | 標題 | 擁有（只能改） | 相依 | 對應 spec | 大小 |
+|---|---|---|---|---|---|---|---|
+| Red | `r3-red-py` | test | Python 紅燈測試、共用向量、替身與 helper 的新增、§6 核准的既有測試修改（含第 129、130、134 條） | `tests/record/test_r3_*.py`（新）、`tests/record/vectors/`（新）、`tests/record/fakes/`（只加：`FAKE_LOCK`、`FAKE_OPEN_LOCK`）、`tests/record/_media.py`、`_helpers.py`（只加：`MH_RECORDER_COMM=bash`）、`_fixtures.py`（只加）、§6 第 118、120、121、123、129、130、134、137（與條件式 138）條列的既有測試檔（`test_r2_static.py`、`test_t7_fixes.py`、`test_static_rules.py`） | — | §4.26–§4.46 的 Python 測試欄；§6 第 118、120、121、123、129、130、134、136、137、138 條 | L |
+| Red | `r3-red-swift` | test | Swift 紅燈測試 | `tools/MeetingRecorder/Tests/R3LockTests.swift`、`R3MenuBarTests.swift`、`R3SegmentSchedulerTests.swift`、`R3SyncTests.swift`、`R3RecordLibVectorTests.swift`、`R3DesignTokenTests.swift`（新）、`Tests/main.swift`（`mrtSuites` 登記）、`Tests/ControlTests.swift`（§6 第 127 條） | — | §3.20；§4.26–§4.44 的 `swift:` 測試欄 | M |
+| 1 | `r3-core` | code | R3 全部 Core 純函式與型別（含 `DesignTokens.swift`） | `tools/MeetingRecorder/Sources/Core/` | — | §3.20；§4.26.1、§4.27.1、§4.28.5、§4.32.1–2（Swift）、§4.35.5–6、§4.36.1–9、§4.36.11、§4.38.1–2、§4.38.5–8、§4.39.1–2、§4.40.1–3、§4.40.6、§4.41.1–2、§4.41.4（`levelFraction`）、§4.41.7、§4.42.1、§4.42.5、§4.43.1、§4.43.4、§4.43.6（`SettingsTab`）、§4.44.1 | L |
+| 1 | `r3-vtt-raw` | code | T1 VTT 同一套歸屬（匯入既有函式＋照抄判準，`_merge_speakers.py` 不改）、`--annotate-speakers` 掛勾、T2 不刪 raw、T3 拿掉無效參數 | `bin/_render.py`、`bin/meeting.sh`、`bin/transcribe.sh`、`.claude/skills/meeting-transcribe/SKILL.md` | — | §4.29.1–5、§4.31.10（掛勾） | M |
+| 1 | `r3-record-lib` | code | `bin/lib/_record_lib.py`（Q9a；`merge_defaults`、`sync`／`clip` CLI） | `bin/lib/_record_lib.py`（新） | — | §3.19、§4.32.1–6 | S–M |
+| 1 | `r3-finalize-guard` | code | 收尾鎖、mkstemp、逐步逾時、unreadable、耗時 log | `bin/_record_finalize.py` | — | §4.28.1–4、§4.28.7–8；§6 第 126、132 條 | M |
+| 1 | `r3-sync-measure` | code | S-A：`--sync-acoustic`、`--sync-player`、`--print-sync-file` | `tests/record/e2e_check.py` | — | §4.35.1–4；§6 第 124 條 | S |
+| 1 | `r3-docs` | doc | README 與 meeting-record SKILL.md（CLI 區塊維持 12 寫法；區塊外寫 `meeting sync`、`search`、`reminders` 與 R3 行為） | `README.md`、`.claude/skills/meeting-record/SKILL.md` | — | §4.34.4、§4.42.6、§4.45.1（文件側）、§4.45.3（meeting-record 部分）、§4.46.4 | S |
+| 2 | `r3-lock` | code | 開錄鎖、preflight 互斥、心跳、`stop` 四項確認（含測試旁路）與等待上限、`write_defaults` 改用 `merge_defaults`；併入 S-B 延遲記錄（原 `r3-latency-log`） | `bin/record.sh`、`tools/MeetingRecorder/Sources/Capture/Commands.swift`、`Capture/PreflightRunner.swift`、`Capture/RecordingSession.swift`、`Capture/AudioDeviceMonitor.swift` | `r3-core`、`r3-record-lib` | §4.26.2–7、§4.27.2–3、§4.27.5–6、§4.35.7、§4.43.2–3；§6 第 119、136 條 | L |
+| 2 | `r3-menubar-states` | code | U1 錄製膠囊 8 種（自繪）、VoiceOver 字面、Q5 的 menu bar 停止確認、`autosaveName`；併入 U3 通知分級（原 `r3-notify`） | `tools/MeetingRecorder/Sources/Trigger/MenuBar.swift`、`Capture/Notifier.swift`、`Trigger/Completion.swift` | `r3-core` | §4.27.4、§4.38.1–4、§4.38.7（接線）、§4.39.3–4；§6 第 128、129、135 條 | M |
+| 2 | `r3-search` | code | F1 `meeting search`；頂層 `meeting sync` 分派；`usage()` 其他指令段 | `bin/meeting.sh`、`bin/lib/_search.py`（新） | `r3-vtt-raw`、`r3-record-lib` | §4.33.1–4、§4.37.1、§4.45.1（`usage()` 側） | S |
+| 2 | `r3-transcript-vad` | code | T4 VAD clip、T5 品質檔與 `transcript.segments.json` 一律輸出 | `bin/transcribe.sh`、`.claude/skills/meeting-transcribe/SKILL.md` | `r3-record-lib`、`r3-vtt-raw` | §4.30.1–5、§4.45.3（meeting-transcribe 部分） | L |
+| 2 | `r3-annotations` | code | T6 標示、T7 標記、T5 的「（聽不清）」（`speakers.md` 後處理）、schema `markers[]`、summary 與地端 summary 兩段 | `bin/_render.py`、`bin/summarize-local.py`、`schema/meeting-record.v1.json`、`.claude/skills/meeting-notes/SKILL.md` | `r3-record-lib`、`r3-vtt-raw` | §4.30.6、§4.31.1–10、§4.45.3（meeting-notes 部分） | L |
+| 3 | `r3-finalize-runner` | code | Q3 Swift 端：總期限、取消、SIGTERM→SIGKILL | `Capture/RecordingSession.swift`、`Capture/FinalizeRunner.swift`（新） | `r3-lock`、`r3-finalize-guard` | §4.28.6 | M |
+| 3 | `r3-hud` | code | U2 HUD（螢幕邊緣標籤、滑過展開、告警加強）、快捷鍵回饋路徑、持續的遮擋偵測 | `Trigger/MenuBar.swift`、`Trigger/HUD.swift`（新） | `r3-menubar-states`、`r3-lock` | §4.40.4–5、§4.40.7–8；§6 第 120、121 條 | M |
+| 3 | `r3-reminders` | code | F5：`meeting reminders`、`_reminders.py`、app `reminders` 子指令、EventKit；entitlements 依 §7 疑慮 57 | `bin/meeting.sh`、`bin/lib/_reminders.py`（新）、`Capture/Reminders.swift`（新）、`Sources/main.swift`、`Resources/Info.plist`、`Resources/MeetingRecorder.entitlements`（只在選 (b) 時改） | `r3-search`、`r3-core` | §3.19、§4.34.1–3；§6 第 138 條（條件式） | M |
+| 4 | `r3-discard` | code | F2 捨棄：確認框（預設「繼續錄製」）、請求檔、跳過收尾、移到垃圾桶 | `Capture/RecordingSession.swift`、`Trigger/MenuBar.swift`、`Trigger/Discard.swift`（新） | `r3-finalize-runner`、`r3-hud` | §4.42.2–4 | M |
+| 5 | `r3-segment-scheduler` | code | Q6：`RecordingSession` 改由 `SegmentScheduler` 驅動、輸出裝置變更事件 | `Capture/RecordingSession.swift` | `r3-discard` | §4.36.10–11；§6 第 137 條 | L |
+| 5 | `r3-menu-stages` | code | U6 依階段選單（分組、新字面、告警列、顯示錄製小窗）、音量條、失敗詳情、取消收尾 | `Trigger/MenuBar.swift`、`Trigger/FailureDetail.swift`（新）、`Trigger/LevelMeterView.swift`（新） | `r3-discard` | §4.41.3–7；§6 第 118、134 條 | M |
+| 6 | `r3-sync-compensate` | code | S-C：mode 解析、整條連續延後混音、`finalize.json` 記錄、提前換段、`--sync-player` 讀補償 | `bin/_record_finalize.py`、`Capture/RecordingSession.swift`、`tests/record/e2e_check.py` | `r3-segment-scheduler`、`r3-lock`、`r3-sync-measure`、`r3-finalize-guard`、`r3-record-lib` | §4.37.2–8 | M |
+| 6 | `r3-onboarding-settings` | code | U4 首次引導 5 步（含 defaults 兩鍵；試錄改暫存目錄）、U5 設定 7 分頁（含 HUD 與 F3 開關）、U7 app 圖示、字型不打包；併入 F3 會議偵測提示（原 `r3-meeting-detect`） | `Trigger/Preferences.swift`、`Trigger/Onboarding.swift`（新）、`Trigger/MenuBar.swift`、`Trigger/MeetingDetect.swift`（新）、`Capture/Notifier.swift`、`Resources/Info.plist`、`Resources/AppIcon.icns`（新）、`tools/MeetingRecorder/build.sh` | `r3-menu-stages`、`r3-menubar-states`、`r3-reminders`、`r3-lock` | §4.43.5–9、§4.44.2–4；§6 第 123、130、139 條 | L |
+
+（表中 `Capture/`、`Trigger/`、`Resources/`、`Sources/main.swift` 都在 `tools/MeetingRecorder/` 底下。）
+
+**序列鏈檢查**（同檔的子任務都有相依路徑，不會同層）：`RecordingSession.swift`＝lock(2) → finalize-runner(3) → discard(4) → segment-scheduler(5) → sync-compensate(6)；`MenuBar.swift`＝menubar-states(2) → hud(3) → discard(4) → menu-stages(5) → onboarding-settings(6)；`Notifier.swift`＝menubar-states(2) → onboarding-settings(6)；`_record_finalize.py`＝finalize-guard(1) → sync-compensate(6)；`e2e_check.py`＝sync-measure(1) → sync-compensate(6)；`_render.py`＝vtt-raw(1) → annotations(2)；`meeting.sh`＝vtt-raw(1) → search(2) → reminders(3)；`transcribe.sh`、meeting-transcribe SKILL.md＝vtt-raw(1) → transcript-vad(2)；`Info.plist`＝reminders(3) → onboarding-settings(6)。
+
+**程式驗證**（同層 `owns` 不重疊、同檔必有相依路徑、層數）：`python3 <run 目錄>/r3-check-layers.py <run 目錄>/r3-subtasks.json`（腳本存在 run 目錄，不進 git）（腳本內容：依 `depends_on` 算層，test 子任務為 Red；目錄型 `owns`（`/` 結尾）以前綴比對；修正輪跑出 6 層、問題數 0；修正輪的 `r3-subtasks.fix.json` 與 UI 版合併成 `r3-subtasks.json` 後重跑，同樣 6 層、問題數 0）。
+
+**拆分理由（能一個做完的不拆兩個）**：`r3-core` 不拆，因為 Swift 測試全編全過；`r3-lock` 把 Q1、Q2、Q5、D14b、R3-Q5 與 S-B 合在一起，因為都改 `record.sh` 或 `RecordingSession.swift` 的同一段開錄流程；`r3-menubar-states` 吸收 U3 通知，因為都是 `MenuBar.swift` 的狀態接線；`r3-annotations` 吸收 T5 的「（聽不清）」，因為同改 `_render.py`；`r3-onboarding-settings` 合併 U4、U5、U7、F3，因為同改 `Info.plist`、`MenuBar.swift`、`Notifier.swift` 且共用設定檔。`r3-segment-scheduler` 與 `r3-sync-compensate` 分開，因為 Scheduler 是熱路徑重構、要單獨用 e2e 迴歸驗，S-C 依賴它。
+
+### 10.2 各子任務要點與完成條件（可機械判定）
+
+共通：只改 `owns`；不改 `progress.md`；verify（`bash bin/_lint.sh && bash bin/meeting.sh doctor`）全綠才 commit；commit 訊息 `test(<Story>)`／`feat(<Story>)`／`docs(<Story>)`，scope 用 `meeting-record`，結尾署名行；commit 前照 intent R3-4 第 8 點掃名稱（只回報有／沒有）。測試指令一律加 `TMPDIR="$(mktemp -d)" LC_ALL=en_US.UTF-8 MH_CLIENT_NAMES_FILE=<run 目錄>/client-names.txt`。
+
+- **r3-red-py**：(1) spec §4.26–§4.46 測試欄列的 Python 測試函式與類別都存在（逐字）；(2) `python3 -m unittest discover -s tests/record -t .` 的輸出沒有 `ImportError`、`ModuleNotFoundError`、`SyntaxError`、`NameError`；(3) 失敗只出現在 §10.3「Red」列允許的測試；(4) §6 第 118、120、121、123、129、130、134、137（與閘門 2 選 (b) 時的 138）條的既有測試修改只動列出的斷言（`git diff` 只碰那些行；`test_r2_docs.py` 不改；`test_static_rules.py` 只改第 137（與條件式 138）條列的斷言，第 129、130 條不動它），commit 內文寫條號；`surface.py`、`test_surface_parsers.py`、`test_cli_dispatch.py`、`test_docs.py`、`test_record_sh.py`、`test_regression.py`、`e2e_check.py` 不改（第 117、122、125 條撤回）；(4a) §6 第 136 條：`fakes/fake_recorder.sh` 只加 `FAKE_LOCK`（預設 1）、`fakes/fake_open.sh` 只加 `FAKE_OPEN_LOCK`、`_helpers.Sandbox.env` 只加 `MH_RECORDER_COMM=bash`，加完後 `test_record_sh`、`test_r2_cli`、`test_regression` 在現行程式下仍綠；(5) `tests/record/vectors/*.json` 存在且是合法 JSON；(6) 新增的 fixture、向量、替身不得含真實名稱（`test_r3_docs.py::test_no_client_names_in_r3_files` 綠、不得 skipped）。
+- **r3-red-swift**：(1) 六支 `R3*Tests.swift`（含 `R3DesignTokenTests.swift`，§4.38.5–§4.38.8、§4.41.4 的 `levelFraction`、§4.43.6 的 `SettingsTab`）存在並登記在 `mrtSuites`；(2) `run.sh` 只因缺 §3.20 名稱而編譯失敗（錯誤訊息都是 `cannot find … in scope` 類）；(3) `ControlTests.swift` 只改 §6 第 127 條那兩處。`R3RecordLibVectorTests` 讀 `r3-red-py` 寫的 `tests/record/vectors/`（同在 Red 層平行做，兩者先照 spec §4.32 的檔名與欄位寫，Red 層整合後才一起可跑）。
+- **r3-core**：`/bin/bash tools/MeetingRecorder/Tests/run.sh` 全綠（含既有 `TriggerTests`、`MenuBarR2Tests`、`RecordsTests` 不改；`R3DesignTokenTests` 綠）；§3.20 的名稱與簽名逐字存在（含 `DesignTokens.swift` 的 34 個色 token 與表列值）；Core 不得 import AppKit。
+- **r3-vtt-raw**：`python3 -m unittest tests.record.test_r3_vtt_raw` 綠（含 `test_render_copy_matches_merge`、`test_annotate_hook_noop`）；`git diff --exit-code 377dd92 -- bin/_merge_speakers.py bin/diarize.sh` 回 0；既有 `test_prompt` 綠；`tests.record.test_regression` 整支綠（不改，修正輪 F）。
+- **r3-record-lib**：`python3 -m unittest tests.record.test_r3_record_lib` 綠（含 `test_bin_lib_syntax`、`test_merge_defaults`）；`bash bin/_lint.sh` 檔數維持 26；`tests.record.test_regression` 整支綠。
+- **r3-finalize-guard**：`python3 -m unittest tests.record.test_r3_finalize_guard tests.record.test_finalize tests.record.test_r2_finalize` 綠。
+- **r3-sync-measure**：`python3 -m unittest tests.record.test_r3_sync_measure tests.record.test_e2e_check tests.record.test_r2_e2e_check` 綠（後兩者一字不改）。
+- **r3-docs**：`python3 -m unittest tests.record.test_r3_docs` 綠；`tests.record.test_docs` 整支綠（不改）；`test_r2_docs` 綠（不改；選單新名稱與 R2 舊稱並列，§6 第 134 條）。
+- **r3-lock**（併入原 `r3-latency-log`）：`python3 -m unittest tests.record.test_r3_lock tests.record.test_record_sh tests.record.test_r2_cli tests.record.test_concurrency tests.record.test_static_rules` 綠（含 `test_stop_wait_limit_covers_finalize_deadline`、`test_comm_override_needs_record_open`、`test_fake_recorder_holds_lock`；`test_record_sh`、`test_r2_cli` 斷言不改，靠 §6 第 136 條的替身與旁路）；`cmd_stop` 不含 `2 * max(0`；`test_r3_app_static` 的 `LockStatic`、`LatencyLogStatic` 綠；`run.sh` 綠；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 成功；`tests.record.test_regression` 整支綠。
+- **r3-menubar-states**：`test_r3_app_static.MenuBarStatesStatic` 綠（含 `test_capsule_drawing`）；`test_r2_static.test_trigger_status_item_variable_length` 綠（§6 第 129 條後）；`test_static_rules.test_menubar_uses_template_image`、`::test_start_item_shows_hotkey`、`::test_menubar_sets_accessibility_label` 綠（不改）；`grep -c systemRed tools/MeetingRecorder/Sources/Trigger/MenuBar.swift` 為 0；`run.sh` 綠；建置成功。
+- **r3-search**：`python3 -m unittest tests.record.test_r3_search tests.record.test_cli_dispatch tests.record.test_surface_parsers` 綠（含 `test_meeting_sync_cli`；後兩支不改）；`bash bin/_lint.sh` 檔數維持 26；`tests.record.test_regression` 整支綠。
+- **r3-transcript-vad**：`python3 -m unittest tests.record.test_r3_transcript_vad` 綠；既有轉錄相關測試綠。
+- **r3-annotations**：`python3 -m unittest tests.record.test_r3_annotations tests.record.test_r3_vtt_raw` 綠（含 `test_local_summary_sections`、`test_speakers_post_process`、`test_speakers_post_process_idempotent`；`test_downstream_missing_sections` 不得 skipped；下游專案只讀）；`git diff --exit-code 377dd92 -- bin/_merge_speakers.py bin/diarize.sh` 回 0；`tests.record.test_regression` 整支綠（不改，修正輪 F）。
+- **r3-finalize-runner**：`test_r3_app_static.FinalizeRunnerStatic` 綠；`run.sh` 綠；建置成功。
+- **r3-notify → 併入 `r3-menubar-states`**（修正輪 H）：`r3-menubar-states` 的完成條件另加 `test_r3_app_static.NotifyStatic` 綠、建置後 `codesign -d --entitlements -` 的項數符合 `spec.md` §7 疑慮 57 的閘門 2 決定；owns 另加 `Capture/Notifier.swift`、`Trigger/Completion.swift`。
+- **r3-reminders**：`python3 -m unittest tests.record.test_r3_reminders tests.record.test_r3_record_lib tests.record.test_static_rules` 綠、`test_r3_app_static.RemindersStatic` 綠；`bash bin/_lint.sh` 檔數維持 26、`tests.record.test_regression` 整支綠；開工前先確認 §7 疑慮 45 的 plist 鍵名；entitlements 依 §7 疑慮 57 的決定（(a) `MeetingRecorder.entitlements` 不改、建置後恰兩項；(b) 加 `com.apple.security.personal-information.calendars`、建置後恰三項）。
+- **r3-latency-log → 併入 `r3-lock`**（修正輪 H）：條件已列在 `r3-lock`（`LatencyLogStatic`、`test_static_rules` 整支）。
+- **r3-hud**：`test_r3_app_static.HudStatic` 綠（`test_panel_shape`、`test_edge_tab`、`test_alert_emphasis`、`test_accessibility_modes`、`test_feedback_route_used`）；`test_t7_fixes` 綠（§6 第 120、121 條後）；`HUD.swift` 沒有 `systemRed`。
+- **r3-discard**：`test_r3_app_static.DiscardStatic` 綠（`test_confirm_then_request` 驗 §4.42.2 的四段字面與按鈕順序）；Swift 原始碼對場次路徑沒有 `removeItem(`。
+- **r3-menu-stages**：`test_r3_app_static.MenuStagesStatic` 綠（含 `test_titles_r3`）；`test_r2_static.test_trigger_menu_items_r2` 綠（§6 第 118、134 條後）；`test_static_rules.test_start_item_shows_hotkey`、`::test_status_title_uses_label_color` 綠（不改）。
+- **r3-segment-scheduler**：`test_r3_app_static.SegmentSchedulerStatic` 綠；`run.sh` 綠；`python3 -m unittest tests.record.test_static_rules tests.record.test_review_fixes` 綠；`python3 -m unittest tests.record.test_r2_static -k test_capture_` 綠（§6 第 137 條改綁後；`RecordingSession.swift` 不得為了湊字面保留 `pauseRoute(`、`openReason(`、`routeSample(` 呼叫；既有的段落靜態檢查不得因搬移而失敗，失敗就改程式）。
+- **r3-onboarding-settings**：`test_r3_app_static.OnboardingSettingsStatic` 綠（含 `test_no_bundled_fonts`）；`test_r2_static` 全部綠（§6 第 123、130、137 條後）；建置後 bundle 內有 `AppIcon.icns`、`iconutil --convert iconset` 展開恰 10 張（§4.43.7）、entitlements 項數符合 §7 疑慮 57 的決定。
+- **r3-sync-compensate**：`python3 -m unittest tests.record.test_r3_sync_compensate` 綠（含 `test_constant_delay_no_gaps`、`test_delay_decrease_trims_overlap`）、`test_r3_app_static.SyncCompensateStatic` 綠；`test_finalize`、`test_r2_finalize`、`test_e2e_check`、`test_r2_e2e_check` 綠。
+- **r3-meeting-detect → 併入 `r3-onboarding-settings`**（修正輪 H）：`r3-onboarding-settings` 的完成條件另加 `test_r3_app_static.MeetingDetectStatic` 綠（字面「錄這個會議？」「開始錄製」「這場不用」）、`Trigger/Onboarding.swift` 含 `temporaryDirectory` 與 `meeting-harness-trial-` 且每個 `removeItem(` 只作用在試錄路徑（§6 第 139 條）、建置後 entitlements 項數符合 §7 疑慮 57 的決定（取代「恰為兩項」）；owns 另加 `Trigger/MeetingDetect.swift`、`Capture/Notifier.swift`；全量 Python 與 Swift 綠由第 6 層整合跑。
+
+### 10.3 每層整合後的測試指令（integrator 照此跑，一律加 `TMPDIR="$(mktemp -d)" LC_ALL=en_US.UTF-8 MH_CLIENT_NAMES_FILE=/Users/yuktang/Documents/Agent/meeting-harness/_tpm/runs/20261010-sdlc-meeting-record/client-names.txt`）
+
+（修正輪：6 層。`tests.record.test_regression`、`test_surface_parsers`、`test_cli_dispatch`、`test_docs`、`test_record_sh` 不改，自 Red 層起每一層都必須綠。）
+
+| 層 | 合併後必須回 0 的指令 | 預期仍紅、只記錄不阻擋 |
+|---|---|---|
+| Red | `bash bin/_lint.sh && bash bin/meeting.sh doctor`；`python3 -m unittest tests.record.test_e2e_check tests.record.test_r2_e2e_check tests.record.test_finalize tests.record.test_regression tests.record.test_surface_parsers tests.record.test_cli_dispatch tests.record.test_docs tests.record.test_record_sh tests.record.test_r2_cli` | 全量 Python：失敗只在 `test_r3_*`（全部）、`test_r2_static` 的 `test_capture_pause_gate_before_maxend`、`test_capture_uses_core_pause_functions`（§6 第 137 條，等 `SegmentScheduler.swift`）、`test_trigger_menu_items_r2`、`test_defaults_single_writer`、`test_trigger_status_item_variable_length`、`test_trigger_preferences_window`（§6 第 129、130 條）、`test_t7_fixes` 的兩支（§6 第 120、121 條）、`test_static_rules.test_segment_writer_uses_assetwriter`（§6 第 137 條）、選 (b) 時的 `test_static_rules.test_entitlements_audio_and_apple_events`（§6 第 138 條）、`test_r3_app_static` 各類別裡 UI 設計稿條文（§6 第 129、130、134、135 條）的測試；`run.sh`（只因缺 §3.20 名稱） |
+| 第 1 層 | 上一列全部；`/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest tests.record.test_r3_vtt_raw tests.record.test_r3_record_lib tests.record.test_r3_finalize_guard tests.record.test_r3_sync_measure tests.record.test_r3_docs`；`python3 -m unittest tests.record.test_r2_static -k test_capture_`；`python3 -m unittest tests.record.test_static_rules -k test_segment_writer_uses_assetwriter`；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh`；verify | 全量 Python：失敗只在第 2 層以後子任務的 `test_r3_*` 與 `test_r3_app_static` 各類別、上一列的 `test_r2_static` 四支、`test_t7_fixes` 兩支、條件式的 entitlements 測試 |
+| 第 2 層 | 上一層全部；`python3 -m unittest tests.record.test_r3_lock tests.record.test_r3_search tests.record.test_r3_transcript_vad tests.record.test_r3_annotations tests.record.test_concurrency tests.record.test_static_rules`；`test_r3_app_static` 的 `LockStatic`、`LatencyLogStatic`、`MenuBarStatesStatic`、`NotifyStatic`；`python3 -m unittest tests.record.test_r2_static.TestR2Static.test_trigger_status_item_variable_length`（§6 第 129 條）；建置後 entitlements 項數依 §7 疑慮 57 的決定（(a) 兩項；(b) 在第 3 層 `r3-reminders` 之前仍是兩項） | `test_r3_reminders`、`test_r3_sync_compensate`、`test_r3_app_static` 其餘類別、`test_r2_static` 三支（`menu_items_r2`、`defaults_single_writer`、`preferences_window`）、`test_t7_fixes` 兩支、條件式的 entitlements 測試 |
+| 第 3 層 | 上一層全部；`python3 -m unittest tests.record.test_r3_reminders`；`FinalizeRunnerStatic`、`HudStatic`、`RemindersStatic`；`python3 -m unittest tests.record.test_t7_fixes`；建置後 entitlements 項數符合 §7 疑慮 57 的決定（含條件式的 entitlements 測試） | `test_r3_sync_compensate`、第 4 層以後類別、`test_r2_static` 三支 |
+| 第 4 層 | 上一層全部；`DiscardStatic` | `test_r3_sync_compensate`、第 5 層以後類別、`test_r2_static` 三支 |
+| 第 5 層 | 上一層全部；`MenuStagesStatic`、`SegmentSchedulerStatic`；`test_r2_static.test_trigger_menu_items_r2` 與 `-k test_capture_` | `test_r3_sync_compensate`、`OnboardingSettingsStatic`、`MeetingDetectStatic`、`SyncCompensateStatic`、`test_r2_static.test_defaults_single_writer`、`test_r2_static.test_trigger_preferences_window` |
+| 第 6 層 | `python3 -m unittest discover -s tests/record -t .`；`/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest discover -s tests/record -t . -k test_no_client_names`（不得 skipped）；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 並以 `codesign -d --entitlements -` 確認項數符合 §7 疑慮 57 的決定；`python3 .claude/teams/tools/check_rules.py --git . 377dd92..feature/meeting-record-r3`；verify | 無；任何一支不綠就停下交人 |
+
+### 10.4 不屬於任何子任務、需要主 session 或使用者做的事（R3）
+
+- **閘門 2 前**（已完成，2026-10-13）：Claude Design 出稿 → 使用者挑稿（`r3-design-choices.md`）→ 存 `specs/meeting-record/design-r3/`（存前後掃名稱：沒有）→ spec 的外觀條文、§6 第 129、130、134、135 條補完（`design.md` R3-D21、R3-D22）。
+- **閘門 2**（2026-10-13 已核准：第 118–139 條全部核准；疑慮 52 (a)、53 `NSAlert`、54 不打包、57 (b) 現在加 entitlement，凡「恰為兩項」讀作「恰為三項」）：使用者核准 spec §6 第 118–139 條（第 117、122、125 條已撤回；含既有測試修改與第 136、137、139 條），並決定 §7 疑慮 52–54 的預設選項（膠囊字放大、F2 用 `NSAlert`、字型不打包）與疑慮 57（entitlement，§6 第 138 條是否生效），`save_run.py approve`，stage 鍵 `r3-design`。
+- `r3-reminders` 開工前查 Apple 文件確認提醒事項權限的 plist 鍵名（§7 疑慮 45）。
+- **test 段 `r3-field-check`**（使用者在場）：`spec.md` §4.47 全部；結果寫 run 目錄；S-C 預設由使用者依 §4.47.2 決定（改預設要另列 §6）。
+- 推送前照 `plan.md §5.1` 的做法掃 `origin/main..feature/meeting-record-r3`（只回報有／沒有）；推送、開 PR 一律等使用者當下同意。
+
+### 10.5 拆 PR 規劃（R3）
+
+修改的既有檔遠超過 15 個，建議拆兩包（主 session 在 deliver 段依實際 diff 決定，先問使用者）：
+
+- **R3-1（CLI、Python、逐字稿、文件、specs）**：`bin/`、`schema/`、`tests/record/`、`.claude/skills/`、`README.md`、`specs/meeting-record/`。
+- **R3-2（app）**：`tools/MeetingRecorder/`（Core、Capture、Trigger、Resources、Tests、build.sh）。
+- 依賴：R3-2 的 `r3-lock` 與 R3-1 的 `record.sh` 屬同一個子任務、測試互相引用，所以兩包要依序合併（R3-1 先），或改成一包；由使用者決定。
+
+## 11. R3 補充輪（R3x，2026-10-17）：背景收尾與收尾平行化
+
+- 上游：run 目錄 `r3x-intent-draft.md`（閘門 1 已核准，2026-10-17）、`design.md`〈R3x 設計〉R3x-D1–R3x-D15、`spec.md`〈R3 補充輪（R3x）〉（R3x-§2.2、§3.21–§3.27、§4.48–§4.58、§6 第 145–157 條、§7 疑慮 64–77；修正輪對照見 design R3x-D15）。
+- 併進 R3 交付（intent Q1）：子任務分支 `feature/meeting-record-r3--x-<名稱>`、worktree `.worktrees/meeting-record-r3--x-<名稱>`，整合到 `feature/meeting-record-r3`。`<名稱>` 是描述性 slug，**不是任務編號**。
+- 子任務定義檔：run 目錄 `r3x-subtasks.json`（格式同 `r3-subtasks.json`，另加 `layer`、`branch`）；build 段的共同規則沿用 run 目錄 `r3-build-common.md`（契約來源改讀本節與 spec〈R3x〉；基準 commit 以派工單為準）。
+- 大小只寫相對大小 S／M／L（不寫人天、工時）。
+- **A（背景收尾）與 B（收尾平行化）互不相依**：B 只動 `bin/_record_finalize.py`，A 不碰它；兩條線在 Red 與第 1 層都可以平行。
+- **先 Red、再 Green**：Red 層兩個測試子任務先把 §4.48–§4.57 的測試寫好並合進整合分支，Green 層的子任務以那些紅燈測試為驗收。
+
+### 11.1 子任務與分層（3 層：Red、1、2）
+
+| 層 | id | kind | 標題 | 擁有（只能改） | 相依 | 對應 spec | 大小 |
+|---|---|---|---|---|---|---|---|
+| Red | `r3x-red-py` | test | Python 紅燈測試與兩支新替身 | `tests/record/test_r3x_background.py`、`test_r3x_parallel_finalize.py`、`test_r3x_app_static.py`、`test_r3x_docs.py`（新）、`tests/record/fakes/fake_bg_finalizer.sh`、`fakes/parallel_ffmpeg.py`（新） | — | §3.27；§4.48–§4.57 的 Python 測試欄 | M |
+| Red | `r3x-red-swift` | test | Swift 紅燈測試 | `tools/MeetingRecorder/Tests/R3xBackgroundTests.swift`（新）、`Tests/main.swift`（只加一列，§6 第 154 條） | — | §3.26；§4.48–§4.54 的 `swift:` 測試欄 | S |
+| 1 | `r3x-core` | code | Core 純函式與型別（`BackgroundFinalize.swift`、`RecordStatus`／`MenuStage`／`MenuBarModel` 的增補；修正輪的 `backgroundEntryDecision`、`queueWaitStep`、`autoPrepCandidates`、`backgroundJobLabel`、`backgroundCancelPrompt`、`.orphaned`） | `tools/MeetingRecorder/Sources/Core/` | — | §3.26；§4.48.1–3、§4.48.8、§4.49.1–2、§4.50.4、§4.50.7–8、§4.53.2–3、§4.54.1–3、§4.54.5 | M |
+| 1 | `r3x-parallel-finalize` | code | B：分析與正規化平行（`run_ordered`、中止派工、`SegmentAborted`、只由 worker 回收）、`MH_FINALIZE_JOBS`、錄製中降為 2、libx264 串行、依賴鏈、最小段號失敗、SIGTERM 重掃、`say` 加鎖、`MH_FINALIZE_WAIT_LOCK`、進度行 | `bin/_record_finalize.py` | — | §3.25；§4.55（含 §4.55.18–22）；§6 第 152、153、156 條 | M–L |
+| 1 | `r3x-cli` | code | `record.sh` 的 stop／status／finish 與文件 | `bin/record.sh`、`README.md`、`.claude/skills/meeting-record/SKILL.md` | — | §4.48.7、§4.49.5–6、§4.50.3、§4.51（含 §4.51.9–13）、§4.52（含 §4.52.8–9）、§4.53.1、§4.56（§4.56.2 視決定 5）；§6 第 146、147 條 | M |
+| 2 | `r3x-capture` | code | 錄製實例的背景收尾協定與條件式寫入 | `tools/MeetingRecorder/Sources/Capture/RecordingSession.swift`、`Capture/PreflightRunner.swift`、`Capture/Commands.swift`、`Capture/FinalizeRunner.swift` | `r3x-core` | §3.23、§3.24；§4.48.4–6、§4.49.3–4、§4.50.1–2、§4.50.6、§4.53.4；§6 第 145、153、156 條（傳 `MH_FINALIZE_WAIT_LOCK`） | M |
+| 2 | `r3x-menubar` | code | menu bar：疊加、新階段、取消（確認框、對象與顯示同一場）、自動前處理去重、會議偵測 | `tools/MeetingRecorder/Sources/Trigger/MenuBar.swift` | `r3x-core` | §4.50.5、§4.50.9、§4.54.4–7；§6 第 149、150、151、155、157 條 | M |
+
+**同層 `owns` 不重疊、同檔必有相依路徑**：以 run 目錄的 `r3-check-layers.py` 驗（`python3 <run 目錄>/r3-check-layers.py <run 目錄>/r3x-subtasks.json`；設計段實跑：Red、1、2 三層，問題數 0）。
+
+**拆分理由**：
+- `r3x-core` 單獨先做：`Tests/run.sh` 把 `Sources/Core/*.swift` 與全部測試一起編，Core 名稱不存在時整個 Swift 套件都編不過（R3 的 `r3-core` 同例）；Capture 與 menu bar 都只做接線。
+- `r3x-capture` 與 `r3x-menubar` 分開：檔案不重疊、都只依賴 Core，可在第 2 層平行。
+- `r3x-cli` 把 `record.sh` 與兩份文件合在一起：文件說明的就是 `record.sh` 的新行為，同一個人寫比較不會對不上；它只依賴 spec 的協定（§3.23、§3.24）與 Red 層的替身，所以排在第 1 層。
+- `r3x-parallel-finalize` 不拆：分析與正規化的平行共用同一套平行度、失敗與 SIGTERM 處理。
+
+### 11.2 各子任務要點與完成條件（可機械判定）
+
+共通：只改 `owns`；不改 `progress.md`；**不改任何既有測試與既有替身**；verify（`bash bin/_lint.sh && bash bin/meeting.sh doctor`）全綠才 commit；`bin/` 頂層檔數維持 26；commit 訊息 `test(meeting-record)`／`feat(meeting-record)`／`docs(meeting-record)`，內文寫 spec 節號，結尾署名行；commit 前以 `client-names.txt` 掃樹與 commit 訊息（只回報有／沒有）。測試指令一律加 `TMPDIR="$(mktemp -d)" LC_ALL=en_US.UTF-8 MH_CLIENT_NAMES_FILE=/Users/yuktang/Documents/Agent/meeting-harness/_tpm/runs/20261010-sdlc-meeting-record/client-names.txt`。
+
+- **r3x-red-py**：(1) §4.48–§4.57 測試欄的 Python 測試函式與 `test_r3x_app_static.py` 的三個類別（`BackgroundCaptureStatic`、`StatusWriterStatic`、`MenuBarBackgroundStatic`）都存在（逐字）；(2) 兩支替身照 §3.27 實作，`fake_bg_finalizer.sh` 可執行、`parallel_ffmpeg.py` 可執行；(3) 全量 Python 的輸出沒有 `ImportError`、`ModuleNotFoundError`、`SyntaxError`、`NameError`；(4) 失敗只出現在 `test_r3x_*`；(5) `git diff --exit-code ac88ad4 -- tests/record/` 只多出 owns 列的新檔（`git diff --diff-filter=M --name-only ac88ad4 -- tests/` 為空）。
+- **r3x-red-swift**：(1) `R3xBackgroundTests.swift` 有 §4.48–§4.54 的 `swift:` 測試函式（逐字），陣列名 `mrtR3xBackgroundTests`；(2) `Tests/main.swift` 只多一列 `("R3xBackgroundTests", mrtR3xBackgroundTests),`；(3) `run.sh` 只因缺 §3.26 名稱而編譯失敗（`cannot find … in scope` 類，或新 enum case、新欄位不存在的錯誤）。
+- **r3x-core**：`/bin/bash tools/MeetingRecorder/Tests/run.sh` 全綠（既有 `TriggerTests`、`MenuBarR2Tests`、`RecordsTests`、`R3MenuBarTests`、`R3LockTests` 不改）；§3.26 的 Core 名稱與簽名逐字存在；`Sources/Core/` 不 import AppKit；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 成功（Capture／Trigger 未改也要能編）。
+- **r3x-parallel-finalize**：`python3 -m unittest tests.record.test_r3x_parallel_finalize tests.record.test_finalize tests.record.test_r2_finalize tests.record.test_r3_finalize_guard tests.record.test_r3_sync_compensate tests.record.test_concurrency tests.record.test_static_rules tests.record.test_review_fixes` 綠；`test_concurrency` 不綠時**不改測試**，以 `needs_decision` 回報（§7 疑慮 71 的選項）。
+- **r3x-cli**：`python3 -m unittest tests.record.test_r3x_background tests.record.test_r3x_docs tests.record.test_record_sh tests.record.test_r2_cli tests.record.test_r3_lock tests.record.test_docs tests.record.test_r2_docs tests.record.test_r3_docs tests.record.test_surface_parsers tests.record.test_cli_dispatch` 綠；`cmd_stop` 內恰有一個 `limit="$(python3` 區塊。
+- **r3x-capture**：`test_r3x_app_static` 的 `BackgroundCaptureStatic`、`StatusWriterStatic` 綠；既有 `test_r3_app_static`（`LockStatic`、`FinalizeRunnerStatic`、`DiscardStatic`、`SegmentSchedulerStatic`、`SyncCompensateStatic`）、`test_r3_skip_finalize`、`test_r2_static -k test_capture_`、`test_static_rules` 綠（不改）；`run.sh` 綠；建置成功。
+- **r3x-menubar**：`test_r3x_app_static.MenuBarBackgroundStatic` 綠；既有 `test_r3_app_static`（`MenuBarStatesStatic`、`MenuStagesStatic`、`HudStatic`、`MeetingDetectStatic`、`OnboardingSettingsStatic`）、`test_r2_static`、`test_t7_fixes`、`test_static_rules` 綠（不改）；建置成功。
+
+### 11.3 每層整合後的測試指令（integrator 照此跑，一律加 `TMPDIR="$(mktemp -d)" LC_ALL=en_US.UTF-8 MH_CLIENT_NAMES_FILE=/Users/yuktang/Documents/Agent/meeting-harness/_tpm/runs/20261010-sdlc-meeting-record/client-names.txt`）
+
+| 層 | 合併後必須回 0 的指令 | 預期仍紅、只記錄不阻擋 |
+|---|---|---|
+| Red | `bash bin/_lint.sh && bash bin/meeting.sh doctor`；`python3 -m unittest tests.record.test_regression tests.record.test_record_sh tests.record.test_r2_cli tests.record.test_r3_lock tests.record.test_finalize tests.record.test_r3_finalize_guard tests.record.test_surface_parsers tests.record.test_cli_dispatch tests.record.test_docs` | 全量 Python：失敗只在 `test_r3x_*`；Swift `run.sh` 編譯失敗（缺 §3.26 名稱） |
+| 第 1 層 | 上一列全部；`/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest tests.record.test_r3x_parallel_finalize tests.record.test_r3x_background tests.record.test_r3x_docs tests.record.test_concurrency tests.record.test_r3_sync_compensate tests.record.test_static_rules`；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` | `test_r3x_app_static` 三個類別 |
+| 第 2 層 | `python3 -m unittest discover -s tests/record -t .`；`/bin/bash tools/MeetingRecorder/Tests/run.sh`；`python3 -m unittest discover -s tests/record -t . -k test_no_client_names`（不得 skipped）；`MH_RECORDER_DEST=$(mktemp -d) bash tools/MeetingRecorder/build.sh` 並以 `codesign -d --entitlements -` 確認恰為 3 項；§4.57.3 的 `git diff --diff-filter=M --name-only ac88ad4 -- tests/ tools/MeetingRecorder/Tests/` 只列 `Tests/main.swift`；`python3 .claude/teams/tools/check_rules.py --git . ac88ad4..HEAD`；verify | 無；任何一支不綠就停下交人 |
+
+### 11.4 不屬於任何子任務、需要主 session 或使用者做的事（R3x）
+
+- **閘門 2**：使用者核准 spec §6 第 145–157 條，並決定 `design.md` R3x-D13 的五項（Q3 的「失敗」解讀、app 路徑的 `MH_FINALIZE_JOBS`、`stop` 等全部或最晚一場、每場狀態檔的保留、開錄前磁碟檢查要不要扣背景收尾用量），確認主 session 代選的 I5 (A) 與 I7 在 `.failed` 時的行為；`save_run.py approve`，stage 鍵由主 session 定。決定若不是建議選項，回 `sdlc-design-revise` 修 spec 後再進 build。
+- **test 段實機驗收**（`spec.md` §4.58，使用者在場）：前置的覆蓋安裝、**harness 改指 R3 版**、建立 `keep-segments`，每一步都要先問使用者、當下同意才做；harness 是使用者的實機設定，不屬於任何子任務的程式範圍。結果寫 run 目錄，只寫 run 代號與數字。
+- 推送與開 PR：照 `plan.md §10.5` 的 R3 拆包規劃（R3x 的 `bin/`、`tests/`、文件歸 R3-1，`tools/MeetingRecorder/` 歸 R3-2），推送前掃名稱，一律等使用者當下同意。

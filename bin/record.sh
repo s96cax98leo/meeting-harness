@@ -15,6 +15,11 @@
 # 本檔不改使用者的預設輸入／輸出裝置。
 # 控制（R2）：在 record.control.lock 的 flock 下改 record.control.json，再送 SIGUSR1 給錄製實例，
 # 等 record.status.json 在 5 秒內反映；舊版錄製器（狀態檔沒有 controlVersion）一律不送訊號。
+# R3（spec §3.15、§4.26、§4.27）：開錄與 preflight 前試鎖 <home>/record.lock（被持有回 2）；stop 送訊號前確認四項
+# （鎖被持有、record.pid 活著、狀態檔 pid 相符、程序名是 MeetingRecorder），任一不成立回 3、不送訊號。
+# R3x（spec R3x-§2.2、§3.21–§3.24、§4.51–§4.53、§4.56.2）：錄製實例停止擷取後放開 record.lock、在背景收尾，
+# 每場狀態與鎖在 <home>/finalizing/。stop 依 runId 等自己那一場；只剩背景收尾時不送訊號、等它們結束；
+# status 多印上一場收尾的行；finish 成功後清同場次的當掉檔。沒有 <home>/finalizing/ 時行為與 R3 相同。
 set -uo pipefail
 
 HARNESS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -139,6 +144,46 @@ running_pid() { # 有錄製在跑就印 pid
   pid="$(tr -cd '0-9' < "${PID_FILE}")"
   pid_alive "${pid}" && { echo "${pid}"; return 0; }
   return 1
+}
+
+# <home>/record.lock 的試鎖（spec §3.15、§4.26.5）：open(O_CREAT|O_RDWR|O_CLOEXEC, 0600) 後以 LOCK_NB 試鎖，
+# 1 秒內每 100 ms 重試；拿到立刻放掉（程序結束即關 fd）。只試鎖，不讀不寫內容。
+# 結束碼：0＝沒人持有（已放掉）、1＝被持有、2＝開不了鎖檔。
+record_lock_state() {
+  mkdir -p "${REC_HOME}" 2>/dev/null
+  python3 - "${REC_HOME}/record.lock" <<'PY' 2>/dev/null
+import fcntl, os, sys, time
+try:
+    fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+except OSError:
+    sys.exit(2)
+deadline = time.monotonic() + 1.0
+code = 1
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = 0
+        break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    except OSError:
+        code = 2
+        break
+os.close(fd)
+sys.exit(code)
+PY
+}
+
+# stop 第 (4) 項要比對的程序名結尾（spec §3.19、§6 第 136 條）：MH_RECORDER_COMM 只在 MH_RECORD_OPEN 也有設時
+# （測試替身環境）採用，否則一律是 MeetingRecorder。
+recorder_comm() {
+  if [[ -n "${MH_RECORDER_COMM:-}" && -n "${MH_RECORD_OPEN:-}" ]]; then
+    echo "${MH_RECORDER_COMM}"
+  else
+    echo "MeetingRecorder"
+  fi
 }
 
 # 讀狀態檔；runId 不符（或檔案不存在、解析失敗）時什麼都不印。
@@ -289,6 +334,12 @@ cmd_preflight() {
   wid="$(window_arg "$@")" || return 2
   need_app || return 2
   if [[ -z "${wid}" ]]; then err "✗ 要帶 --window <id>（從 meeting record windows 取得）"; return 2; fi
+  # 錄製中不跑 13 項、不啟動 app、不碰狀態檔（spec §4.26.4、R3-§2.2、§6 第 119 條）
+  record_lock_state
+  if [[ $? -eq 1 ]]; then
+    err "✗ 錄製中（record.lock 被持有），不跑開錄前檢查。先 meeting record stop，或用 meeting record status 確認。"
+    return 2
+  fi
   root="$(defaults_get root)"
   [[ -n "${root}" && -d "${root}" ]] || root="$(pwd)"
   session="${root}/$(date +%Y%m%d)/$(date +%H%M) 會議"
@@ -327,16 +378,22 @@ PY
 }
 
 write_defaults() { # <根> <型態> <出席者 JSON> <minFreeBytes>
-  python3 - "${DEFAULTS_FILE}" "$1" "$2" "$3" "$4" "${HARNESS}" "$(command -v python3)" "${MH_FFMPEG:-$(command -v ffmpeg)}" <<'PY'
-import json, os, sys
-path, root, mtype, attendees, minfree, harness, py, ff = sys.argv[1:9]
-data = {"root": root, "type": mtype, "attendees": json.loads(attendees or "[]"), "harness": harness,
-        "python3": py, "ffmpeg": ff, "minFreeBytes": int(minfree)}
-os.makedirs(os.path.dirname(path), exist_ok=True)
-tmp = path + ".tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-os.replace(tmp, path)
+  # 經 bin/lib/_record_lib.py 的 merge_defaults 合併寫入（spec §3.15、§3.19、§4.43.2；ADR adr-r3-defaults-writers）：
+  # 取 record.defaults.lock（最多 5 秒）→ 讀 → 合併（不認得的鍵保留）→ mkstemp＋rename。
+  # 檔案不是 JSON 物件或取鎖逾時：不寫、stderr 報錯；defaults 只是記憶，不擋開錄（一律回 0）。
+  python3 -B - "${BIN}/lib" "${REC_HOME}" "$1" "$2" "$3" "$4" "${HARNESS}" "$(command -v python3)" \
+    "${MH_FFMPEG:-$(command -v ffmpeg)}" <<'PY' || true
+import json, sys
+lib, home, root, mtype, attendees, minfree, harness, py, ff = sys.argv[1:10]
+sys.path.insert(0, lib)
+from _record_lib import DefaultsError, merge_defaults
+updates = {"root": root, "type": mtype, "attendees": json.loads(attendees or "[]"), "harness": harness,
+           "python3": py, "ffmpeg": ff, "minFreeBytes": int(minfree)}
+try:
+    merge_defaults(home, updates)
+except (DefaultsError, OSError) as e:
+    print(f"⚠ 寫不進 record.defaults.json（只是上次設定的記憶，不影響這次錄製）：{e}", file=sys.stderr)
+    sys.exit(1)
 PY
 }
 
@@ -376,6 +433,12 @@ cmd_start() {
   need_app || return 2
   if running_pid >/dev/null; then
     err "✗ 已有錄製在跑（pid $(running_pid)）。先 meeting record stop，或用 meeting record status 確認。"
+    return 2
+  fi
+  # 開錄鎖（spec §4.26.3）：被持有就不啟動 app、不碰狀態檔
+  record_lock_state
+  if [[ $? -eq 1 ]]; then
+    err "✗ 已有錄製在跑（record.lock 被持有）。先 meeting record stop，或用 meeting record status 確認。"
     return 2
   fi
 
@@ -440,6 +503,12 @@ PY
   run="$(uuidgen)"
   local wargs=(--window "${wid}")
   [[ "${identity}" -eq 1 ]] && wargs+=(--window-bundle "${bundle}" --window-title "${title}")
+  # 閘門 2 決定 5 選 A（spec §4.56.2、§7 疑慮 76）：只告警，門檻與 --min-free-bytes、結束碼都不變
+  local nbg
+  nbg="$(bg_jobs live | grep -c .)"
+  if [[ "${nbg:-0}" -gt 0 ]]; then
+    echo "  ⚠ 上一場收尾還在跑（${nbg} 場），會再用掉一些磁碟空間；開錄前檢查的剩餘空間沒有扣掉這部分"
+  fi
   err "開錄前檢查中（約 10 秒）：請對麥克風說一句話，錄製器也會播兩次提示音…"
   launch start "${wargs[@]}" --session "${sess}" --min-free-bytes "${minfree}" --run-id "${run}" \
     --home "${REC_HOME}" --harness "${HARNESS}" >/dev/null 2>&1
@@ -476,10 +545,301 @@ PY
   esac
 }
 
+# ---- R3x 背景收尾（spec R3x-§2.2、§3.21、§3.22、§4.51–§4.53、§4.56.2）----
+# 每場狀態檔 <home>/finalizing/<runId>.status.json、每場鎖 <home>/finalizing/<runId>.lock。
+# 旁觀者規則（§3.22）：每場鎖以 O_RDWR（不帶 O_CREAT）開、LOCK_NB 試一次、拿到立刻放；檔不存在或拿得到＝沒人持有。
+# 本檔只讀不寫 finalizing/（唯一例外：finish 成功後清同場次的當掉檔，§4.53.1），也不建這個目錄。
+FIN_DIR="${REC_HOME}/finalizing"
+
+# 列出背景收尾（依 startedAt、再依 runId 遞增）。mode：
+#   json    → JSON 陣列，每筆 {runId, state, phase, code, message, session, startedAt, updatedAt}
+#   live    → running／queued 的 runId，一行一個
+#   crashed → 當掉（finalizing、每場鎖沒人持有、場次目錄還在）的場次路徑，一行一個
+# state 同 Core backgroundJobState：queued、running、crashed、orphaned（場次目錄已不存在）、done、failed。
+bg_jobs() { # <json|live|crashed>
+  [[ -d "${FIN_DIR}" ]] || { [[ "$1" == "json" ]] && echo "[]"; return 0; }
+  python3 - "${FIN_DIR}" "$1" <<'PY' 2>/dev/null
+import datetime, errno, fcntl, glob, json, os, re, sys
+fin, mode = sys.argv[1:3]
+
+def held(path):
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)  # 不帶 O_CREAT
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except OSError as e:
+        return e.errno in (errno.EWOULDBLOCK, errno.EAGAIN)
+    finally:
+        os.close(fd)
+
+def ts(s):
+    for fn in (datetime.datetime.fromisoformat, lambda x: datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")):
+        try:
+            return fn(s).timestamp()
+        except (TypeError, ValueError):
+            pass
+    return float("inf")
+
+jobs = []
+for p in glob.glob(os.path.join(fin, "*.status.json")):
+    run = os.path.basename(p)[:-len(".status.json")]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run):
+        continue
+    alive = held(os.path.join(fin, run + ".lock"))  # 先試鎖、再讀狀態：鎖剛放開時讀到的一定是最終狀態
+    try:
+        st = json.load(open(p, encoding="utf-8"))
+    except Exception:
+        continue
+    if not isinstance(st, dict):
+        continue
+    phase, code, sess = st.get("phase"), st.get("code") or 0, st.get("session") or ""
+    if phase == "finalizing":
+        if alive:
+            state = "queued" if st.get("queued") is True else "running"
+        else:
+            state = "crashed" if sess and os.path.isdir(sess) else "orphaned"
+    elif phase == "done" and code == 0:
+        state = "done"
+    else:
+        state = "failed"
+    jobs.append({"runId": run, "state": state, "phase": phase, "code": code, "message": st.get("message") or "",
+                 "session": sess, "startedAt": st.get("startedAt"), "updatedAt": st.get("updatedAt")})
+jobs.sort(key=lambda j: (ts(j["startedAt"]), j["runId"]))
+if mode == "json":
+    print(json.dumps(jobs, ensure_ascii=False))
+elif mode == "live":
+    for j in jobs:
+        if j["state"] in ("running", "queued"):
+            print(j["runId"])
+elif mode == "crashed":
+    for j in jobs:
+        if j["state"] == "crashed":
+            print(j["session"])
+PY
+}
+
+# 一場背景收尾目前的狀態（先試每場鎖、再讀每場狀態檔）。印出：<phase|missing> <code> <queued 0|1> <鎖被持有 0|1>
+bg_job_state() { # <runId>
+  python3 - "${FIN_DIR}" "$1" <<'PY' 2>/dev/null || echo "missing 0 0 0"
+import errno, fcntl, json, os, sys
+fin, run = sys.argv[1:3]
+h = 0
+try:
+    fd = os.open(os.path.join(fin, run + ".lock"), os.O_RDWR | os.O_CLOEXEC)  # 不帶 O_CREAT
+except OSError:
+    fd = None
+if fd is not None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        h = 1 if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else 0
+    finally:
+        os.close(fd)
+try:
+    st = json.load(open(os.path.join(fin, run + ".status.json"), encoding="utf-8"))
+    if not isinstance(st, dict):
+        raise ValueError
+except Exception:
+    print("missing", 0, 0, h)
+    sys.exit(0)
+print(st.get("phase") or "missing", int(st.get("code") or 0), 1 if st.get("queued") is True else 0, h)
+PY
+}
+
+# 讀到最終狀態後，等該場的錄製實例結束（每場鎖持有到程序結束，§3.22）：之後共用狀態檔的條件式寫入（§3.24）
+# 也已做完，stop 回來時這場不會再寫任何檔。最多等 5 秒（只是收尾後的 exit，不影響結果）。
+wait_bg_owner_exit() { # <runId>
+  local i got held
+  for ((i = 0; i < 25; i++)); do
+    got="$(bg_job_state "$1")"
+    held="${got##* }"
+    [[ "${held}" == "1" ]] || return 0
+    sleep 0.2
+  done
+  return 0
+}
+
+status_field() { # <狀態檔> <鍵>：印字串值（讀不到印空字串）
+  python3 - "$1" "$2" <<'PY' 2>/dev/null
+import json, sys
+try:
+    v = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2])
+except Exception:
+    v = None
+print(v if isinstance(v, str) else "")
+PY
+}
+
+# stop 的目標（runId）目前的狀態（spec §4.51.9，修正輪 I1）：共用狀態檔的 runId＝目標且沒有 background: true 時
+# 照 R3 只看共用狀態檔（不碰 finalizing/）；否則看 finalizing/<目標>（先試每場鎖、再讀）。
+# 印出：<來源 shared|bg|none> <phase|-> <code> <queued 0|1> <每場鎖被持有 0|1|->
+stop_target_state() { # <runId>
+  python3 - "${STATUS_FILE}" "${FIN_DIR}" "$1" <<'PY' 2>/dev/null || echo "none - 0 0 -"
+import errno, fcntl, json, os, sys
+shared, fin, run = sys.argv[1:4]
+
+def load(p):
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+st = load(shared)
+if st is not None and (not run or st.get("runId") == run) and st.get("background") is not True:
+    print("shared", st.get("phase") or "-", int(st.get("code") or 0), 1 if st.get("queued") is True else 0, "-")
+    sys.exit(0)
+if not run or not os.path.isdir(fin):
+    if st is not None and st.get("runId") == run:
+        print("shared", st.get("phase") or "-", int(st.get("code") or 0), 1 if st.get("queued") is True else 0, "-")
+    else:
+        print("none - 0 0 -")
+    sys.exit(0)
+h = 0
+try:
+    fd = os.open(os.path.join(fin, run + ".lock"), os.O_RDWR | os.O_CLOEXEC)  # 不帶 O_CREAT
+except OSError:
+    fd = None
+if fd is not None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        h = 1 if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else 0
+    finally:
+        os.close(fd)
+bst = load(os.path.join(fin, run + ".status.json"))
+if bst is None:
+    if st is not None and st.get("runId") == run:  # 每場狀態檔還沒讀到：先用共用狀態檔
+        print("shared", st.get("phase") or "-", int(st.get("code") or 0), 1 if st.get("queued") is True else 0, "-")
+    else:
+        print("none - 0 0 -")
+    sys.exit(0)
+print("bg", bst.get("phase") or "-", int(bst.get("code") or 0), 1 if bst.get("queued") is True else 0, h)
+PY
+}
+
+# 只剩背景收尾（R3x-§2.2，修正輪 I6）的 (iii)：共用狀態檔不存在、讀不懂、是終態（done／failed／preflight_failed）、
+# pid 已死而 phase 是 preflight，或帶 background: true → 0；否則 1。
+shared_allows_background_wait() {
+  python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+except FileNotFoundError:
+    sys.exit(0)
+except Exception:
+    sys.exit(0)
+if not isinstance(st, dict):
+    sys.exit(0)
+if st.get("background") is True or st.get("phase") in ("done", "failed", "preflight_failed"):
+    sys.exit(0)
+if st.get("phase") == "preflight":
+    try:
+        os.kill(int(st.get("pid")), 0)
+    except PermissionError:
+        sys.exit(1)
+    except (OSError, TypeError, ValueError):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# 等背景收尾全部結束（spec §4.51.3–§4.51.5、§4.51.11；design R3x-D13 決定 3：等全部）。不送任何訊號。
+# 每一場各自的上限沿用 §4.27.5：3 × max(0, now − 該場 startedAt) ＋ 630 秒（讀不到 startedAt 時 7200），
+# 起算點是開始等它的時刻；該場 queued: true 時把起算點重設為現在（§4.51.7）。
+# 結束碼：全部 done／0 → 0；任一失敗、當掉或超過上限 → 5。
+wait_background_jobs() { # <runId>…
+  local run st sess limit t0 got phase code queued held rc=0
+  echo "沒有錄製在跑；等背景收尾完成（不送停止訊號）…"
+  for run in "$@"; do
+    st="${FIN_DIR}/${run}.status.json"
+    limit="$(python3 - "${st}" <<'PY' 2>/dev/null || echo 7200
+import json, sys, time, datetime
+try:
+    st = json.load(open(sys.argv[1], encoding="utf-8"))
+    t = datetime.datetime.strptime(st["startedAt"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    print(int(3 * max(0, time.time() - t) + 630))
+except Exception:
+    print(7200)
+PY
+)"
+    t0="$(date +%s)"
+    while :; do
+      got="$(bg_job_state "${run}")"
+      read -r phase code queued held <<<"${got}"
+      if [[ "${queued}" == "1" ]]; then t0="$(date +%s)"; fi  # 排隊時間不計入上限
+      if [[ "${phase}" == "done" || "${phase}" == "failed" ]]; then break; fi
+      if [[ "${held}" != "1" ]]; then
+        sess="$(status_field "${st}" session)"
+        err "✗ 背景收尾異常中止（收尾程序已不在，狀態停在收尾中）。段落還在，收尾："
+        err "    meeting.sh record finish \"${sess}\""
+        return 5
+      fi
+      if (( $(date +%s) - t0 > limit )); then
+        err "✗ 等了 ${limit} 秒還沒收尾完。用 meeting.sh record status 看狀態。"
+        return 5
+      fi
+      sleep 0.2
+    done
+    wait_bg_owner_exit "${run}"
+    if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then
+      stop_summary 1 "${st}"
+    else
+      stop_summary 0 "${st}"
+      sess="$(status_field "${st}" session)"
+      err "✗ 背景收尾失敗；段落都還在，再收一次： meeting.sh record finish \"${sess}\""
+      rc=5
+    fi
+  done
+  [[ "${rc}" -eq 0 ]] && echo "✓ 背景收尾完成。"
+  return "${rc}"
+}
+
+crashed_hint() { # 有當掉的背景收尾時，在 stderr 印補救指令（孤兒不算）
+  local s
+  while IFS= read -r s; do
+    [[ -n "${s}" ]] || continue
+    err "  上一場收尾異常中止（收尾程序已不在）：${s}"
+    err "    meeting.sh record finish \"${s}\""
+  done <<<"$(bg_jobs crashed)"
+}
+
+# 沒有 record.pid（或其 pid 已死）時的 stop（R3x-§2.2、§6 第 146 條）：
+# 「只剩背景收尾」三項——(i) 已由呼叫端確認、(ii) record.lock 沒被持有、(iii) shared_allows_background_wait——
+# 都成立而有活著的背景收尾 → 不送訊號、等全部結束（0／5）；其餘照 R3 回 3。
+stop_without_recorder() { # [<已死的 pid>]
+  local stale="${1:-}" live="" ok=0
+  if [[ -d "${FIN_DIR}" ]] && shared_allows_background_wait; then
+    record_lock_state
+    [[ $? -eq 0 ]] && ok=1
+  fi
+  if [[ "${ok}" -eq 1 ]]; then
+    live="$(bg_jobs live)"
+    if [[ -n "${live}" ]]; then
+      [[ -n "${stale}" ]] && rm -f "${PID_FILE}"
+      # shellcheck disable=SC2086
+      wait_background_jobs ${live}
+      return $?
+    fi
+  fi
+  if [[ -n "${stale}" ]]; then
+    rm -f "${PID_FILE}"
+    err "沒有錄製在跑：record.pid 的 pid ${stale} 已經結束（已刪掉過時的 record.pid）。"
+  else
+    err "沒有錄製在跑。"
+  fi
+  [[ "${ok}" -eq 1 ]] && crashed_hint
+  return 3
+}
+
 # stop 之後的摘要：黑畫面區間（mm:ss–mm:ss）與各類告警次數；
 # 收尾成功且有暫停或標記時多印一行「暫停 N 次、共 mm:ss；標記 M 個」（R2，spec §4.16.11）
-stop_summary() { # <收尾成功：1|0>
-  python3 - "${STATUS_FILE}" "${1:-0}" <<'PY'
+# 狀態檔預設是共用的 record.status.json；R3x 起可以傳每場狀態檔（spec R3x-D6）。
+stop_summary() { # <收尾成功：1|0> [<狀態檔>]
+  python3 - "${2:-${STATUS_FILE}}" "${1:-0}" <<'PY'
 import json, math, os, sys
 from collections import Counter
 try:
@@ -546,39 +906,90 @@ PY
 cmd_stop() {
   check_unknown "" "" "$@" || return 2
   if [[ $# -gt 0 ]]; then err "✗ stop 不接參數：$*"; return 2; fi
-  local pid
-  if ! pid="$(running_pid)"; then
-    err "沒有錄製在跑。"
+  # 送訊號前的四項確認（spec §4.27.2、R3-§2.2）：任一不成立回 3、不送任何訊號，stderr 說明是哪一項
+  local pid spid comm want lrc
+  pid=""
+  [[ -f "${PID_FILE}" ]] && pid="$(tr -cd '0-9' < "${PID_FILE}" 2>/dev/null)"
+  # 沒有 record.pid 或其 pid 已死：R3 回 3；R3x 起「只剩背景收尾」時改等背景收尾（R3x-§2.2、§6 第 146 條）
+  if [[ -z "${pid}" ]]; then
+    stop_without_recorder
+    return $?
+  fi
+  if ! pid_alive "${pid}"; then
+    stop_without_recorder "${pid}"
+    return $?
+  fi
+  record_lock_state
+  lrc=$?
+  if [[ "${lrc}" -ne 1 ]]; then
+    err "✗ 不送停止訊號：record.lock 沒有被錄製實例持有（pid ${pid} 不像正在錄製）。用 meeting record status 確認。"
     return 3
   fi
-  local started limit t0 got phase code logf lines=0 n
+  spid="$(python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null
+import json, sys
+try:
+    v = json.load(open(sys.argv[1], encoding="utf-8")).get("pid")
+except Exception:
+    v = None
+print(v if isinstance(v, int) and not isinstance(v, bool) else "")
+PY
+)"
+  if [[ "${spid}" != "${pid}" ]]; then
+    err "✗ 不送停止訊號：record.status.json 的 pid（${spid:-沒有}）與 record.pid（${pid}）不同。用 meeting record status 確認。"
+    return 3
+  fi
+  comm="$(ps -o comm= -p "${pid}" 2>/dev/null | sed 's/[[:space:]]*$//')"
+  want="$(recorder_comm)"
+  if [[ -z "${comm}" || "${comm}" != *"${want}" ]]; then
+    err "✗ 不送停止訊號：pid ${pid} 的程序（${comm:-讀不到}）不是 ${want}。"
+    return 3
+  fi
+  # 等待上限（spec §4.27.5）：3 × 已錄秒數 ＋ 630（finalizeDeadline 的 ×3＋600，再加 30 秒給中止收尾與寫狀態檔）
+  local limit t0 got phase code logf lines=0 n target src queued held sfile sess
+  target="$(status_field "${STATUS_FILE}" runId)"  # 送訊號前記下目標 runId，之後只等這一場（spec §4.51.1）
   limit="$(python3 - "${STATUS_FILE}" <<'PY' 2>/dev/null || echo 7200
 import json, sys, time, datetime
 try:
     st = json.load(open(sys.argv[1], encoding="utf-8"))
     t = datetime.datetime.strptime(st["startedAt"], "%Y-%m-%dT%H:%M:%S%z").timestamp()
-    print(int(2 * max(0, time.time() - t) + 120))
+    print(int(3 * max(0, time.time() - t) + 630))
 except Exception:
     print(7200)
 PY
 )"
   logf="${REC_HOME}/record.log"
   [[ -f "${logf}" ]] && lines="$(wc -l < "${logf}" | tr -d ' ')"
-  kill -TERM "${pid}" 2>/dev/null
-  echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+  # 已在停止或收尾中：不再送 SIGTERM（再送會中止收尾），照 R2 方式等結果（spec §4.27.3）
+  got="$(status_of_run '*')"
+  phase="${got% *}"
+  if [[ "${phase}" == "stopping" || "${phase}" == "finalizing" ]]; then
+    echo "錄製器已在收尾，等結果（不再送停止訊號）…"
+  else
+    kill -TERM "${pid}" 2>/dev/null
+    echo "已送出停止，收尾中（整支重新編碼，長場次要等一下）…"
+  fi
   t0="$(date +%s)"
   while :; do
-    if [[ -f "${logf}" ]]; then  # 把收尾進度（例「正規化 12/95」）轉印出來
+    if [[ -f "${logf}" ]]; then  # 把收尾進度（例「正規化 已完成 12/95」）轉印出來
       n="$(wc -l < "${logf}" | tr -d ' ')"
       if [[ "${n}" -gt "${lines}" ]]; then
         sed -n "$((lines + 1)),${n}p" "${logf}" | grep -E '正規化|收尾|略過' || true
         lines="${n}"
       fi
     fi
-    got="$(status_of_run '*')"
-    phase="${got% *}"; code="${got#* }"
+    # 依目標 runId 讀（spec §4.51.9）：共用狀態檔是目標、又沒有 background → 照 R3；否則讀 finalizing/<目標>
+    got="$(stop_target_state "${target}")"
+    read -r src phase code queued held <<<"${got}"
+    [[ "${phase}" == "-" ]] && phase=""
+    if [[ "${queued}" == "1" ]]; then t0="$(date +%s)"; fi  # 目標排隊中：排隊時間不計入上限（§4.51.7、§6 第 147 條）
     if [[ "${phase}" == "done" || "${phase}" == "failed" ]]; then break; fi
-    if ! pid_alive "${pid}" && [[ "${phase}" != "finalizing" ]]; then
+    if [[ "${src}" == "bg" && "${held}" != "1" ]]; then  # 每場鎖沒人持有而還沒寫最終狀態＝背景收尾當掉
+      sess="$(status_field "${FIN_DIR}/${target}.status.json" session)"
+      err "✗ 背景收尾異常中止（收尾程序已不在，狀態停在 ${phase:-（沒有狀態）}）。段落還在，收尾："
+      err "    meeting.sh record finish \"${sess}\""
+      return 5
+    fi
+    if [[ "${src}" != "bg" ]] && ! pid_alive "${pid}" && [[ "${phase}" != "finalizing" ]]; then
       err "✗ 錄製器結束了，但狀態停在 ${phase:-（沒有狀態）}。用 meeting.sh record finish <場次> 收尾。"
       return 5
     fi
@@ -588,7 +999,12 @@ PY
     fi
     sleep 0.2
   done
-  if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then stop_summary 1; else stop_summary 0; fi
+  sfile="${STATUS_FILE}"
+  if [[ "${src}" == "bg" ]]; then
+    sfile="${FIN_DIR}/${target}.status.json"
+    wait_bg_owner_exit "${target}"
+  fi
+  if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then stop_summary 1 "${sfile}"; else stop_summary 0 "${sfile}"; fi
   if [[ "${phase}" == "done" && "${code}" -eq 0 ]]; then
     echo "✓ 已停止並收尾完成。"
     return 0
@@ -600,18 +1016,71 @@ PY
 cmd_status() {
   check_unknown "" "" "$@" || return 2
   if [[ $# -gt 0 ]]; then err "✗ status 不接參數：$*"; return 2; fi
-  if [[ ! -f "${STATUS_FILE}" ]]; then
+  if [[ ! -f "${STATUS_FILE}" && ! -d "${FIN_DIR}" ]]; then
     echo "沒有錄製在跑。"
     return 0
   fi
-  python3 - "${STATUS_FILE}" "${PID_FILE}" <<'PY'
+  # R3 的主體不變；有 finalizing/ 時在結束前補背景收尾的行（spec §4.52；孤兒略過，§4.52.9）
+  python3 - "${STATUS_FILE}" "${PID_FILE}" "$(bg_jobs json)" <<'PY'
 import datetime, json, math, os, sys, time
 st_path, pid_path = sys.argv[1], sys.argv[2]
 try:
+    JOBS = json.loads(sys.argv[3] or "[]")
+except ValueError:
+    JOBS = []
+
+
+def finish(rc, st=None, recording=False):
+    """背景收尾的附加行（spec §4.52.1–§4.52.5、§4.52.8）：只看 runId 不是共用狀態檔那一場的；孤兒一律略過。
+    結束碼只在「沒有錄製在跑而有背景收尾當掉」時改成 5（R3x-§2.2，Q3 (a)）。"""
+    own = st.get("runId") if isinstance(st, dict) else None
+    started = parse_iso(st.get("startedAt")) if isinstance(st, dict) else None
+    for j in JOBS:
+        if j.get("runId") == own or j.get("state") == "orphaned":
+            continue
+        s, state = j.get("session") or "", j.get("state")
+        if state in ("running", "queued"):
+            print(f"  上一場收尾中：{s}" + ("（排隊中）" if state == "queued" else ""))
+        elif state == "crashed":
+            if recording:
+                print(f"  ⚠ 上一場收尾異常中止：{s}；收尾： meeting.sh record finish \"{s}\"")
+            else:
+                print("✗ 上一場收尾異常中止（收尾程序已不在，狀態停在收尾中）。段落還在，收尾：", file=sys.stderr)
+                print(f"    meeting.sh record finish \"{s}\"", file=sys.stderr)
+                rc = 5
+        elif own is not None and started is not None:  # done／failed：比共用狀態檔那一場的開始晚才印（§4.52.5）
+            up = parse_iso(j.get("updatedAt"))
+            if up is None or up < started:
+                continue
+            if state == "done":
+                print(f"  上一場收尾完成：{s}")
+            else:
+                m = (j.get("message") or "").strip()
+                print(f"  ⚠ 上一場收尾失敗：{m.splitlines()[0] if m else ''}；段落保留，收尾： meeting.sh record finish \"{s}\"")
+    sys.exit(rc)
+
+
+def parse_iso(s):
+    if not isinstance(s, str):
+        return None
+    for fn in (datetime.datetime.fromisoformat, lambda x: datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")):
+        try:
+            return fn(s).timestamp()
+        except ValueError:
+            pass
+    return None
+
+
+if not os.path.exists(st_path):
+    print("沒有錄製在跑。")
+    finish(0)
+try:
     st = json.load(open(st_path, encoding="utf-8"))
+    if not isinstance(st, dict):
+        raise ValueError
 except Exception:
     print("沒有錄製在跑（狀態檔讀不懂，忽略）。")
-    sys.exit(0)
+    finish(0)
 def alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -626,15 +1095,6 @@ except (OSError, ValueError):
 phase, code, sess = st.get("phase"), st.get("code", 0), st.get("session") or ""
 msg = (st.get("message") or "").strip()
 LABEL = {"preflight": "開錄前檢查中", "recording": "錄製中", "stopping": "停止中", "finalizing": "收尾中"}
-def parse_iso(s):
-    if not isinstance(s, str):
-        return None
-    for fn in (datetime.datetime.fromisoformat, lambda x: datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")):
-        try:
-            return fn(s).timestamp()
-        except ValueError:
-            pass
-    return None
 def clock_text(sec):  # 同 Core clockText：< 3600 → mm:ss；≥ 3600 → h:mm:ss
     sec = max(0, int(sec))
     h, r = divmod(sec, 3600)
@@ -672,14 +1132,17 @@ if phase in LABEL:
         alerts = [w for w in st.get("warnings") or [] if w.get("kind") not in ("device_change", "audio_format_change")]
         if alerts:
             print(f"  ⚠ 告警 {len(alerts)} 次；最新：{alerts[-1].get('message', '')}")
-        sys.exit(0)
+        if st.get("background") is True and phase == "finalizing":  # 共用狀態檔就是活著的背景收尾（§4.52.4）
+            print("  背景收尾中，可以開始下一場")
+            finish(0, st)
+        finish(0, st, recording=True)
     if phase == "preflight":
         print("沒有錄製在跑（上次開錄前檢查中斷）。")
-        sys.exit(0)
+        finish(0, st)
     print(f"✗ 上次錄製異常中止（錄製器已不在，狀態停在{LABEL[phase]}）。已落盤的段落還在，收尾：", file=sys.stderr)
     print(f"    meeting.sh record finish \"{sess}\"", file=sys.stderr)
     print("  （最後一段未收尾的 1 分鐘會丟）", file=sys.stderr)
-    sys.exit(5)
+    finish(5, st)
 print("沒有錄製在跑。")
 if phase == "done" and not code:
     print(f"上次錄製：已完成　{sess}")
@@ -689,7 +1152,47 @@ elif phase in ("done", "failed"):
     print(f"上次錄製出錯：{msg.splitlines()[0] if msg else ''}")
     if sess:
         print(f"  段落保留，收尾： meeting.sh record finish \"{sess}\"")
-sys.exit(0)
+finish(0, st)
+PY
+}
+
+# finish 回 0 後清掉這個場次當掉的背景收尾檔（spec §3.21 清理 (2)、§4.53.1）：session 等於該場次、phase finalizing、
+# 每場鎖沒人持有的每場狀態檔與鎖檔。別的場次、活著的、終態的都不碰；孤兒（場次目錄不存在）本來就不會相符。
+clear_crashed_background() { # <場次>
+  [[ -d "${FIN_DIR}" ]] || return 0
+  python3 - "${FIN_DIR}" "$1" <<'PY' 2>/dev/null || true
+import errno, fcntl, glob, json, os, re, sys
+fin, sess = sys.argv[1], os.path.realpath(sys.argv[2])
+for p in glob.glob(os.path.join(fin, "*.status.json")):
+    run = os.path.basename(p)[:-len(".status.json")]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run):
+        continue
+    try:
+        st = json.load(open(p, encoding="utf-8"))
+    except Exception:
+        continue
+    if not isinstance(st, dict) or st.get("phase") != "finalizing" or not st.get("session"):
+        continue
+    if os.path.realpath(st["session"]) != sess:
+        continue
+    lock = os.path.join(fin, run + ".lock")
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CLOEXEC)  # 不帶 O_CREAT
+    except OSError:
+        fd = None
+    if fd is not None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                continue  # 活著：不碰
+        finally:
+            os.close(fd)
+    for f in (p, lock):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 PY
 }
 
@@ -707,7 +1210,7 @@ cmd_finish() {
   fi
   python3 "${BIN}/_record_finalize.py" "${sess}"
   case $? in
-    0) return 0 ;;
+    0) clear_crashed_background "${sess}"; return 0 ;;
     3) return 3 ;;
     *) err "✗ 收尾失敗；段落都還在，修好後可以再跑一次 meeting.sh record finish。"; return 5 ;;
   esac

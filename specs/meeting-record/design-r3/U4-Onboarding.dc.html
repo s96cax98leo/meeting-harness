@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>U4 首次引導</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Space+Grotesk:wght@500;700&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<style>
+body{margin:0}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 56px 64px; background: #0F1115; color: #ECEEF2; font-family: 'Noto Sans TC', sans-serif; display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: baseline; gap: 20px">
+<h1 style="margin: 0; font-size: 40px; font-weight: 700">U4 首次引導</h1>
+<span style="font-size: 16px; color: #9AA3B2">5 步：歡迎、權限、存檔位置、選單列空間、試錄。權限框只在這裡跳，不在開會中跳。</span>
+</div>
+<div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 28px; flex-grow: 1">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">A ★ <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">分步精靈（第 2 步：權限）</span></div>
+<div style="flex-grow: 1; box-sizing: border-box; padding: 28px 32px; border-radius: 22px; background: #171A21; border: 1px solid #2A2F3A; display: flex; flex-direction: column; gap: 22px">
+<div style="display: flex; gap: 8px">
+<sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+<div style="flex: 1 1 0; display: flex; flex-direction: column; gap: 6px">
+<div style="height: 4px; border-radius: 2px; background: {{s.bar}}"></div>
+<span style="font-size: 12px; color: {{s.fg}}">{{s.label}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 26px; font-weight: 700">先給三個權限</div>
+<div style="font-size: 15px; color: #C3C9D4">錄影、聲音與通知都只留在這台電腦。</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{perms}}" as="p" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 14px; background: #1F232C; border: 1px solid #2A2F3A">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: {{p.dot}}; flex-shrink: 0"></span>
+<div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1">
+<span style="font-size: 15px; font-weight: 700">{{p.name}}</span>
+<span style="font-size: 13px; color: #9AA3B2">{{p.why}}</span>
+</div>
+<span style="font-size: 13px; color: {{p.stFg}}">{{p.state}}</span>
+<button type="button" style="height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid {{p.btnLine}}; background: {{p.btnBg}}; color: {{p.btnFg}}; font-size: 13px; font-weight: 700">{{p.btn}}</button>
+</div>
+</sc-for>
+</div>
+<div style="margin-top: auto; display: flex; gap: 10px">
+<button type="button" style="height: 44px; padding: 0 18px; border-radius: 12px; border: none; background: transparent; color: #9AA3B2; font-size: 14px">略過</button>
+<button type="button" style="margin-left: auto; height: 44px; padding: 0 18px; border-radius: 12px; border: 1px solid #3A404D; background: transparent; color: #ECEEF2; font-size: 14px">上一步</button>
+<button type="button" style="height: 44px; padding: 0 22px; border-radius: 12px; border: none; background: #ECEEF2; color: #0F1115; font-size: 14px; font-weight: 700">下一步</button>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">B <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">單頁檢查表</span></div>
+<div style="flex-grow: 1; box-sizing: border-box; padding: 22px; border-radius: 22px; background: #171A21; border: 1px solid #2A2F3A; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 18px; font-weight: 700">開錄前準備　3／6</div>
+<sc-for list="{{checklist}}" as="c" hint-placeholder-count="6">
+<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: #1F232C; font-size: 14px">
+<span style="width: 18px; height: 18px; border-radius: 50%; border: 2px solid {{c.ring}}; background: {{c.fill}}; flex-shrink: 0"></span>
+<span style="color: {{c.fg}}">{{c.label}}</span>
+</div>
+</sc-for>
+<div style="margin-top: auto; font-size: 13px; color: #9AA3B2">全部列在一頁，一眼看出還差什麼；但每列的說明會擠</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700">C <span style="font-family: 'Noto Sans TC', sans-serif; font-size: 15px; font-weight: 500; color: #9AA3B2">在選單裡逐項提示</span></div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 12px">
+<div style="box-sizing: border-box; padding: 8px; border-radius: 16px; background: rgba(28,31,39,0.97); border: 1px solid #3A404D; display: flex; flex-direction: column; gap: 2px; font-size: 14px">
+<div style="margin: 4px; padding: 12px; border-radius: 12px; background: rgba(139,124,246,0.16); display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; color: #B9AEFF">設定還沒完成　2／5</span>
+<span style="font-weight: 700">下一步：允許螢幕錄製</span>
+<button type="button" style="height: 40px; border-radius: 10px; border: none; background: #8B7CF6; color: #FFFFFF; font-size: 13px; font-weight: 700">允許</button>
+</div>
+<div style="height: 1px; margin: 4px 10px; background: #2E333E"></div>
+<div style="padding: 8px 12px; color: #5B6372">開始錄製</div>
+<div style="padding: 8px 12px">設定…</div>
+</div>
+<div style="padding: 12px 14px; border-radius: 12px; background: rgba(245,165,36,0.14); border: 1px solid rgba(245,165,36,0.5); font-size: 13px; color: #F7C46C">不會擋住使用，但權限框還是可能在開會中才跳出來</div>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const st = (label, state) => ({ label, bar: state === 'done' ? '#2DD4BF' : state === 'now' ? '#ECEEF2' : '#2A2F3A', fg: state === 'todo' ? '#5B6372' : '#C3C9D4' });
+const perm = (name, why, kind) => {
+const m = {
+ok: { dot: '#2DD4BF', state: '已允許', stFg: '#5EE6D2', btn: '已完成', btnBg: 'transparent', btnFg: '#8E96A5', btnLine: '#2A2F3A' },
+relaunch: { dot: '#F5A524', state: '需要重新開啟', stFg: '#F7C46C', btn: '重新開啟', btnBg: '#F5A524', btnFg: '#1A1206', btnLine: '#F5A524' },
+todo: { dot: '#5B6372', state: '尚未允許', stFg: '#9AA3B2', btn: '允許', btnBg: '#ECEEF2', btnFg: '#0F1115', btnLine: '#ECEEF2' },
+opt: { dot: '#5B6372', state: '選用', stFg: '#9AA3B2', btn: '允許', btnBg: 'transparent', btnFg: '#ECEEF2', btnLine: '#3A404D' }
+}[kind];
+return Object.assign({ name, why }, m);
+};
+const ck = (label, done) => ({ label, ring: done ? '#2DD4BF' : '#5B6372', fill: done ? '#2DD4BF' : 'transparent', fg: done ? '#8E96A5' : '#ECEEF2' });
+return {
+steps: [st('歡迎', 'done'), st('權限', 'now'), st('存檔位置', 'todo'), st('選單列空間', 'todo'), st('試錄', 'todo')],
+perms: [
+perm('螢幕錄製', '錄下你指定的會議視窗', 'relaunch'),
+perm('麥克風', '錄你自己的聲音', 'ok'),
+perm('通知', '錄製告警與完成提醒', 'todo'),
+perm('自動化（Chrome）', '只有要錄 Chrome 分頁時才需要', 'opt')
+],
+checklist: [ck('螢幕錄製', true), ck('麥克風', true), ck('通知', true), ck('存檔位置', false), ck('選單列圖示看得到', false), ck('試錄 10 秒', false)]
+};
+}
+}
+</script>
+</body>
+</html>

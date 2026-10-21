@@ -10,8 +10,8 @@
 #   - 固定身分以 SHA-1 判斷與簽章。身分「MeetingHarness Dev」與私鑰成對但不受信任
 #     （CSSMERR_TP_NOT_TRUSTED），find-identity 加了只列有效身分的旗標就看不到它、會誤退回 ad-hoc；
 #     不受信任不影響簽章，所以判斷時不加那個旗標，直接比對 SHA-1。
-#   - 固定身分：--options runtime（hardened runtime）＋ --entitlements（麥克風、Apple Events 兩項）。
-#     hardened runtime 下沒有這兩項 entitlement，麥克風與查 Chrome 分頁會靜默失敗。
+#   - 固定身分：--options runtime（hardened runtime）＋ --entitlements（麥克風、Apple Events、提醒事項〔calendars〕三項；
+#     spec §6 第 138 條）。hardened runtime 下沒有對應的 entitlement，麥克風、查 Chrome 分頁與寫提醒事項會靜默失敗。
 #   - 沒有固定身分才退回 ad-hoc（同樣帶 --entitlements，不帶 runtime）；ad-hoc 每次重建 cdhash
 #     都會變，可能出現「系統設定裡明明打勾卻取不到內容」，所以只當過渡。
 #
@@ -29,10 +29,20 @@ TARGET="arm64-apple-macosx15.0"   # 鎖 15.0 而不是 26：換機或降級還�
 
 command -v swiftc >/dev/null || { echo "✗ 找不到 swiftc（需要 Xcode 或 Command Line Tools）" >&2; exit 2; }
 [[ -f "${ENTITLEMENTS}" ]] || { echo "✗ 找不到 ${ENTITLEMENTS}" >&2; exit 2; }
+[[ -f "${HERE}/Resources/AppIcon.icns" ]] || { echo "✗ 找不到 ${HERE}/Resources/AppIcon.icns" >&2; exit 2; }
 
 # Sources/ 底下全部的 .swift（main.swift、Core/、Capture/、Trigger/）
+# swiftc 不接受同一個 module 裡有兩個同名檔（例 Core/MeetingDetect.swift 與 Trigger/MeetingDetect.swift，spec §3.20、
+# §4.44 規定的檔名）：先在暫存目錄以「子目錄_檔名」建 symlink 再編譯，原始碼位置不變。
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mr-build.XXXXXX")"
+trap 'rm -rf "${STAGE}"' EXIT
 SOURCES=()
-while IFS= read -r f; do SOURCES+=("$f"); done < <(find "${HERE}/Sources" -name '*.swift' -type f | LC_ALL=C sort)
+while IFS= read -r f; do
+  rel="${f#"${HERE}/Sources/"}"
+  link="${STAGE}/${rel//\//_}"
+  ln -s "$f" "$link" || { echo "✗ 建 symlink 失敗：${rel}" >&2; exit 2; }
+  SOURCES+=("$link")
+done < <(find "${HERE}/Sources" -name '*.swift' -type f | LC_ALL=C sort)
 [[ "${#SOURCES[@]}" -gt 0 ]] || { echo "✗ Sources/ 沒有任何 .swift" >&2; exit 2; }
 
 echo "== 編譯（${#SOURCES[@]} 個檔）=="
@@ -42,6 +52,8 @@ swiftc -O -target "${TARGET}" \
   "${SOURCES[@]}" || { echo "✗ 編譯失敗" >&2; exit 3; }
 
 cp "${HERE}/Resources/Info.plist" "${APP}/Contents/Info.plist"
+# app 圖示（U7-A；spec §4.43.7）：Info.plist 的 CFBundleIconFile＝AppIcon
+cp "${HERE}/Resources/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns" || { echo "✗ 複製 AppIcon.icns 失敗" >&2; exit 2; }
 printf 'APPL????' > "${APP}/Contents/PkgInfo"
 
 echo "== 簽章 =="

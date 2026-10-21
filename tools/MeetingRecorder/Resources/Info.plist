@@ -16,6 +16,9 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<!-- app 圖示（U7-A 錄製點＋聲波；spec §4.43.7）：Resources/AppIcon.icns，build.sh 複製進 Contents/Resources/ -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 
@@ -38,6 +41,15 @@
 	     hardened runtime 下另需 com.apple.security.automation.apple-events entitlement（MeetingRecorder.entitlements） -->
 	<key>NSAppleEventsUsageDescription</key>
 	<string>讀取 Google Chrome 各視窗目前分頁的網址，用來在錄製視窗清單中標出會議頁（例如 M+ Meet、Google Meet）。只讀網址、不操作瀏覽器，也不會傳出這台電腦。</string>
+
+	<!-- 提醒事項：meeting reminders 把交辦寫進提醒事項（spec §3.19、§4.34.3）。
+	     macOS 14 起 requestFullAccessToReminders 讀 NSRemindersFullAccessUsageDescription（Apple 文件確認）；
+	     舊鍵 NSRemindersUsageDescription 留給舊系統。hardened runtime 另需
+	     com.apple.security.personal-information.calendars entitlement（§6 第 138 條） -->
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>把會議交辦寫進你指定的提醒事項清單。這份清單若開了 iCloud 同步，寫入的交辦會同步到 iCloud 與你的其他裝置。</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>把會議交辦寫進你指定的提醒事項清單。這份清單若開了 iCloud 同步，寫入的交辦會同步到 iCloud 與你的其他裝置。</string>
 
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>錄製你指定的會議視窗畫面，用來做投影片與畫面的會議紀錄。只留在這台電腦。</string>

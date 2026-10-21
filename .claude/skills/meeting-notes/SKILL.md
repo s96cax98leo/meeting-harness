@@ -27,6 +27,7 @@ description: 把逐字稿寫成結構化的繁中會議紀錄——決議、逐�
 | `openQuestions[]` | 沒結論、要下次談、被擱置的 |
 | `uncertain[]` | 聽不清的人名／專名／日期，附 `heardAs` |
 | `glossary[]` | 本場新出現的專名 |
+| `markers[]` | （選用）錄製中加的標記 `{label, t, speaker?, note?}`，`t` 為成品秒數；不寫時自動取 `錄音/markers.json`。`speaker` 有依據才填 |
 
 寫完渲染：
 ```bash
@@ -56,3 +57,14 @@ bash "$MH/bin/meeting.sh" render "<場次目錄>"
 
 `summary.md` 固定含「一句話：」與 `## 決議 / ## 依賴 / ## 風險與未決 / ## 交辦 / ## 存疑`，
 下游（下游知識庫專案 的 `/ingest-meeting`）是照這些標題找東西的，不要改標題名稱。
+
+## 標記與錄製註記（自動附加，不用寫進 record）
+render（以及地端總結 `summarize-local.py`）會在五個必備段之後自動附加兩段，內容來自錄製資料，時間一律是成品時間（扣掉暫停）：
+- `## 標記`：有標記才出現。每行 `- <mm:ss> <label>（<speaker>）`，沒有 speaker 不加括號。
+  來源先取 `meeting.record.json` 的 `markers[]`，沒有就取 `錄音/markers.json`。
+- `## 錄製註記`：有暫停、麥克風靜音、輸出裝置切換或長靜音（兩路都 ≤ -60 dBFS 連續 ≥ 30 秒，不含暫停）才出現。
+  每行 `- <mm:ss>–<mm:ss> 暫停（未錄）／麥克風靜音／長靜音`，裝置切換寫 `- <mm:ss> 輸出裝置切換：<舊 transport> → <新 transport>`。
+  暫停那行的第二個時間＝開始＋暫停長度，只表示停了多久（成品裡暫停長度為 0）。不寫裝置名稱與 uid。
+- 逐字稿衍生檔（`transcript.speakers.md`、`transcript.vtt`）在對應位置有 `〔暫停 …，這段沒有錄〕`、`〔麥克風靜音 …〕`、
+  `〔長靜音 …〕`、`〔輸出裝置切換：… → …〕`、`〔<label>〕` 註記行；`transcript.quality.json` 列出的段落前加「（聽不清）」。
+  寫紀錄時：靜音／暫停那段沒有發言是正常的，不要當成漏聽；標「（聽不清）」的內容不要當成真發言。raw 逐字稿不會有這些標示。

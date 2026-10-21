@@ -84,6 +84,7 @@ class Sandbox:
             "FAKE_OPEN_CALLS": str(self.calls),
             "FAKE_SCENARIO": self.scenario,
             "LC_ALL": env.get("LC_ALL", "en_US.UTF-8"),
+            "MH_RECORDER_COMM": "bash",
         })
         if self.windows_file is not None:
             env["FAKE_WINDOWS_JSON"] = str(self.windows_file)

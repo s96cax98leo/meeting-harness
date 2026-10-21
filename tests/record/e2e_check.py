@@ -12,6 +12,11 @@ mute_timing、no_false_black、event_output_t；沒有事件時各自判「情�
 列為提前換段、stop_tail 加 pausedTotal、讀 levels 的判準跳過暫停（兩路）與靜音（mic）區間、讀混音軌時把錄製時鐘換成
 成品時間（record_to_output，語意同 Core outputTime）。沒有這兩個陣列的場次，結果與 R2 之前完全相同。
 
+R3（spec §4.35、§6 第 124 條；D3、S-A）：--sync（c_sync，ffplay 路徑，< 100 ms）不改，保留為「錄製器沒有引入額外偏移」的
+迴歸；--sync-player 加一項 sync_player（補償型播放端判準：閃白與嗶聲的差依 60 秒時段取中位數，|中位數| 全部 < 45 ms；
+有 錄音/tracks/finalize.json 的 syncCompensation 時列出各段套用的延遲）；--sync-acoustic、--print-sync-file 是獨立模式
+（不跑判準）。
+
 t6 第三輪（spec §6 第 64、66、68 條）：sync 改用 1 kHz 帶通＋每個閃白的局部起點（sync_offsets，可被測試載入）；
 device_switch、hfp 的「其餘時間」改為不得連續 ≥ 3 秒 ≤ -60 dBFS；fps_min_interval 改為三條件（§4.3.3）。
 
@@ -22,7 +27,9 @@ device_switch、hfp 的「其餘時間」改為不得連續 ≥ 3 秒 ≤ -60 dB
 用法：
   e2e_check.py <場次> [--expect-min S --expect-max S] [--device-switch] [--all-bluetooth] [--hfp] [--sync]
                [--fps-interval mm:ss-mm:ss] [--space-interval mm:ss-mm:ss] [--status <record.status.json>]
-               [--segment-writer] [--pause-mute] [--json]
+               [--segment-writer] [--pause-mute] [--sync-player] [--json]
+  e2e_check.py --sync-acoustic <場次>   印各 60 秒時段 mic − sys 的嗶聲時間差中位數（只報數字，回 0）
+  e2e_check.py --print-sync-file <路徑> 把同步測試源寫成影音檔（只寫到指定路徑），給 QuickTime／Chrome 播放
   e2e_check.py --print-sync-source      印出同步測試源（低音量底音＋每 2 秒一次閃白與嗶聲）的 ffplay 指令
 """
 import argparse
@@ -70,6 +77,12 @@ SYNC_RATE = 48000
 SYNC_ENV_WIN = 0.001
 SYNC_SEARCH = 0.3
 SYNC_ONSET_RATIO = 0.5
+# R3（spec §4.35.2–§4.35.4；D3、S-A）
+PLAYER_TOL = 0.045         # spec §4.35.2（D3-A）：每個 60 秒時段的 |中位數| < 45 ms
+SYNC_BUCKET = 60.0         # spec §4.35.2、§4.35.3：時段＝[0, 60)、[60, 120)、…
+ACOUSTIC_PAIR = 0.5        # spec §4.35.3：系統嗶聲配 ±0.5 秒內最近的麥克風嗶聲
+ACOUSTIC_MERGE = 0.05      # 包絡 > -60 dBFS 的連續區間之間短於 50 ms 的空檔視為同一個峰（帶通的振鈴）
+SYNC_FILE_SECONDS = 300    # spec §4.35.4：--print-sync-file 的長度（5 分鐘）
 # spec §4.9.1、§4.9.3（t6 第三輪，缺陷 K (b)）：切換／格式變更以外的時間不得連續 ≥ 3 秒 ≤ -60 dBFS 或 null
 QUIET_RUN_MAX = MAX_INTERRUPT
 # D20（--segment-writer）
@@ -116,6 +129,24 @@ def print_sync_source():
     v, a = sync_source_graph()
     print(f'ffplay -f lavfi "{v}[out0];{a}[out1]"')
     print("# 全螢幕播放這個視窗當系統聲音來源；錄完用 e2e_check.py <場次> --sync 核對。")
+
+
+def print_sync_file(path, duration=SYNC_FILE_SECONDS):
+    """spec §4.35.4：同步測試源寫成 H.264＋AAC 的影音檔，只寫到 path（不留暫存檔）；回傳結束碼。"""
+    path = Path(path)
+    if not path.parent.is_dir():
+        print(f"e2e_check.py：找不到輸出目錄：{path.parent}", file=sys.stderr)
+        return 2
+    v, a = sync_source_graph(duration=duration)
+    r = run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", v, "-f", "lavfi", "-i", a, "-t", duration,
+             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+             "-movflags", "+faststart", path.resolve()])
+    if r.returncode != 0:
+        print(f"e2e_check.py：ffmpeg 失敗：{r.stderr.strip()[-500:]}", file=sys.stderr)
+        return 1
+    print(f"已寫出同步測試檔：{path}")
+    print("# 用 QuickTime／Chrome 全螢幕播放當系統聲音來源；錄完收尾後用 e2e_check.py <場次> --sync-player 核對。")
+    return 0
 
 
 # ---------- 讀檔 ----------
@@ -997,6 +1028,138 @@ def c_sync(s, o):
     return worst < SYNC_TOL and not missing, note
 
 
+def mmss(t):
+    t = int(t)
+    return f"{t // 60:02d}:{t % 60:02d}"
+
+
+def buckets(items):
+    """[(錄製時鐘秒, 值)] → [(時段起點秒, [值…])]，時段＝[0, 60)、[60, 120)、…，依時間遞增、只列有值的時段。"""
+    out = {}
+    for t, v in items:
+        out.setdefault(int(math.floor(max(t, 0.0) / SYNC_BUCKET)), []).append(v)
+    return [(k * SYNC_BUCKET, out[k]) for k in sorted(out)]
+
+
+def finalize_json(s):
+    for p in (s.tracks / "finalize.json", s.rec / "finalize.json"):
+        if p.is_file():
+            return json.loads(p.read_text(encoding="utf-8"))
+    return None
+
+
+def compensation_note(s):
+    """spec §4.35.2：finalize.json.syncCompensation 各段套用的延遲（秒）；沒有就回 None。"""
+    fin = finalize_json(s)
+    sc = fin.get("syncCompensation") if isinstance(fin, dict) else None
+    if not isinstance(sc, dict):
+        return None
+    segs = [x for x in sc.get("segments") or [] if isinstance(x, dict)]
+    parts = []
+    for x in segs:
+        d = _num(x.get("delaySeconds"))
+        tag = f"{x.get('source')}" + ("、clamped" if x.get("clamped") else "")
+        parts.append(f"{x.get('file')} {d:.2f} 秒（{tag}）" if d is not None else f"{x.get('file')} —（{tag}）")
+    return f"syncCompensation mode={sc.get('mode')}：" + ("、".join(parts) if parts else "沒有套用延遲")
+
+
+def c_sync_player(s, o):
+    """spec §4.35.2（D3-A）：閃白與嗶聲的差（sync_offsets）依 60 秒時段取中位數，|中位數| 全部 < 45 ms 為 PASS。
+    量的是成品本身；收尾套用的延遲已在成品裡，這裡只列出、不重複加減。"""
+    pairs = sync_offsets(s.video)
+    diffs = [(t, d) for t, d in pairs if d is not None]
+    comp = compensation_note(s)
+    tail = f"；{comp}" if comp else ""
+    if len(pairs) < 3 or len(diffs) < 3:
+        return False, f"閃白 {len(pairs)} 次、嗶聲 {len(diffs)} 次（各至少 3 次）{tail}"
+    rows, ok = [], True
+    for t0, ds in buckets(diffs):
+        med = statistics.median(ds)
+        ok = ok and abs(med) < PLAYER_TOL
+        rows.append(f"{mmss(t0)}–{mmss(t0 + SYNC_BUCKET)} 中位數 {med * 1000:.0f} ms（{len(ds)} 組）")
+    missing = len(pairs) - len(diffs)
+    note = "；".join(rows) + f"（門檻 |中位數| < {PLAYER_TOL * 1000:.0f} ms）"
+    if missing:
+        note += f"；{missing} 個閃白附近 ±{SYNC_SEARCH} 秒找不到嗶聲（不計）"
+    return ok, note + tail
+
+
+def beep_onsets(path, index):
+    """spec §4.35.3：第 index 條音軌過 band_pcm 的 1 kHz 帶通、1 ms 窗 RMS 包絡；包絡 > -60 dBFS 的每個峰
+    （連續區間，短於 ACOUSTIC_MERGE 的空檔併入同一個峰）取第一個 ≥ 峰值 50% 的窗起點。回傳檔內秒數的清單。"""
+    samples, start = band_pcm(path, index)
+    n = int(round(SYNC_RATE * SYNC_ENV_WIN))
+    floor = 32768.0 * 10 ** (SILENT_DB / 20)
+    env = []
+    for w in range(len(samples) // n):
+        chunk = samples[w * n:(w + 1) * n]
+        env.append(math.sqrt(sum(x * x for x in chunk) / n))
+    runs, cur, gap = [], None, int(round(ACOUSTIC_MERGE / SYNC_ENV_WIN))
+    for i, e in enumerate(env):
+        if e > floor:
+            if cur is not None and i - cur[1] <= gap:
+                cur[1] = i + 1
+            else:
+                if cur is not None:
+                    runs.append(cur)
+                cur = [i, i + 1]
+    if cur is not None:
+        runs.append(cur)
+    out = []
+    for a, b in runs:
+        peak = max(env[a:b])
+        k = next(i for i in range(a, b) if env[i] >= SYNC_ONSET_RATIO * peak)
+        out.append(start + k * SYNC_ENV_WIN)
+    return out
+
+
+def acoustic_pairs(session):
+    """spec §4.35.3：讀 錄音/tracks/seg-*.mov（第 1 條音軌＝系統、第 2 條＝麥克風）與 manifest.json 的 startedAt，
+    回傳 [(系統嗶聲的錄製時鐘秒, mic − sys 秒)]；每個系統嗶聲配 ±0.5 秒內最近的麥克風嗶聲，配不到的不計。"""
+    s = Session(session)
+    starts = {x.get("file"): _num(x.get("startedAt")) for x in s.manifest.get("segments") or []
+              if isinstance(x, dict)}
+    segs = s.segments()
+    if not segs:
+        raise CheckError("錄音/tracks/ 沒有 seg-*.mov")
+    sys_t, mic_t = [], []
+    for f in segs:
+        st = starts.get(f.name)
+        if st is None:
+            print(f"e2e_check.py：manifest.json 沒有 {f.name} 的 startedAt，略過", file=sys.stderr)
+            continue
+        if len(streams(f, "audio")) < 2:
+            print(f"e2e_check.py：{f.name} 沒有兩條音軌，略過", file=sys.stderr)
+            continue
+        sys_t += [st + t for t in beep_onsets(f, SYSTEM_TRACK)]
+        mic_t += [st + t for t in beep_onsets(f, MIC_TRACK)]
+    out = []
+    for t in sorted(sys_t):
+        near = [m for m in mic_t if abs(m - t) <= ACOUSTIC_PAIR]
+        if near:
+            m = min(near, key=lambda x: abs(x - t))
+            out.append((t, m - t))
+    return out
+
+
+def sync_acoustic(session, as_json=False):
+    """spec §4.35.3：每個有配對的 60 秒時段印一行 mic − sys 中位數（毫秒整數）與組數；只報數字，回 0。"""
+    try:
+        pairs = acoustic_pairs(session)
+    except (CheckError, KeyError, ValueError, TypeError, OSError, json.JSONDecodeError) as e:
+        print(f"e2e_check.py：無法量測：{e}", file=sys.stderr)
+        return 1
+    rows = [{"start": t0, "end": t0 + SYNC_BUCKET, "medianMs": int(round(statistics.median(ds) * 1000)),
+             "pairs": len(ds)} for t0, ds in buckets(pairs)]
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    elif not rows:
+        print("沒有可配對的嗶聲")
+    for r in ([] if as_json else rows):
+        print(f"{mmss(r['start'])}–{mmss(r['end'])} mic − sys 中位數 {r['medianMs']} ms（{r['pairs']} 組）")
+    return 0
+
+
 def nonblack_ratios(path, a, b, size=128):
     r = run([FFMPEG, "-v", "error", "-ss", str(a), "-to", str(b), "-i", path, "-map", "0:v:0", "-vf",
              f"fps=2,scale={size}:{size}:flags=neighbor,format=gray", "-f", "rawvideo", "-"], binary=True)
@@ -1460,6 +1623,8 @@ def selected_checks(o):
         checks.append(("hfp", c_hfp))
     if o.sync:
         checks.append(("sync", c_sync))
+    if o.sync_player:
+        checks.append(("sync_player", c_sync_player))
     if o.space_interval:
         checks.append(("space_interval", c_space))
     if o.segment_writer:
@@ -1509,8 +1674,14 @@ def build_parser():
                    help="R2 暫停／麥克風靜音／標記的判準：pause_events、pause_cut、mic_mute_zero、mute_system_kept、"
                         "no_false_silence、markers、mute_timing、no_false_black、event_output_t（後兩項與 "
                         "no_false_silence 讀 --status）")
+    p.add_argument("--sync-player", action="store_true",
+                   help="§4.35.2 補償型播放端判準 sync_player：閃白與嗶聲的差依 60 秒時段取中位數，全部 < 45 ms")
+    p.add_argument("--sync-acoustic", action="store_true",
+                   help="§4.35.3 讀 錄音/tracks/ 的雙音軌段落，印各 60 秒時段 mic − sys 的中位數（只報數字，回 0）")
     p.add_argument("--json", action="store_true", help="印機器可讀結果")
     p.add_argument("--print-sync-source", action="store_true", help="印出產生同步測試源的 ffplay 指令")
+    p.add_argument("--print-sync-file", metavar="PATH",
+                   help="§4.35.4 把同步測試源寫成影音檔到 PATH（只寫這個檔），給 QuickTime／Chrome 播放")
     return p
 
 
@@ -1520,6 +1691,8 @@ def main(argv=None):
     if o.print_sync_source:
         print_sync_source()
         return 0
+    if o.print_sync_file:
+        return print_sync_file(o.print_sync_file)
     if not o.session:
         p.print_usage(sys.stderr)
         print("e2e_check.py：需要場次目錄", file=sys.stderr)
@@ -1527,6 +1700,8 @@ def main(argv=None):
     if not Path(o.session).is_dir():
         print(f"e2e_check.py：找不到場次目錄：{o.session}", file=sys.stderr)
         return 2
+    if o.sync_acoustic:
+        return sync_acoustic(o.session, as_json=o.json)
     results = run_checks(o.session, o)
     if o.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
