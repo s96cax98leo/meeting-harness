@@ -268,7 +268,12 @@ final class HUDController: NSObject {
 
     /// 停止前先確認 record.pid 真的是持有 record.lock 的錄製實例（spec §4.27.4），由 menu bar 依結果送 SIGTERM 或說明拒絕原因
     @objc private func stopPressed() {
-        guard content.canStop, let actions else { return }
+        guard content.canStop, let actions else {
+            // spec §4.10.3：提早 return 前記一行
+            Logger(path: home.appendingPathComponent("record.log").path, append: true)
+                .line("\(isoNow()) " + stopPathLogLine(source: "HUD.stopPressed", reason: "目前不能停止或選單已不在"))
+            return
+        }
         let recordPid = readPid(pidURL)
         let current = readStatus(statusURL)
         let decision = stopTargetDecision(lockHeld: actions.hudRecordLockHeld(), recordPid: recordPid,
