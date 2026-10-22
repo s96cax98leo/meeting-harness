@@ -4,16 +4,23 @@
 函式：
 - merge_defaults(home, updates, timeout=5.0)：取 <home>/record.defaults.lock 後「讀 → 合併 → mkstemp → os.replace」。
 - output_time(t, first_start, pauses, l_out=0.0)：錄製時鐘 → 成品時間（語意同 Swift Core outputTime）。
-- paused_total(pauses)：已配對暫停長度和（沒配對的不計）。
+- paused_total(pauses)：已配對暫停長度和（算法同 _record_finalize：連續兩個 pause 取後一個；沒配對的不計）。
+- update_pipeline_state(sess, updates, timeout=5.0)：取 <場次>/.pipeline-state.lock 後「讀 → 合併 → mkstemp → os.replace」；
+  等鎖逾時印一行警告、回 False（meeting-speed spec §4.9）。
+- load_json、write_json_atomic、record_home：與 bin/_record_finalize.py 共用的小 helper（meeting-speed spec §4.13.2）。
 - levels_intervals(levels, window, threshold_db, merge_gap, pad, total)：一維 levels → 有聲區間。
 - clip_timestamps(rec_dir)：讀 tracks/manifest.json 與 tracks/record.meta.json，回成品時間的有聲區間。
 
 CLI：
 - python3 _record_lib.py clip <錄音目錄>：印 clip_timestamps 的 JSON（小數 3 位；退回整檔時 null），回 0；目錄不存在回 2。
 - python3 _record_lib.py sync [off|reported|calibrated]：meeting sync 的實作。
+- python3 _record_lib.py state-set <場次> <stage> <status> [--run-id ID]：寫一個 stage（帶 runId 時一併寫）；
+  寫入成功回 0、等鎖逾時或寫不進回 1、參數錯 2。
+- python3 _record_lib.py state-begin <場次> <runId> <stage>…：寫 prep: {runId, startedAt, expect}；結束碼同上。
 
 呼叫端以 python3 "$BIN/lib/_record_lib.py" 執行；Python 端以 sys.path.insert(0, <bin>/lib) 匯入。
 """
+import datetime
 import fcntl
 import json
 import math
@@ -25,11 +32,88 @@ import time
 DEFAULTS_FILE = "record.defaults.json"
 DEFAULTS_LOCK = "record.defaults.lock"
 SYNC_MODES = ("off", "reported", "calibrated")
+PIPELINE_STATE = ".pipeline-state.json"
+PIPELINE_LOCK = ".pipeline-state.lock"
 
 VAD_THRESHOLD_DB = -60.0
 VAD_PAD = 0.75
 VAD_MERGE_GAP = 2.0
 LEVEL_WINDOW = 0.5
+
+
+# ── 共用 helper（meeting-speed spec §4.13.2；語意同 bin/_record_finalize.py 現行版本） ────────
+
+def record_home():
+    return os.environ.get("MH_RECORD_HOME") or os.path.expanduser("~/.meeting-harness")
+
+
+_record_home = record_home  # 舊名，模組內呼叫端照舊可用
+
+
+def load_json(path, default=None):
+    """讀 JSON；檔案不存在、讀不到或不是合法 JSON 時回 default。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def write_json_atomic(path, data):
+    """JSON 原子寫入：同目錄 tempfile.mkstemp(dir=…) 建暫存檔，寫完 os.replace（spec §4.28.2）。"""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
+                               prefix="." + os.path.basename(path) + ".", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# ── .pipeline-state.json（meeting-speed spec §3.5、§4.9） ─────────────────────
+
+def update_pipeline_state(sess, updates, timeout=5.0):
+    """取 <sess>/.pipeline-state.lock（flock，最多等 timeout 秒）→ 讀（缺檔、壞檔或不是物件＝{}）→ 合併
+    （"stages" 逐 stage 整筆取代、其他頂層鍵整筆取代，沒提到的鍵保留）→ 同目錄 mkstemp＋os.replace。
+    寫入成功回 True；等鎖逾時或寫不進時 stderr 印一行警告、不改檔、回 False（呼叫端照常繼續）。"""
+    if not isinstance(updates, dict):
+        raise TypeError("updates 必須是 dict")
+    sf = os.path.join(sess, PIPELINE_STATE)
+    try:
+        fd = _try_flock(os.path.join(sess, PIPELINE_LOCK), timeout)
+    except OSError as e:
+        print(f"⚠ 開不了 {PIPELINE_LOCK}，略過這次 {PIPELINE_STATE} 寫入：{e}", file=sys.stderr)
+        return False
+    if fd is None:
+        print(f"⚠ {PIPELINE_LOCK} 被其他程序持有超過 {timeout:g} 秒，略過這次 {PIPELINE_STATE} 寫入：{sess}",
+              file=sys.stderr)
+        return False
+    try:
+        data = load_json(sf, {})
+        if not isinstance(data, dict):
+            data = {}
+        for k, v in updates.items():
+            if k == "stages" and isinstance(v, dict):
+                stages = data.get("stages")
+                if not isinstance(stages, dict):
+                    stages = {}
+                stages.update(v)
+                data["stages"] = stages
+            else:
+                data[k] = v
+        write_json_atomic(sf, data)
+        return True
+    except OSError as e:
+        print(f"⚠ 寫不進 {PIPELINE_STATE}：{e}", file=sys.stderr)
+        return False
+    finally:
+        os.close(fd)  # 關 fd 即釋放 flock
 
 
 # ── record.defaults.json（spec §3.15、§3.16、§3.19） ──────────────────────────
@@ -38,8 +122,8 @@ class DefaultsError(Exception):
     """record.defaults.json 無法合併寫入（不是 JSON 物件、取鎖逾時）。"""
 
 
-def _acquire_lock(path, timeout):
-    """阻塞取 flock(LOCK_EX)，最多等 timeout 秒；逾時丟 DefaultsError。回傳 fd。"""
+def _try_flock(path, timeout):
+    """阻塞取 flock(LOCK_EX)，最多等 timeout 秒；逾時回 None。回傳 fd（關 fd 即釋放）。開不了鎖檔丟 OSError。"""
     fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0), 0o600)
     deadline = time.monotonic() + float(timeout)
     while True:
@@ -49,12 +133,19 @@ def _acquire_lock(path, timeout):
         except BlockingIOError:
             if time.monotonic() >= deadline:
                 os.close(fd)
-                raise DefaultsError(f"{DEFAULTS_LOCK} 被其他程序持有超過 {timeout:g} 秒，"
-                                    f"放棄寫入 {DEFAULTS_FILE}") from None
+                return None
             time.sleep(0.05)
         except BaseException:
             os.close(fd)
             raise
+
+
+def _acquire_lock(path, timeout):
+    """阻塞取 flock(LOCK_EX)，最多等 timeout 秒；逾時丟 DefaultsError。回傳 fd。"""
+    fd = _try_flock(path, timeout)
+    if fd is None:
+        raise DefaultsError(f"{DEFAULTS_LOCK} 被其他程序持有超過 {timeout:g} 秒，放棄寫入 {DEFAULTS_FILE}")
+    return fd
 
 
 def read_defaults(home):
@@ -129,9 +220,34 @@ def pause_pairs(pauses):
     return out
 
 
+def _parse_t(v):
+    """float() 解析（數字字串也算）；非有限值或解析失敗回 None。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def paused_total(pauses):
-    """Σ（resume.t − 緊接在前的 pause.t）；沒配對的 pause 不計；小數 3 位。"""
-    return round(sum(r - p for p, r in pause_pairs(pauses) if r is not None), 3)
+    """spec §3.14 pausedTotal，算法以 _record_finalize 為準（meeting-speed spec §4.13.2，E4(3)）：依序掃事件，
+    pause 一律把起點設為該筆的 t（連續兩個 pause 取後一個），resume 有起點才累加 resume.t − 起點並清掉起點；
+    沒有前導 pause 的 resume、最後沒配對的 pause 不計；t 以 float() 解析、非有限值或解析失敗略過；小數 3 位。
+    不經 pause_pairs（pause_pairs 與 output_time 照舊以先 pause 為起點）。"""
+    total, last_pause = 0.0, None
+    for e in pauses or []:
+        if not isinstance(e, dict):
+            continue
+        t = _parse_t(e.get("t"))
+        if t is None:
+            continue
+        if e.get("kind") == "pause":
+            last_pause = t
+        elif e.get("kind") == "resume":
+            if last_pause is not None:
+                total += t - last_pause
+            last_pause = None
+    return round(total, 3)
 
 
 def output_time(t, first_start, pauses, l_out=0.0):
@@ -210,11 +326,7 @@ def _env_float(name, default):
 
 
 def _read_json(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    return load_json(path, None)
 
 
 def _max_level(a, b):
@@ -281,10 +393,6 @@ def clip_timestamps(rec_dir, threshold_db=None, pad=None, merge_gap=None):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def _record_home():
-    return os.environ.get("MH_RECORD_HOME") or os.path.expanduser("~/.meeting-harness")
-
-
 def cmd_clip(args):
     if len(args) != 1:
         print("用法：_record_lib.py clip <錄音目錄>", file=sys.stderr)
@@ -304,7 +412,7 @@ def cmd_clip(args):
 
 
 def cmd_sync(args):
-    home = _record_home()
+    home = record_home()
     if len(args) > 1 or (args and args[0] not in SYNC_MODES):
         print(f"用法：meeting sync [{'|'.join(SYNC_MODES)}]", file=sys.stderr)
         return 2
@@ -328,10 +436,48 @@ def cmd_sync(args):
     return 0
 
 
+def cmd_state_set(args):
+    run_id = None
+    rest = list(args)
+    if "--run-id" in rest:
+        i = rest.index("--run-id")
+        if i + 1 >= len(rest) or not rest[i + 1]:
+            rest = []  # 讓下面印用法
+        else:
+            run_id = rest[i + 1]
+            del rest[i:i + 2]
+    if len(rest) != 3 or not all(rest):
+        print("用法：_record_lib.py state-set <場次> <stage> <status> [--run-id ID]", file=sys.stderr)
+        return 2
+    sess, stage, status = rest
+    if not os.path.isdir(sess):
+        print(f"✗ 場次目錄不存在：{sess}", file=sys.stderr)
+        return 2
+    entry = {"status": status}
+    if run_id:
+        entry["runId"] = run_id
+    return 0 if update_pipeline_state(sess, {"stages": {stage: entry}}) else 1
+
+
+def cmd_state_begin(args):
+    if len(args) < 3 or not all(args):
+        print("用法：_record_lib.py state-begin <場次> <runId> <stage>…", file=sys.stderr)
+        return 2
+    sess, run_id, expect = args[0], args[1], list(args[2:])
+    if not os.path.isdir(sess):
+        print(f"✗ 場次目錄不存在：{sess}", file=sys.stderr)
+        return 2
+    started = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    prep = {"runId": run_id, "startedAt": started, "expect": expect}
+    return 0 if update_pipeline_state(sess, {"prep": prep}) else 1
+
+
 def main(argv):
-    cmds = {"clip": cmd_clip, "sync": cmd_sync}
+    cmds = {"clip": cmd_clip, "sync": cmd_sync, "state-set": cmd_state_set, "state-begin": cmd_state_begin}
     if not argv or argv[0] not in cmds:
-        print("用法：_record_lib.py clip <錄音目錄> | sync [off|reported|calibrated]", file=sys.stderr)
+        print("用法：_record_lib.py clip <錄音目錄> | sync [off|reported|calibrated]"
+              " | state-set <場次> <stage> <status> [--run-id ID] | state-begin <場次> <runId> <stage>…",
+              file=sys.stderr)
         return 2
     return cmds[argv[0]](argv[1:])
 

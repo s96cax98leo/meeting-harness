@@ -239,39 +239,20 @@ load_profile() {
 # 是否對此場次做講者分離：由 profile 決定（六種型態預設都開；舊 .diarize/.meeting 標記仍相容）
 diarize_on() { [[ "${MH_DO_DIARIZE:-0}" == "1" ]]; }
 
-# 對單一場次做講者分離（需要時自動先補段落時間戳）
-run_diarize() {
-  local sess="$1"
+# 對單一場次做講者分離。第 2 參數給了＝prep 已在背景跑完 diarize.sh（spec §4.8.1），只收結果、merge、annotate。
+# 缺 transcript.segments.json 時明確報錯、不重轉（raw 不改，鐵則 1；meeting-speed spec §4.8.4、§6 第 13、20 條）。
+run_diarize() { # <場次dir> [背景 diarize.sh 的結束碼]
+  local sess="$1" pre_rc="${2:-}"
   [[ -z "${MH_TYPE:-}" ]] && load_profile "$sess"
-  echo "  ▶ 講者分離（pyannote；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
-  if [[ ! -s "$sess/錄音/transcript.segments.json" ]]; then
-    # raw 逐字稿不改（鐵則 1，spec §4.29.3）：在暫存目錄重轉一次，只取段落檔；
-    # 既有的 transcript.raw.md 與衍生檔一律不動，只有原本就沒有 raw 時才補上。
-    local audio segtmp; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
-    echo "    · 補段落時間戳（在暫存目錄重轉一次，raw 不動）"
-    segtmp="$(mktemp -d)"
-    MH_EMIT_SEGMENTS=1 bash "$BIN/transcribe.sh" "$audio" "$segtmp/transcript.raw.md" "${MH_LANG:-zh}" >/dev/null 2>&1
-    # 段落檔與品質檔是同一次轉錄的一對（鐵則 4）：段落檔換掉時品質檔也換成這次重轉的版本，
-    # 不沿用舊的；這次沒產生品質檔就刪掉舊的並警告（_render.py 讀不到就不標「（聽不清）」）。
-    if [[ -s "$segtmp/transcript.segments.json" ]]; then
-      cp "$segtmp/transcript.segments.json" "$sess/錄音/transcript.segments.json"
-      if [[ -f "$segtmp/transcript.quality.json" ]]; then
-        cp "$segtmp/transcript.quality.json" "$sess/錄音/transcript.quality.json"
-      else
-        rm -f "$sess/錄音/transcript.quality.json"
-        echo "    ⚠ 重轉沒有產生 transcript.quality.json（speakers.md 不會標「（聽不清）」）"
-      fi
-    fi
-    if [[ ! -e "$sess/錄音/transcript.raw.md" && -s "$segtmp/transcript.raw.md" ]]; then
-      cp "$segtmp/transcript.raw.md" "$sess/錄音/transcript.raw.md"
-      [[ -f "$segtmp/transcript.raw.md.QUALITY_WARNING" ]] \
-        && cp "$segtmp/transcript.raw.md.QUALITY_WARNING" "$sess/錄音/transcript.raw.md.QUALITY_WARNING"
-    fi
-    [[ -s "$sess/錄音/transcript.md" || ! -s "$sess/錄音/transcript.raw.md" ]] \
-      || cp "$sess/錄音/transcript.raw.md" "$sess/錄音/transcript.md" 2>/dev/null
-    rm -rf "$segtmp"
+  if [[ -z "$pre_rc" ]]; then
+    echo "  ▶ 講者分離（pyannote；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
+    require_segments "$sess" || return 1
+    bash "$BIN/diarize.sh" "$sess"; pre_rc=$?
   fi
-  bash "$BIN/diarize.sh" "$sess" || { echo "    ✗ 分離失敗（見上面訊息）"; return 1; }
+  if [[ "$pre_rc" -ne 0 ]]; then
+    echo "    ✗ 分離失敗（見上面訊息）"; state_set "$sess" diarize failed; return 1
+  fi
+  require_segments "$sess" || return 1
   python3 "$BIN/_merge_speakers.py" \
     "$sess/錄音/transcript.segments.json" "$sess/錄音/diarization.json" \
     "$sess/錄音/transcript.speakers.md" "$sess/錄音/speakers.map.json" \
@@ -281,6 +262,14 @@ run_diarize() {
   python3 "$BIN/_render.py" "$sess" --annotate-speakers >/dev/null \
     || echo "    ⚠ speakers.md 註記後處理失敗（維持原樣）"
   state_set "$sess" diarize done; echo "    ✓ transcript.speakers.md"
+}
+
+# 分離要的段落時間戳不在就報錯、記 diarize: failed、回 1（不呼叫 ASR）
+require_segments() { # <場次dir>
+  [[ -s "$1/錄音/transcript.segments.json" ]] && return 0
+  echo "    ✗ 缺 transcript.segments.json，先跑 meeting.sh prep <場次>（或 transcribe）再分離" >&2
+  state_set "$1" diarize failed
+  return 1
 }
 
 # 找出所有場次目錄（含 錄音/ 的音/視訊檔：m4a/mp3/wav/mov/mp4/m4v）
@@ -297,16 +286,33 @@ list_sessions() {
   done | sort
 }
 
+# 寫 .pipeline-state.json 一律經 _record_lib.update_pipeline_state（flock＋讀後合併＋原子寫入；meeting-speed spec §4.9）。
+# prep 處理一場期間 PREP_RUN_ID 有值，寫的 stage 都帶同一個 runId（spec §4.8.2）；等鎖逾時只警告、照常繼續。
+PREP_RUN_ID=""
 state_set() { # <場次dir> <stage> <status>
-  local sf="$1/.pipeline-state.json"
-  [[ -f "$sf" ]] || echo '{}' > "$sf"
-  python3 - "$sf" "$2" "$3" <<'PY'
-import json,sys
-sf,stage,status=sys.argv[1],sys.argv[2],sys.argv[3]
-d=json.load(open(sf))
-d.setdefault("stages",{})[stage]={"status":status}
-json.dump(d,open(sf,"w"),ensure_ascii=False,indent=2)
-PY
+  python3 "$BIN/lib/_record_lib.py" state-set "$1" "$2" "$3" ${PREP_RUN_ID:+--run-id "$PREP_RUN_ID"} || true
+}
+
+new_run_id() {
+  uuidgen 2>/dev/null || python3 -c 'import uuid; print(str(uuid.uuid4()).upper())'
+}
+
+# 轉錄一場（spec §4.11.8）：有 bin/lib/_asr_worker.py 且 stitch 回 0 時，以 MH_ASR_SEGMENTS_JSON 交給 transcribe.sh，
+# 不呼叫 ASR 引擎；stitch 回 3（不可用）或 worker 不存在時整檔轉錄。回 transcribe.sh 的結束碼。
+transcribe_session() { # <場次dir> <音源> <MH_EMIT_SEGMENTS>
+  local sess="$1" audio="$2" seg="$3" worker="$BIN/lib/_asr_worker.py" st rc
+  if [[ -f "$worker" ]]; then
+    st="$(mktemp -d)"
+    if python3 "$worker" stitch "$sess" "$st/stitched.json" && [[ -s "$st/stitched.json" ]]; then
+      echo "  · 用錄製中已完成的增量轉錄（不再整檔轉錄）"
+      MH_ASR_SEGMENTS_JSON="$st/stitched.json" MH_EMIT_SEGMENTS=$seg \
+        bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}"; rc=$?
+      rm -rf "$st"; return "$rc"
+    fi
+    rm -rf "$st"
+    echo "  · 沒有可用的增量轉錄結果，整檔轉錄"
+  fi
+  MH_EMIT_SEGMENTS=$seg bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}"
 }
 
 prep() {
@@ -321,10 +327,22 @@ prep() {
     local audio; audio="$(python3 "$BIN/_combine_audio.py" "$sess/錄音")"
     echo; echo "── [$n] $name ──"
     echo "  · 型態：${MH_TYPE:-seminar}（模板 ${MH_TEMPLATE:-seminar}；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
+    # 本場這次 prep 的 runId 與應跑的 stage（spec §3.5、§4.8.2）：MH_PREP_RUN_ID 由錄製器給，沒給就自己產
+    PREP_RUN_ID="${MH_PREP_RUN_ID:-$(new_run_id)}"
+    local seg=0; diarize_on "$sess" && seg=1
+    local expect=(transcribe); [[ -d "$sess/照片" ]] && expect+=(slide-ocr); [[ "$seg" -eq 1 ]] && expect+=(diarize)
+    python3 "$BIN/lib/_record_lib.py" state-begin "$sess" "$PREP_RUN_ID" "${expect[@]}" || true
+    # 要分離時在轉錄開始前於背景啟動 diarize.sh（spec §4.8.1）；輸出先收進暫存檔，wait 之後再印，不與轉錄交錯
+    local dpid="" dlog=""
+    if [[ "$seg" -eq 1 ]]; then
+      echo "  ▶ 講者分離（pyannote，背景與轉錄並行；講者數=${MH_NUM_SPEAKERS:-${MH_MIN_SPEAKERS:-?}–${MH_MAX_SPEAKERS:-?}}）"
+      dlog="$(mktemp)"
+      bash "$BIN/diarize.sh" "$sess" >"$dlog" 2>&1 &
+      dpid=$!
+    fi
     echo "  ▶ 轉錄：$audio"
     # 若本場要做講者分離，轉錄時就一併輸出段落時間戳（避免之後重轉一次）
-    local seg=0; diarize_on "$sess" && seg=1
-    if MH_EMIT_SEGMENTS=$seg bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}" \
+    if transcribe_session "$sess" "$audio" "$seg" \
        && [[ "$(grep -cve '^[[:space:]]*$' -e '^#' -e '^>' "$sess/錄音/transcript.raw.md" 2>/dev/null || echo 0)" -gt 0 ]]; then
       state_set "$sess" transcribe done
     else
@@ -335,7 +353,12 @@ prep() {
         state_set "$sess" slide-ocr done
       else state_set "$sess" slide-ocr failed; echo "  ✗ OCR 失敗"; fi
     fi
-    if diarize_on "$sess"; then run_diarize "$sess"; fi
+    if [[ -n "$dpid" ]]; then
+      local drc=0; wait "$dpid" || drc=$?
+      echo "  ▶ 講者分離結果："; cat "$dlog"; rm -f "$dlog"
+      run_diarize "$sess" "$drc"
+    fi
+    PREP_RUN_ID=""
   done 3< <(list_sessions "$root")
   if [[ "$n" -eq 0 ]]; then
     echo
