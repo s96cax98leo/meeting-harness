@@ -57,6 +57,9 @@ struct RecordStatus: Codable, Equatable {
     // ---- R3x（spec §3.21、§3.26）：每場狀態檔一律 background true；排隊中 queued true；nil 時省略鍵 ----
     var background: Bool? = nil
     var queued: Bool? = nil
+    // ---- meeting-speed（spec §3.1、§3.10）：音訊就緒、丟幀數；nil 時省略鍵，舊版狀態檔沒有這兩鍵 ----
+    var audioReady: Bool? = nil
+    var droppedFrames: Int? = nil
 }
 
 /// spec §3.10：status 的 recentLevels。JSON 鍵恰為 3 個；system／mic 為 nil 時寫 null（不省略）。
@@ -259,7 +262,12 @@ struct RecordMeta: Codable, Equatable {
     var micMuteEvents: [MicMuteEvent]? = nil
     // ---- R3（spec §3.17）：開錄時一筆 t=0，之後每筆輸出裝置 deviceEvents 一筆；nil 時省略鍵 ----
     var outputLatencies: [OutputLatency]? = nil
+    // ---- meeting-speed（spec §3.3、§3.10）：開錄當下的偶數像素畫布尺寸；nil 時省略鍵（舊場次沒有這鍵）----
+    var canvasLock: CanvasLock? = nil
 }
+
+/// meeting-speed spec §3.3、§3.10：record.meta.json 的 canvasLock，JSON 鍵恰為 width、height。
+struct CanvasLock: Codable, Equatable { var width: Int; var height: Int }
 
 /// t6 第二輪（缺陷 D，§4.4.9）：錄製結束時寫進 record.status.json 與 record.log 的最終結果。
 struct CompletionOutcome: Equatable {

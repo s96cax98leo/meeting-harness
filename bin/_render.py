@@ -259,15 +259,23 @@ def _merge_module():
         _MERGE = mod
     return _MERGE
 
+def _confidence_ok(v):
+    """照抄 _merge_speakers.confidence_ok：confidence ≥ 0.7 才套；沒有或不是數字一律不套。"""
+    try:
+        return float(v["confidence"]) >= 0.7
+    except (KeyError, TypeError, ValueError):
+        return False
+
 def load_name_map(path):
-    """speakers.map.json → {代號: 真名}。照抄 _merge_speakers.py:70-82（main 內的套名判準）：
-    dict 值有 apply 就聽 apply，沒有就看 confidence ≥ 0.7；字串值直接套。不夠的不掛名（鐵則 3）。"""
+    """speakers.map.json → {代號: 真名}。照抄 _merge_speakers.py:79-92（main 內的套名判準）：
+    dict 值有 apply 就聽 apply，沒有就看 confidence ≥ 0.7（沒有 confidence 視為未確認、不套，
+    meeting-speed spec §4.6.2）；字串值直接套。不夠的不掛名（鐵則 3）。"""
     name_map = {}
     if path and os.path.exists(path):
         raw_map = json.load(open(path, encoding="utf-8"))
         for k, v in raw_map.items():
             if isinstance(v, dict):
-                ok = v.get("apply") if "apply" in v else (float(v.get("confidence", 1.0)) >= 0.7)
+                ok = v.get("apply") if "apply" in v else _confidence_ok(v)
                 if ok and v.get("name"):
                     name_map[k] = v["name"]
             elif v:
@@ -275,7 +283,7 @@ def load_name_map(path):
     return name_map
 
 def _fold_minor_speakers(ssegs):
-    """照抄 _merge_speakers.py:91-111：MH_MIN_SPEAKER_SEC > 0 時，把總時長過短的講者併入最近的主要講者
+    """照抄 _merge_speakers.py:101-121：MH_MIN_SPEAKER_SEC > 0 時，把總時長過短的講者併入最近的主要講者
     （只動主要講者段，不動含重疊那份；與原程式相同）。"""
     min_sec = float(os.environ.get("MH_MIN_SPEAKER_SEC", "0") or 0)
     if min_sec > 0:
@@ -300,7 +308,7 @@ def _fold_minor_speakers(ssegs):
 def speaker_assigner(rec_dir):
     """回傳 (assign, name_map)；assign(seg) → 講者代號（證據不足為 UNKNOWN）。沒有講者分段時回傳 (None, {})。
     歸屬本身用 _merge_speakers.assign_speaker（_merge_speakers.py:47）；
-    「主要段判不出來就退到含重疊那份再試一次」照抄 _merge_speakers.py:113-119。"""
+    「主要段判不出來就退到含重疊那份再試一次」照抄 _merge_speakers.py:123-129。"""
     dp = os.path.join(rec_dir, "diarization.json")
     if not os.path.isfile(dp):
         return None, {}
@@ -578,7 +586,7 @@ _HEADER_RE = re.compile(r"\*\*\[[^\n]*\]\*\* _\( [0-9:]+ \)_")
 _NOTE_RE = re.compile(r"〔[^\n]*〕")
 
 def _rebuild_blocks(rec_dir):
-    """照 _merge_speakers.py:121-134 的併段規則重建 block：[{header, text, raw_text, segs}]。
+    """照 _merge_speakers.py:131-144 的併段規則重建 block：[{header, text, raw_text, segs}]。
     段落與歸屬用 _merge_speakers.load_whisper_segments 與 speaker_assigner（同一套歸屬）；
     text 已在 transcript.quality.json 列出的段落前加「（聽不清）」。資料不足回 None。"""
     segp = os.path.join(rec_dir, "transcript.segments.json")

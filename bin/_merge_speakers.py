@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """_merge_speakers.py <transcript.segments.json> <diarization.json> <out.speakers.md> [speakers.map.json]
-把 whisper 逐字段（含時間戳）與 senko 講者段合併：每個逐字段指派給「時間重疊最多」的講者，
+把 ASR 逐字段（含時間戳）與 pyannote 講者段（diarize.sh 產的 diarization.json）合併：每個逐字段指派給「時間重疊最多」的講者，
 連續同講者併段，輸出講者標記逐字稿。若給 speakers.map.json 則把 SPEAKER_xx 改成指定名稱。
 """
 import sys, json, os
@@ -56,6 +56,15 @@ def assign_speaker(seg, spk_segs):
         return best
     return UNKNOWN
 
+APPLY_CONFIDENCE = 0.7
+
+def confidence_ok(v):
+    """沒有 apply 的 dict：confidence ≥ 0.7 才套；沒有 confidence 或不是數字一律不套。"""
+    try:
+        return float(v["confidence"]) >= APPLY_CONFIDENCE
+    except (KeyError, TypeError, ValueError):
+        return False
+
 def fmt_ts(sec):
     m, s = divmod(int(sec), 60)
     h, m = divmod(m, 60)
@@ -71,11 +80,12 @@ def main():
         raw_map = json.load(open(sys.argv[4], encoding="utf-8"))
         # 兩種格式都吃：{"SPEAKER_01": "Kevin"} 或
         # {"SPEAKER_01": {"name": "Kevin", "confidence": 0.92, "apply": true, "evidence": "..."}}
-        # 套不套用的判準：有 apply 就聽它的（寫入方自己知道門檻），沒有就看信心值 ≥ 0.7。
+        # 套不套用的判準：有 apply 就聽它的（寫入方自己知道門檻），沒有就看信心值 ≥ 0.7；
+        # 沒有 confidence（或讀不成數字）的 dict 視為未確認、不套（meeting-speed spec §4.6.2）。
         # 不夠的維持匿名標籤，由總結標為存疑——寧可匿名也不掛錯名字。
         for k, v in raw_map.items():
             if isinstance(v, dict):
-                ok = v.get("apply") if "apply" in v else (float(v.get("confidence", 1.0)) >= 0.7)
+                ok = v.get("apply") if "apply" in v else confidence_ok(v)
                 if ok and v.get("name"):
                     name_map[k] = v["name"]
             elif v:
