@@ -109,7 +109,7 @@ enum PreflightRunner {
         func set(_ item: PreflightItem, _ ok: Bool, _ msg: String) { r[item] = PreflightResult(item: item, ok: ok, message: msg) }
 
         // 1 簽章身分（warn）
-        let (signOK, signMsg) = checkSigning(home: ctx.home)
+        let (signOK, signMsg) = checkSigning(home: ctx.home, log: ctx.log)
         set(.signing, signOK, signMsg)
 
         // 2、3 螢幕錄製權限／剛授權要重啟（hard 4，兩者訊息不同，PROBE-REPORT.md:51-53）
@@ -179,7 +179,7 @@ enum PreflightRunner {
         set(.disk, diskOK, diskMsg)
 
         // 10 電源（warn）
-        let (powerOK, powerMsg) = checkPower()
+        let (powerOK, powerMsg) = checkPower(log: ctx.log)
         set(.power, powerOK, powerMsg)
 
         // 11 已有錄製在跑（hard 2）：以 record.lock 為準（spec §3.15、§4.26.2）。呼叫端應已持有；
@@ -223,21 +223,32 @@ enum PreflightRunner {
             // 目標視窗認不到時 (a) 的系統聲音視為 -∞
             let target = window == nil ? -Double.infinity : m.system
             var display: Double?
-            if !(target > -60) {
+            if m.opened, !(target > -60) {
                 display = await ProbeMeter.measureDisplay(content: content, log: ctx.log)
             }
-            switch systemAudioCheck(targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60) {
-            case .pass:
+            // probe stream 開不起來＝音訊裝置無法啟動（meeting-speed spec §4.10.1）：不再誤判成權限沒有生效
+            let verdict: AudioProbeVerdict = m.opened
+                ? .check(systemAudioCheck(targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60))
+                : audioProbeVerdict(opened: false, targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60)
+            switch verdict {
+            case .deviceFailed:
+                let d = currentDevices()
+                set(.system_audio_rms, false, audioDeviceFailedMessage(
+                    input: d.input?.name ?? "（無）", inputTransport: d.input?.transport ?? "（無）",
+                    output: d.output?.name ?? "（無）", outputTransport: d.output?.transport ?? "（無）"))
+            case .check(.pass):
                 set(.system_audio_rms, true, "系統聲音峰值 \(peakText(target))")
-            case .warnTargetSilent:
+            case .check(.warnTargetSilent):
                 r[.system_audio_rms] = PreflightResult(
                     item: .system_audio_rms, ok: false,
                     message: "會議 app 目前沒有聲音（會議視窗峰值 \(peakText(target))）；系統聲音擷取權限正常（測試音 \(peakText(display ?? -.infinity))）。開錄後若持續 15 秒沒有聲音會告警",
                     warnOnly: true)
-            case .fail:
+            case .check(.fail):
                 set(.system_audio_rms, false, "3 秒內系統聲音的峰值都低於 -60 dBFS（會議視窗 \(peakText(target))、測試音 \(peakText(display ?? -.infinity))）：系統聲音擷取權限沒有生效。請到 系統設定 › 隱私權與安全性 › 螢幕與系統錄音 重新授權螢幕錄製給 MeetingRecorder；若剛授權，請完全結束 MeetingRecorder 再重開")
             }
-            if m.mic > -60 {
+            if verdict == .deviceFailed {
+                set(.mic_rms, true, deviceFailedSkipMessage)
+            } else if m.mic > -60 {
                 set(.mic_rms, true, "麥克風峰值 \(peakText(m.mic))")
             } else {
                 // t7（§6 第 102 條）：開會時按下開錄的那 3 秒不一定有人說話——只提醒、照常開錄，錄製中 15 秒靜音告警兜底
@@ -248,6 +259,8 @@ enum PreflightRunner {
             }
             if window == nil {
                 set(.window_minimized, true, "（目標視窗不存在，略過）")
+            } else if verdict == .deviceFailed {
+                set(.window_minimized, true, deviceFailedSkipMessage)
             } else if m.screenFrames == 0 || m.nonSuspendedFrames == 0 {
                 set(.window_minimized, false, minimizedMessage)
             } else {
@@ -271,6 +284,9 @@ enum PreflightRunner {
                                 stageManagerNotice: stageNotice)
     }
 
+    /// probe stream 開不起來時第 6、12 項的訊息（meeting-speed spec §4.10.1）：略過，不當成失敗
+    static let deviceFailedSkipMessage = "略過（音訊裝置無法啟動）"
+
     static let minimizedMessage = "會議視窗可能被最小化（3 秒內沒有畫面或只收到暫停狀態）：把它還原，最小化期間錄不到畫面"
 
     /// 幕前調度是否開啟（spec §4.2.12）：只讀 com.apple.WindowManager 的 GloballyEnabled，不觸發任何授權框、不改設定。
@@ -286,7 +302,7 @@ enum PreflightRunner {
 
     // MARK: - 個別檢查
 
-    static func checkSigning(home: URL) -> (Bool, String) {
+    static func checkSigning(home: URL, log: Logger? = nil) -> (Bool, String) {
         var code: SecCode?
         var staticCode: SecStaticCode?
         var info: CFDictionary?
@@ -294,6 +310,8 @@ enum PreflightRunner {
               SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
               SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
               let dict = info as? [String: Any] else {
+            // 提早 return 前留一行 log（meeting-speed spec §4.10.3）
+            log?.line(stopPathLogLine(source: "preflight 簽章", reason: "讀不到自己的簽章資訊，第 1 項記為 warn"))
             return (false, "讀不到自己的簽章資訊；若擷取失敗，到系統設定重新授權螢幕錄製與麥克風")
         }
         let certs = dict[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? []
@@ -357,9 +375,13 @@ enum PreflightRunner {
         return (true, "可用空間 \(gb(avail))（需要 \(gb(ctx.minFreeBytes))）")
     }
 
-    static func checkPower() -> (Bool, String) {
+    static func checkPower(log: Logger? = nil) -> (Bool, String) {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return (true, "") }
+              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else {
+            // 提早 return 前留一行 log（meeting-speed spec §4.10.3）
+            log?.line(stopPathLogLine(source: "preflight 電源", reason: "讀不到電源資訊，略過電量檢查"))
+            return (true, "")
+        }
         for ps in list {
             guard let d = IOPSGetPowerSourceDescription(blob, ps)?.takeUnretainedValue() as? [String: Any] else { continue }
             let onBattery = (d[kIOPSPowerSourceStateKey] as? String) == kIOPSBatteryPowerValue

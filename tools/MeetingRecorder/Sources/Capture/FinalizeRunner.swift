@@ -43,6 +43,9 @@ final class FinalizeRunner {
     private var abortReason: FinalizeAbort?
     private var finished = false
     private var cancelRequested = false
+    /// 收尾輸出中出現 isAudioReadyLine 成立的一行時呼叫（meeting-speed spec §4.2.8）；在讀輸出的執行緒上呼叫。
+    /// 必須在 run 之前設好。
+    var onAudioReady: (() -> Void)?
 
     init(recordedSeconds: Double, log: Logger) {
         self.deadlineSeconds = finalizeDeadline(recordedSeconds: recordedSeconds)
@@ -94,6 +97,11 @@ final class FinalizeRunner {
         let readerDone = DispatchSemaphore(value: 0)
         let reader = pipe.fileHandleForReading
         let log = self.log
+        let onAudioReady = self.onAudioReady
+        func emit(_ line: String) {
+            log.line("  " + line)
+            if isAudioReadyLine(line) { onAudioReady?() }
+        }
         DispatchQueue.global(qos: .utility).async {
             var buffer = Data()
             while true {
@@ -101,11 +109,11 @@ final class FinalizeRunner {
                 if chunk.isEmpty { break }
                 buffer.append(chunk)
                 while let nl = buffer.firstIndex(of: 0x0A) {
-                    log.line("  " + String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self))
+                    emit(String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self))
                     buffer.removeSubrange(buffer.startIndex...nl)
                 }
             }
-            if !buffer.isEmpty { log.line("  " + String(decoding: buffer, as: UTF8.self)) }
+            if !buffer.isEmpty { emit(String(decoding: buffer, as: UTF8.self)) }
             readerDone.signal()
         }
 

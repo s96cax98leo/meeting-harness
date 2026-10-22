@@ -153,6 +153,9 @@ final class SegmentWriter {
         if writer.status == .writing { writer.cancelWriting() }
     }
 
+    /// 影片因 writer 未 ready 丟掉的幀數（狀態檔 droppedFrames 的每段增量；meeting-speed spec §3.1）
+    var droppedVideoFrames: Int { droppedNotReady[SegmentTrack.video.rawValue] }
+
     /// 丟棄數的 log 文字。
     var dropSummary: String {
         "未 ready 丟棄 影片 \(droppedNotReady[0])／系統聲音 \(droppedNotReady[1])／麥克風 \(droppedNotReady[2])，"

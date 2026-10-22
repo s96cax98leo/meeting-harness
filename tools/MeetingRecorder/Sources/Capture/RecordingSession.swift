@@ -62,11 +62,18 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     // 排程器的邊界是 Double 秒；以下兩個 CMTime 只用來把邊界還原成精確的 PTS（不參與換段判斷）
     private var nextBoundary: CMTime = .invalid         // 最近一段起點＋segmentSeconds
     private var lastSegmentStart: CMTime = .invalid     // 最近一次開段的起點
-    private var curSize: PixelSize
+    /// 畫布尺寸：開錄當下會議視窗的偶數像素大小，整場不變（record.meta.json.canvasLock；meeting-speed spec §4.4.1）
+    private let curSize: PixelSize
+    /// 最近一次換段時讀到的會議視窗像素大小（只用來判斷要不要寫「視窗尺寸改變」log）
+    private var windowSize: PixelSize
     /// 換段當下同步讀會議視窗大小（point）；可替換（design §7.1，spec §4.3.6）。只在 q 上呼叫。
     var windowPointSize: (UInt32) -> CGSize? = cgWindowPointSize
     private var lastFrame: CMSampleBuffer?             // 最後一個 complete 幀（換段時重新打戳）
     private var finishedSegments = 0
+    /// 本場累計丟幀數（各段收尾時加上該段影片「writer 未 ready」丟掉的幀；meeting-speed spec §3.1）
+    private var droppedFramesTotal = 0
+    /// 增量轉錄 worker 已起過（每場只起一次；spec §4.11.1）
+    private var asrWorkerStarted = false
     /// 三路已收到的 sample 最晚結束點（CMTime 版；與排程器同一規則更新：通過暫停閘門才更新、停止後不更新）
     private var maxEnd: CMTime = .invalid
     private var firstSampleLogged = false
@@ -122,6 +129,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         self.filter = SCContentFilter(desktopIndependentWindow: window)
         self.scale = Double(filter.pointPixelScale)
         self.curSize = evenPixelSize(points: window.frame.size, scale: Double(filter.pointPixelScale))
+        self.windowSize = curSize
         manifest = Manifest(schemaVersion: 1, segmentSeconds: segmentSeconds, segments: [],
                             frameStatus: FrameStatusCounts(complete: 0, idle: 0, blank: 0, suspended: 0, started: 0, stopped: 0),
                             blackIntervals: [], levels: AudioLevels(windowSeconds: 0.5, system: [], mic: []),
@@ -170,10 +178,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         // 上一場殘留的捨棄請求不得帶進這一場（spec §4.42.4）
         try? FileManager.default.removeItem(at: discardURL)
 
-        // 畫布＝當下會議視窗的像素大小（D8）
+        // 畫布＝開錄當下會議視窗的偶數像素大小（D8），整場鎖定（meeting-speed spec §4.4.1）：之後每段都以這個尺寸開檔，
+        // 視窗縮放時內容等比縮放進同一張畫布（preservesAspectRatio，§4.4.2），finalize 才能走 copy 串接。
+        // 擷取幀率維持 1/60、不設尺寸上限（使用者 2026-10-22 對 §4.4.13 的決定）。
         cfg.width = curSize.width
         cfg.height = curSize.height
         cfg.scalesToFit = true
+        cfg.preservesAspectRatio = true
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         cfg.showsCursor = true
@@ -184,6 +195,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         cfg.captureMicrophone = true
         cfg.microphoneCaptureDeviceID = nil
         cfg.excludesCurrentProcessAudio = true
+        meta.canvasLock = CanvasLock(width: curSize.width, height: curSize.height)
         meta.config = StreamConfigSnapshot(
             filter: "desktopIndependentWindow", onScreenWindowsOnly: false, scalesToFit: cfg.scalesToFit,
             minimumFrameInterval: "\(cfg.minimumFrameInterval.value)/\(cfg.minimumFrameInterval.timescale)",
@@ -198,12 +210,21 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
 
         // writer 在第一個 sample 到達時才建（design §7.2），所以 startCapture 失敗不會留下任何 seg-*.mov。
         // 第一次失敗：記 log、丟掉這條 stream、等 startCaptureRetryDelaySeconds、以同一組 filter 與設定重建後重試一次（§7.6）。
+        // startCapture 失敗時記錯誤的 domain、code 與當下的輸入／輸出裝置（meeting-speed spec §4.10.2）
+        func logStartCaptureError(_ error: Error) {
+            let e = error as NSError
+            let d = currentDevices()
+            let input = d.input.map { "\($0.name)／\($0.transport)" } ?? "（無）"
+            let output = d.output.map { "\($0.name)／\($0.transport)" } ?? "（無）"
+            log.line("⚠ startCapture 錯誤：domain \(e.domain)、code \(e.code)；輸入：\(input)；輸出：\(output)")
+        }
         stream = makeStream()
         t0 = hostSeconds()
         do {
             try await stream.startCapture()
         } catch {
             log.line("⚠ startCapture 第一次失敗（\(error.localizedDescription)），\(Int(startCaptureRetryDelaySeconds)) 秒後重試")
+            logStartCaptureError(error)
             try? await stream.stopCapture()
             try? await Task.sleep(nanoseconds: UInt64(startCaptureRetryDelaySeconds * 1_000_000_000))
             stream = makeStream()
@@ -212,6 +233,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
                 try await stream.startCapture()
                 log.line("● startCapture 重試成功")
             } catch {
+                logStartCaptureError(error)
                 try? FileManager.default.removeItem(at: ctx.pidURL)
                 fail(code: 5, "startCapture 失敗：\(error.localizedDescription)")
             }
@@ -519,17 +541,14 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             }
         }
 
-        // 尺寸：換段當下同步讀會議視窗大小，經 nextSegmentSize 決定（讀不到沿用上一段）；
-        // 與上一段不同就 updateConfiguration（不等完成）。第一段沿用開錄時的視窗尺寸（design §7.1、spec §4.3.6）。
-        let size = reason == .first ? curSize
-            : nextSegmentSize(windowPoints: windowPointSize(window.windowID), scale: scale, previous: curSize)
-        if size != curSize {
-            log.line("● 視窗尺寸改變：\(curSize.width)×\(curSize.height) → \(size.width)×\(size.height) px（本段起生效）")
-            curSize = size
-            cfg.width = size.width
-            cfg.height = size.height
-            stream.updateConfiguration(cfg) { [weak self] err in
-                if let err { self?.log.line("⚠ updateConfiguration 失敗：\(err.localizedDescription)") }
+        // 尺寸：換段當下同步讀會議視窗大小，經 nextSegmentSize 算出（讀不到沿用上一次讀到的；design §7.1、spec §4.3.6）。
+        // 畫布鎖定（meeting-speed spec §4.4.1）：每段都以開錄時的 curSize 開檔，視窗尺寸改變只寫一行 log，
+        // 不改 SCStreamConfiguration 的寬高（內容由 preservesAspectRatio 等比縮放進同一張畫布）。
+        if reason != .first {
+            let size = nextSegmentSize(windowPoints: windowPointSize(window.windowID), scale: scale, previous: windowSize)
+            if size != windowSize {
+                log.line("● 視窗尺寸改變：\(windowSize.width)×\(windowSize.height) → \(size.width)×\(size.height)（畫布維持開錄時的 \(curSize.width)×\(curSize.height)，內容等比縮放）")
+                windowSize = size
             }
         }
 
@@ -693,11 +712,18 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         if ok {
             if let row = segRow[seg.index] { manifest.segments[row].finishedAt = round3(now()) }
             finishedSegments += 1
+            // 丟幀＝影片 writer 未 ready 而丟掉的幀（編碼跟不上的訊號）；PTS 非遞增的丟棄是換段打戳的正常結果，不算
+            droppedFramesTotal += seg.droppedVideoFrames
             manifest.blackIntervals = roundedBlack()
             writeManifest()
             let n = finishedSegments
-            status.update { $0.segments = n }
+            let dropped = droppedFramesTotal
+            status.update {
+                $0.segments = n
+                $0.droppedFrames = dropped
+            }
             log.line("✓ \(seg.file) 收尾（\(seg.size.width)×\(seg.size.height)；\(seg.dropSummary)）")
+            startAsrWorkerIfNeeded()
         } else {
             writerFailed(seg, error)
         }
@@ -1134,6 +1160,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
         // 第 8 步：收尾中（含排隊中）的停止訊號照 §4.28.6 轉成 runner.cancel()
         let runner = FinalizeRunner(recordedSeconds: recordedSecondsAtStop(), log: log)
+        // 音訊先出（meeting-speed spec §4.2.8）：收尾印出「音訊就緒：」那一行時，狀態檔 audioReady 設 true（phase 維持 finalizing）
+        runner.onAudioReady = { [weak self] in self?.status.update { $0.audioReady = true } }
         finalizeRunner = runner
         DispatchQueue.global(qos: .userInitiated).async {
             if background {
@@ -1221,6 +1249,48 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
                           arguments: [script.path, ctx.session.path], environment: env)
     }
 
+    /// 增量轉錄 worker（meeting-speed spec §4.11.1；design §11）：第一段收尾後起一次
+    /// `/usr/bin/nice -n 10 <python3> <harness>/bin/lib/_asr_worker.py run <場次>`；直譯器沿用收尾那一支，不經 zsh -l。
+    /// 要不要起交給 Core asrWorkerShouldStart（worker 檔不存在、config.json 的 transcribe.incremental.enabled 為 false 都不起）。
+    /// worker 的 stdout／stderr 寫 錄音/tracks/asr/worker.log（spec §3.6）；錄製器結束不影響它，停止後由它自己補完欠的窗。
+    /// 只在 q 上呼叫。
+    private func startAsrWorkerIfNeeded() {
+        guard !asrWorkerStarted else { return }
+        let harness = ctx.harness ?? defaults?.harness ?? ""
+        let script = URL(fileURLWithPath: harness).appendingPathComponent("bin/lib/_asr_worker.py")
+        let exists = !harness.isEmpty && FileManager.default.fileExists(atPath: script.path)
+        guard asrWorkerShouldStart(finishedSegments: finishedSegments, alreadyStarted: asrWorkerStarted,
+                                   workerScriptExists: exists,
+                                   incrementalEnabled: incrementalTranscribeEnabled(harness: harness)) else { return }
+        asrWorkerStarted = true
+        let asrDir = ctx.tracksDir.appendingPathComponent("asr", isDirectory: true)
+        let logURL = asrDir.appendingPathComponent("worker.log")
+        let fm = FileManager.default
+        try? fm.createDirectory(at: asrDir, withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: logURL.path) { fm.createFile(atPath: logURL.path, contents: nil) }
+        let out = try? FileHandle(forWritingTo: logURL)
+        _ = try? out?.seekToEnd()
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/nice")
+        p.arguments = ["-n", "10", defaults?.python3 ?? "/usr/bin/python3", script.path, "run", ctx.session.path]
+        p.qualityOfService = .utility
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let ff = defaults?.ffmpeg, !ff.isEmpty { env["MH_FFMPEG"] = ff }
+        env["MH_RECORD_HOME"] = ctx.home.path
+        p.environment = env
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = out ?? FileHandle.nullDevice
+        p.standardError = out ?? FileHandle.nullDevice
+        do {
+            try p.run()
+            log.line("● 增量轉錄已啟動（bin/lib/_asr_worker.py，pid \(p.processIdentifier)，nice 10）")
+        } catch {
+            log.line("⚠ 增量轉錄啟動失敗（\(error.localizedDescription)），停止後照整檔轉錄")
+        }
+        try? out?.close()
+    }
+
     /// 最終結果一律由 Core completionOutcome 決定：停止原因（forced）在開頭，收尾失敗附在其後（spec §4.4.7、§4.4.9）。
     /// 收尾被 FinalizeRunner 中止（逾時、取消）時改用 finalizeAbortOutcome：phase=failed、code=5（spec §4.28.6）。
     /// skipped（--skip-finalize）：沒有跑收尾，phase 照 completionOutcome 的非失敗分支（done），code 0 時改寫訊息；
@@ -1245,8 +1315,10 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         log.line(outcome.code == 0 ? "✓ \(outcome.message)" : "✗ \(outcome.message)")
         // 試錄（--skip-finalize）不發完成通知：暫存場次不是使用者的會議（實機缺陷 F1）
         guard !ctx.skipFinalize else { exit(outcome.code) }
+        // 通知內文只用場次代號，不含場次名、路徑或結果訊息（meeting-speed spec §4.12.3；詳情在 record.log）
+        let label = sessionCodeLabel(startedAt: status.status.startedAt, runId: ctx.runId)
         Notifier.post(title: outcome.code == 0 ? "會議錄製完成" : "會議錄製結束（有錯誤）",
-                      body: outcome.code == 0 ? ctx.session.path : "\(outcome.message)\n\(ctx.session.path)",
+                      body: completionNotificationBody(ok: outcome.code == 0, label: label),
                       identifier: completionNotificationID(runId: ctx.runId))
         exit(outcome.code)
     }
