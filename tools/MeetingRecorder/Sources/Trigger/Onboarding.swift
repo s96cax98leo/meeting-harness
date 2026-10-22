@@ -602,7 +602,10 @@ final class TrialRecording {
 
     /// 停止前先確認 pid 真的是持有暫存目錄 record.lock 的錄製實例（與選單的停止同一套 stopTargetDecision）
     private func sendStop() {
-        guard stopSentAt == nil || Date().timeIntervalSince(stopSentAt ?? Date()) > 10 else { return }
+        guard stopSentAt == nil || Date().timeIntervalSince(stopSentAt ?? Date()) > 10 else {
+            logStopSkip(stopPathLogLine(source: "Onboarding.sendStop", reason: "10 秒內已送過停止"))
+            return
+        }
         let recordPid = readPid(pidURL)
         let st = readStatus(statusURL)
         let lockHeld: Bool
@@ -618,10 +621,20 @@ final class TrialRecording {
         let decision = stopTargetDecision(lockHeld: lockHeld, recordPid: recordPid,
                                           pidAlive: recordPid.map(pidAlive) ?? false, statusPid: st?.pid,
                                           command: recordPid.flatMap(trialExecutablePath))
-        guard case let .signal(pid) = decision else { return }
+        guard case let .signal(pid) = decision else {
+            if case .refuse(let why) = decision {
+                logStopSkip(stopPathLogLine(source: "Onboarding.sendStop", reason: "試錄停止被拒（\(why.rawValue)），不送訊號"))
+            }
+            return
+        }
         stopSentAt = Date()
         onUpdate(.running("試錄中：停止並檢查聲音…"))
         kill(pid, SIGTERM)
+    }
+
+    /// 試錄的停止路徑提早 return 前記一行到試錄暫存目錄的 record.log（spec §4.10.3）
+    private func logStopSkip(_ line: String) {
+        Logger(path: trialDir.appendingPathComponent("record.log").path, append: true).line("\(isoNow()) \(line)")
     }
 
     private func cleanUp() {

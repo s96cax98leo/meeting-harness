@@ -28,6 +28,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     private let home: URL
     private let prefsStore: MenuBarPrefsStore
     private let autoPrep: AutoPrepRunner
+    /// 啟動時偵測上次錄製異常中止、通知的「收尾」動作（Trigger/AbnormalStop.swift；meeting-speed spec §4.16.2）
+    private let abnormalStop: AbnormalStopHandler
     // 寬度隨內容變：錄製中在圖示右側顯示計時（spec §4.20.4）
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -114,6 +116,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         self.home = home
         prefsStore = MenuBarPrefsStore(home: home)
         autoPrep = AutoPrepRunner(home: home)
+        abnormalStop = AbnormalStopHandler(home: home)
         super.init()
     }
 
@@ -165,6 +168,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.redrawButton() }
         setupNotifications()
+        // meeting-speed spec §4.16.2：啟動時檢查一次上次錄製是否異常中止（只發通知，按「收尾」才跑 finish）
+        abnormalStop.checkOnLaunch()
         refresh()
         // 加進 .common mode：選單展開時 run loop 在 event tracking mode，只排在 .default 的 timer 不會觸發（spec §4.11.9）
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
@@ -769,6 +774,11 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         DispatchQueue.global(qos: .utility).async { Notifier.post(title: title, body: body, log: log, policy: policy) }
     }
 
+    /// 停止路徑提早 return 前記一行（spec §4.10.3；內容由 Core stopPathLogLine 格式化）
+    private func logStopSkip(_ line: String) {
+        Logger(path: logURL.path, append: true).line("\(isoNow()) \(line)")
+    }
+
     /// 錄製中出現新告警時發一則通知（spec §4.39.2、§4.39.3）。第一次看到某一場時只記下當下的 warnings、不補發
     /// （menu bar 中途重開不洗版）；之後只發 newAlertWarnings 的最新一則。內文用固定句，不放場次名與視窗標題。
     private func notifyNewAlerts(_ st: RecordStatus?) {
@@ -797,7 +807,10 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 停止前先確認 record.pid 真的是持有 record.lock 的錄製實例（spec §4.27.4）：
     /// 只有 stopTargetDecision 回 .signal(pid:) 才送 SIGTERM；拒絕時說明原因、不送任何訊號。
     @objc private func stopRecording() {
-        guard model.canStop else { return }
+        guard model.canStop else {
+            logStopSkip(stopPathLogLine(source: "stopRecording", reason: "目前沒有可停止的錄製"))
+            return
+        }
         let recordPid = readPid(pidURL)
         let current = readStatus(statusURL)
         let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
@@ -810,13 +823,16 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     private func performStop(_ decision: StopTarget, current: RecordStatus?) {
         guard case let .signal(pid) = decision else {
             if case .refuse(let why) = decision {
-                Logger(path: logURL.path, append: true).line("\(isoNow()) 停止錄製被拒（\(why.rawValue)）：不送訊號")
+                logStopSkip(stopPathLogLine(source: "performStop", reason: "停止錄製被拒（\(why.rawValue)），不送訊號"))
                 notify(title: "MeetingRecorder 沒有停止錄製", body: stopRefusalText(why), kind: .failure,
                        runId: current?.runId)
             }
             return
         }
-        guard kill(pid, SIGTERM) == 0 else { return }
+        guard kill(pid, SIGTERM) == 0 else {
+            logStopSkip(stopPathLogLine(source: "performStop", reason: "送 SIGTERM 失敗（errno \(errno)）"))
+            return
+        }
         stopRequestedRunId = current?.runId
         refresh()
     }
@@ -874,21 +890,27 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
             return
         }
         let current = readStatus(statusURL)
-        guard current?.phase == .finalizing else { return }
+        guard current?.phase == .finalizing else {
+            logStopSkip(stopPathLogLine(source: "cancelFinalize", reason: "狀態檔不是收尾中，不送訊號"))
+            return
+        }
         let recordPid = readPid(pidURL)
         let decision = stopTargetDecision(lockHeld: recordLockHeld(), recordPid: recordPid,
                                           pidAlive: recordPid.map(pidAlive) ?? false, statusPid: current?.pid,
                                           command: recordPid.flatMap(executablePath))
         guard case let .signal(pid) = decision else {
             if case .refuse(let why) = decision {
-                Logger(path: logURL.path, append: true).line("\(isoNow()) 取消收尾被拒（\(why.rawValue)）：不送訊號")
+                logStopSkip(stopPathLogLine(source: "cancelFinalize", reason: "取消收尾被拒（\(why.rawValue)），不送訊號"))
                 notify(title: "MeetingRecorder 沒有取消收尾", body: stopRefusalText(why), kind: .failure,
                        runId: current?.runId)
             }
             return
         }
         Logger(path: logURL.path, append: true).line("\(isoNow()) 使用者取消收尾：送 SIGTERM")
-        guard kill(pid, SIGTERM) == 0 else { return }
+        guard kill(pid, SIGTERM) == 0 else {
+            logStopSkip(stopPathLogLine(source: "cancelFinalize", reason: "送 SIGTERM 失敗（errno \(errno)）"))
+            return
+        }
         refresh()
     }
 
@@ -901,7 +923,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let log = Logger(path: logURL.path, append: true)
         let jobs = loadBackgroundJobs(home: home)
         guard let target = backgroundCancelCandidate(jobs) else {
-            log.line("\(isoNow()) 取消收尾被拒（\(BackgroundCancelRefusal.noJob.rawValue)）：沒有背景收尾中的場次，不送訊號")
+            log.line("\(isoNow()) " + stopPathLogLine(source: "cancelBackgroundFinalize",
+                                                       reason: "取消收尾被拒（\(BackgroundCancelRefusal.noJob.rawValue)），"
+                                                           + "沒有背景收尾中的場次，不送訊號"))
             return
         }
         let runId = target.status.runId
@@ -920,10 +944,14 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         let cancel = alert.addButton(withTitle: "取消收尾")
         cancel.hasDestructiveAction = true
         cancel.keyEquivalent = ""
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        guard alert.runModal() == .alertSecondButtonReturn else {
+            log.line("\(isoNow()) " + stopPathLogLine(source: "cancelBackgroundFinalize", reason: "使用者選擇繼續收尾"))
+            return
+        }
         // 確認框開著的期間可能已收完或換了一場：重讀，只對確認框上的那一場送
         guard let job = backgroundCancelCandidate(loadBackgroundJobs(home: home)), job.status.runId == runId else {
-            log.line("\(isoNow()) 取消收尾：確認後背景收尾的對象已改變（\(backgroundJobLabel(target))），不送訊號")
+            log.line("\(isoNow()) " + stopPathLogLine(source: "cancelBackgroundFinalize",
+                                                       reason: "確認後背景收尾的對象已改變（\(backgroundJobLabel(target))），不送訊號"))
             notify(title: "MeetingRecorder 沒有取消收尾", body: "這場的收尾已經結束或換成別場，沒有送出取消",
                    kind: .failure, runId: runId)
             return
@@ -933,14 +961,19 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
                                                 command: executablePath(jobPid))
         guard case let .signal(pid) = decision else {
             if case .refuse(let why) = decision {
-                log.line("\(isoNow()) 取消收尾被拒（\(why.rawValue)）：不送訊號")
+                log.line("\(isoNow()) " + stopPathLogLine(source: "cancelBackgroundFinalize",
+                                                           reason: "取消收尾被拒（\(why.rawValue)），不送訊號"))
                 notify(title: "MeetingRecorder 沒有取消收尾", body: backgroundCancelRefusalText(why), kind: .failure,
                        runId: runId)
             }
             return
         }
         log.line("\(isoNow()) 使用者取消背景收尾（\(backgroundJobLabel(job))）：送 SIGTERM")
-        guard kill(pid, SIGTERM) == 0 else { return }
+        guard kill(pid, SIGTERM) == 0 else {
+            let err = errno
+            log.line("\(isoNow()) " + stopPathLogLine(source: "cancelBackgroundFinalize", reason: "送 SIGTERM 失敗（errno \(err)）"))
+            return
+        }
         refresh()
     }
 
@@ -1014,6 +1047,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         center.setNotificationCategories([
             UNNotificationCategory(identifier: completionCategoryID, actions: [reveal], intentIdentifiers: [], options: []),
             meetingDetectCategory(),     // F3：「開始錄製」「這場不用」（spec §4.44.3）
+            abnormalStopCategory(),      // meeting-speed：異常中止的「收尾」（spec §4.16.2）
         ])
     }
 
@@ -1107,18 +1141,33 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
     /// 自動前處理（spec §4.23.1、§4.54.5、§6 第 150 條；修正輪 B1）：statuses＝共用狀態檔＋每一個每場狀態檔。
     /// 去重交給 Core 的 autoPrepCandidates（本程序已排過的 runId 集合 autoPrepEnqueued）；
     /// lastAutoPrepRunId 照舊寫入（啟動前先記），保留跨重啟語意。一次只跑一個、其餘排隊由 AutoPrepRunner 負責。
+    /// meeting-speed（spec §4.2.9、§4.2.10）：先看 autoPrepPick 的 `.early`（收尾中、音訊已就緒就排），
+    /// 同一 runId 排過之後 autoPrepEnqueued 與 lastAutoPrepRunId 都擋得住，`.done` 不會再排一次；
+    /// 沒排過 `.early` 的場次照舊由 autoPrepCandidates 在 `.done` 時排（與 autoPrepPick 的 `.done` 同一份 shouldAutoPrep 判準）。
     private func enqueueAutoPrep(_ statuses: [RecordStatus]) {
         let prefs = prefsStore.current
+        var looked = Set<String>()
+        for st in statuses where looked.insert(st.runId).inserted && st.runId != prefs.lastAutoPrepRunId {
+            guard case let .early(session, runId)? = autoPrepPick(autoPrep: prefs.autoPrep, status: st,
+                                                                  seenInProgressRunIds: seenInProgress,
+                                                                  enqueuedRunIds: autoPrepEnqueued) else { continue }
+            startAutoPrep(session, runId: runId, startedAt: st.startedAt)
+        }
         let picks = autoPrepCandidates(autoPrep: prefs.autoPrep, statuses: statuses, seenInProgressRunIds: seenInProgress,
                                        lastAutoPrepRunId: prefs.lastAutoPrepRunId, enqueuedRunIds: autoPrepEnqueued)
         for st in picks {
             // 候選已通過 shouldAutoPrep（autoPrepCandidates 內）；這裡取它回傳的 session（同一份判準，結果一定非 nil）
             guard let session = shouldAutoPrep(autoPrep: true, status: st, seenInProgressRunIds: seenInProgress,
                                                lastAutoPrepRunId: prefs.lastAutoPrepRunId) else { continue }
-            autoPrepEnqueued.insert(st.runId)
-            prefsStore.update { $0.lastAutoPrepRunId = st.runId }   // 啟動前先記
-            autoPrep.enqueue(session, runId: st.runId)
+            startAutoPrep(session, runId: st.runId, startedAt: st.startedAt)
         }
+    }
+
+    /// 排一場前處理：本程序記下 runId、lastAutoPrepRunId 啟動前先記（跨重啟語意），再交給 AutoPrepRunner
+    private func startAutoPrep(_ session: String, runId: String, startedAt: String) {
+        autoPrepEnqueued.insert(runId)
+        prefsStore.update { $0.lastAutoPrepRunId = runId }   // 啟動前先記
+        autoPrep.enqueue(session, runId: runId, startedAt: startedAt)
     }
 
     /// 與錄製實例的完成通知同一個識別碼（取代它），另加 category 與「在 Finder 顯示」動作（spec §4.23.3）
@@ -1126,7 +1175,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
         content.title = "會議錄製完成"
-        content.body = st.session
+        // spec §4.12.3：內文只放場次代號，不含場次名或路徑；「在 Finder 顯示」用的 userInfo["session"] 保留
+        content.body = completionNotificationBody(ok: true, label: sessionCodeLabel(startedAt: st.startedAt, runId: st.runId))
         content.categoryIdentifier = completionCategoryID
         content.userInfo = ["session": st.session]
         Notifier.apply(notificationPolicy(kind: .completion, runId: st.runId, timeSensitiveAllowed: false), to: content)
@@ -1155,6 +1205,14 @@ final class MenuBarController: NSObject, NSMenuDelegate, UNUserNotificationCente
         if response.actionIdentifier == revealActionID,
            let s = response.notification.request.content.userInfo["session"] as? String, !s.isEmpty {
             DispatchQueue.main.async { revealSessionProduct(s) }
+        }
+        // meeting-speed spec §4.16.2：按「收尾」才跑 meeting.sh record finish <場次>
+        let info = response.notification.request.content.userInfo
+        if response.notification.request.content.categoryIdentifier == abnormalStopCategoryID,
+           response.actionIdentifier == abnormalStopFinishActionID,
+           let s = info["session"] as? String, !s.isEmpty {
+            let label = info["label"] as? String ?? ""
+            DispatchQueue.main.async { [weak self] in self?.abnormalStop.finish(session: s, label: label) }
         }
         // F3（spec §4.44.3）：「開始錄製」走既有 quick-start（用上次的設定）；「這場不用」本 episode 不再提示
         if response.notification.request.content.categoryIdentifier == meetingDetectCategoryID {
@@ -1188,7 +1246,10 @@ extension MenuBarController: HUDActions {
     }
 
     func hudStop(_ decision: StopTarget, status current: RecordStatus?) {
-        guard model.canStop else { return }
+        guard model.canStop else {
+            logStopSkip(stopPathLogLine(source: "hudStop", reason: "沒有進行中的錄製"))
+            return
+        }
         performStop(decision, current: current)
     }
 

@@ -96,10 +96,13 @@ func revealSessionProduct(_ session: String) {
 
 /// 停止後自動前處理（spec §4.23.2）：/bin/bash <harness>/bin/meeting.sh prep <場次目錄> 在背景跑，
 /// stdout／stderr append 到 <home>/autoprep.log；以 terminationHandler 等結束（主執行緒不等）；同時只跑一個、其餘排隊。
+/// meeting-speed（spec §4.2.10、§4.8.7、§4.12.2）：每次執行產一個 uuid 以 MH_PREP_RUN_ID 帶給子程序（指令照舊）；
+/// 結束時讀該場 .pipeline-state.json 交給 prepOutcome，標題與內文由 prepNotification 決定；
+/// 通知內文以 sessionCodeLabel（場次代號）開頭，不含場次名或路徑。
 final class AutoPrepRunner {
     private let home: URL
-    /// 排隊中的（場次目錄, runId）；runId 給通知的 threadIdentifier 用
-    private var pending: [(session: String, runId: String?)] = []
+    /// 排隊中的場次；runId＝錄製的 runId（通知的 threadIdentifier 與場次代號用），startedAt 給場次代號
+    private var pending: [(session: String, runId: String?, startedAt: String?)] = []
     private var running: Process?
 
     init(home: URL) {
@@ -108,8 +111,8 @@ final class AutoPrepRunner {
 
     private var logURL: URL { home.appendingPathComponent("autoprep.log") }
 
-    func enqueue(_ session: String, runId: String? = nil) {
-        pending.append((session, runId))
+    func enqueue(_ session: String, runId: String? = nil, startedAt: String? = nil) {
+        pending.append((session, runId, startedAt))
         startNext()
     }
 
@@ -128,14 +131,16 @@ final class AutoPrepRunner {
 
     private func startNext() {
         guard running == nil, !pending.isEmpty else { return }
-        let (session, runId) = pending.removeFirst()
-        let name = (session as NSString).lastPathComponent
+        let (session, runId, startedAt) = pending.removeFirst()
+        let prepRunId = UUID().uuidString
+        // 場次代號（spec §3.10）：不含場次名或路徑
+        let label = sessionCodeLabel(startedAt: startedAt ?? "", runId: runId ?? prepRunId)
         let handle = openLog()
-        appendLog(handle, "── \(isoNow()) 自動前處理：\(session)")
+        appendLog(handle, "── \(isoNow()) 自動前處理（MH_PREP_RUN_ID=\(prepRunId)）：\(session)")
         guard let harness = RecordDefaults.load(home.appendingPathComponent("record.defaults.json"))?.harness else {
             appendLog(handle, "✗ record.defaults.json 沒有 harness 路徑，沒辦法跑前處理")
             try? handle?.close()
-            post(title: "前處理沒有執行", body: "\(name)：找不到 meeting-harness 路徑，詳見 autoprep.log", kind: .failure,
+            post(title: "前處理沒有執行", body: "\(label)：找不到 meeting-harness 路徑，詳見 autoprep.log", kind: .failure,
                  runId: runId)
             startNext()
             return
@@ -149,6 +154,8 @@ final class AutoPrepRunner {
         p.currentDirectoryURL = URL(fileURLWithPath: harness, isDirectory: true)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"   // 登入 shell 前的底線
+        // spec §3.7、§4.2.10：環境只多這一個；prep 把它寫進 .pipeline-state.json 的 prep.runId
+        env["MH_PREP_RUN_ID"] = prepRunId
         p.environment = env
         p.standardInput = FileHandle.nullDevice
         if let handle {
@@ -160,7 +167,7 @@ final class AutoPrepRunner {
             DispatchQueue.main.async {
                 self?.appendLog(handle, "── \(isoNow()) 結束（結束碼 \(code)）")
                 try? handle?.close()
-                self?.finished(name: name, code: code, runId: runId)
+                self?.finished(session: session, prepRunId: prepRunId, label: label, code: code, runId: runId)
             }
         }
         do {
@@ -169,19 +176,18 @@ final class AutoPrepRunner {
         } catch {
             appendLog(handle, "✗ 啟動失敗：\(error.localizedDescription)")
             try? handle?.close()
-            post(title: "前處理失敗", body: "\(name)：啟動失敗，詳見 autoprep.log", kind: .failure, runId: runId)
+            post(title: "前處理失敗", body: "\(label)：啟動失敗，詳見 autoprep.log", kind: .failure, runId: runId)
             startNext()
         }
     }
 
-    private func finished(name: String, code: Int32, runId: String?) {
+    /// spec §4.8.7：讀該場 .pipeline-state.json → prepOutcome → prepNotification；只有 .ok 且結束碼 0 才是「完成」
+    private func finished(session: String, prepRunId: String, label: String, code: Int32, runId: String?) {
         running = nil
-        if code == 0 {
-            post(title: "前處理完成", body: name, kind: .completion, runId: runId)
-        } else {
-            post(title: "前處理失敗", body: "\(name)：結束碼 \(code)，詳見 \(logURL.path)（autoprep.log）", kind: .failure,
-                 runId: runId)
-        }
+        let stateURL = URL(fileURLWithPath: session, isDirectory: true).appendingPathComponent(".pipeline-state.json")
+        let outcome = prepOutcome(pipelineState: try? Data(contentsOf: stateURL), runId: prepRunId)
+        let note = prepNotification(outcome: outcome, exitCode: code, label: label)
+        post(title: note.title, body: note.body, kind: outcome == .ok && code == 0 ? .completion : .failure, runId: runId)
         startNext()
     }
 
