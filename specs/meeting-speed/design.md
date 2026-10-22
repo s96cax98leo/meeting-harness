@@ -123,8 +123,8 @@ intent §7 Q3：開錄時鎖定當下的視窗像素，整場固定，60 fps；�
 
 ### 4.2 收尾端
 - **copy 條件**（全部成立才走）：meta 有 `canvasLock`；每段都有影片、寬高等於 `canvasLock`；codec、profile、pix_fmt、time_base 全場相同；每段 extradata（SPS/PPS）雜湊相同（`ffprobe -show_streams -show_data_hash`）；沒有完全相同 PTS 的重複影格（`dups == 0`）。任一不成立 → 整場走現行 `normalize`＋concat（`b0-audit.md:30-31`：copy 段與重編段不能混用）。
-- **逐段 remux**：影片 `-c:v copy`、以與音訊相同的原點平移時間戳、最後一個封包的長度補到段落長（`setts`），音訊取 §3 抽好的那一段 PCM（`-c:a copy`，仍是 `pcm_s16le`，§4.6.20 (iv) 成立）。
-- **concat**：沿用現行呼叫（`-f concat … -c:v copy -c:a aac -b:a 256k`），拿掉 `-movflags +faststart`。`test_static_rules.py:505-522` 要的相鄰 `"-c:a", "aac"`、`"-c:v", "copy"` 都還在；**不改用 `aac_at`**（§10）。
+- **逐段 remux**：影片 `-c:v copy`、以與音訊相同的原點平移時間戳（影片晚於原點時把首幀拉到 0）、最後一個封包的長度補到段落長（`setts`，以 `floor(L/TB)` 換算；用 round 時 2 小時 120 段會累積數 ms 偏移，video-spike 證據 §2.2、§5.1），音訊取 §3 抽好的那一段 PCM（`-c:a copy`，仍是 `pcm_s16le`，§4.6.20 (iv) 成立）。
+- **concat**：沿用現行呼叫（`-f concat … -c:v copy -c:a aac -b:a 256k`），拿掉 `-movflags +faststart`；copy 路徑另外**加 `-auto_convert 0`**（否則 §4.4.4 封包不相同），且**不加**現行「最後封包 1 tick」的 `setts`（照原樣在最後一段畫面靜止時 §4.6.3 FAIL、影片短約 8 秒；重編路徑照舊保留）。依據：`evidence/video-spike.md` §2.2、§5.1。`test_static_rules.py:505-522` 要的相鄰 `"-c:a", "aac"`、`"-c:v", "copy"` 都還在；**不改用 `aac_at`**（§10）。
 - **ffprobe 合併**：每段的探測從約 6 次（`b0-audit.md:34`）降到 ≤ 3 次，`packets_by_stream` 同一條指令不重跑（`bin/_record_finalize.py:619,1161-1162`）。
 - **步驟名**維持 `normalize`／`concat`／`mix`／`probe`（`test_r3_finalize_guard.py:22`），以 `<對象>` 區分：抽音訊記 `mix（seg-NNNN）`、copy remux 記 `normalize（seg-NNNN）`、驗證記 `concat（verify:<影片檔名>）`。這修正了 log 把驗證記成 concat 而看不出來的問題（`baseline.md` A 節），又不碰 `TIMEOUT_STEPS`。
 - **N-3**：`note_x264_fallback` 呼叫時機太早（`b0-audit.md:35`；`bin/_record_finalize.py:855-857`），被中止的段落也會印「改用 libx264」。改成只在該段真的以 libx264 重編成功後才印，補行為測試。
