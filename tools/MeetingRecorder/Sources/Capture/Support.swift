@@ -144,3 +144,15 @@ struct RecordDefaults {
 func fallbackMinFreeBytes(minutes: Double = 120) -> Int64 {
     Int64((minutes * (4 * 56_000_000 + 1_920_000)).rounded(.up)) + 2_000_000_000
 }
+
+/// `<harness>/config.json` 的 `transcribe.incremental.enabled` 不是 false 就算開（meeting-speed spec §4.11.1）；
+/// 檔案讀不到、鍵不存在或型別不對都算開（worker 自己再判一次）。
+func incrementalTranscribeEnabled(harness: String) -> Bool {
+    guard !harness.isEmpty,
+          let d = try? Data(contentsOf: URL(fileURLWithPath: harness).appendingPathComponent("config.json")),
+          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+          let t = o["transcribe"] as? [String: Any],
+          let inc = t["incremental"] as? [String: Any],
+          let enabled = inc["enabled"] as? Bool else { return true }
+    return enabled
+}

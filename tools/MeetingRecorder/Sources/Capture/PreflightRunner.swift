@@ -4,9 +4,7 @@ import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
-import IOKit.ps
 @preconcurrency import ScreenCaptureKit
-import Security
 
 /// preflight／start 共用的執行參數（spec §3.5）。
 struct RunContext {
@@ -104,86 +102,62 @@ struct PreflightOutcome {
 }
 
 enum PreflightRunner {
+    /// 13 項依序檢查（順序照舊：有副作用的權限詢問、鎖與 probe stream 的先後不變）；各項的量測與訊息在下列 check*／measureAudio
+    /// （個別檢查在 PreflightChecks.swift；meeting-speed spec §4.13.1 拆出，行為不變）。
     static func run(_ ctx: RunContext) async -> PreflightOutcome {
-        var r: [PreflightItem: PreflightResult] = [:]
-        func set(_ item: PreflightItem, _ ok: Bool, _ msg: String) { r[item] = PreflightResult(item: item, ok: ok, message: msg) }
+        var r: PreflightResults = [:]
 
         // 1 簽章身分（warn）
-        let (signOK, signMsg) = checkSigning(home: ctx.home)
-        set(.signing, signOK, signMsg)
+        let (signOK, signMsg) = checkSigning(home: ctx.home, log: ctx.log)
+        r.set(.signing, signOK, signMsg)
 
         // 2、3 螢幕錄製權限／剛授權要重啟（hard 4，兩者訊息不同，PROBE-REPORT.md:51-53）
         let preflightAccess = CGPreflightScreenCaptureAccess()
         var content: SCShareableContent?
         do { content = try await shareableContent() } catch { content = nil }
-        if !preflightAccess && content == nil {
-            set(.screen_permission, false, """
-                沒有螢幕錄製權限。到 系統設定 › 隱私權與安全性 › 螢幕與系統錄音 打開 MeetingRecorder \
-                （open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"），\
-                然後完全結束 MeetingRecorder 再重開
-                """)
-            set(.relaunch_needed, true, "（螢幕錄製權限還沒給，先處理上一項）")
-        } else if content == nil {
-            set(.screen_permission, true, "螢幕錄製已授權")
-            set(.relaunch_needed, false, "螢幕錄製已授權但還沒生效：請完全結束 MeetingRecorder 再重開（授權對已啟動的程式不生效）")
-        } else {
-            set(.screen_permission, true, "螢幕錄製已授權")
-            set(.relaunch_needed, true, "")
-        }
+        checkScreenPermission(preflightAccess: preflightAccess, contentAvailable: content != nil, into: &r)
 
         // 4 麥克風權限（hard 4）
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            set(.mic_permission, true, "麥克風已授權")
-        case .notDetermined:
-            let granted = await AVCaptureDevice.requestAccess(for: .audio)
-            if granted {
-                set(.mic_permission, true, "麥克風已授權")
-            } else {
-                set(.mic_permission, false, "麥克風沒有授權：到 系統設定 › 隱私權與安全性 › 麥克風 打開 MeetingRecorder，然後完全結束 MeetingRecorder 再重開")
-            }
-        default:
-            set(.mic_permission, false, "沒有麥克風權限：到 系統設定 › 隱私權與安全性 › 麥克風 打開 MeetingRecorder，然後完全結束 MeetingRecorder 再重開")
-        }
+        await checkMicPermission(into: &r)
 
         // 8 目標視窗存在（hard 3）：windowID 優先，找不到才以 (bundleID, 標題) 唯一認回（spec §3.8.8）
-        var resolution: WindowResolution = .notFound
-        var window: SCWindow?
-        if let content {
-            resolution = resolveWindow(ctx.windowRef, in: windowCandidates(content))
-            switch resolution {
-            case .exact(let id):
-                window = content.windows.first { $0.windowID == id }
-                set(.window_exists, true, "視窗 \(id) 存在")
-            case .reidentified(let id):
-                window = content.windows.first { $0.windowID == id }
-                set(.window_exists, true, "視窗 ID 已由 \(ctx.windowRef.windowID) 變為 \(id)，以 app 與標題認回")
-            case .notFound:
-                set(.window_exists, false, "找不到視窗 \(ctx.windowRef.windowID)：會議視窗被關掉或換了 ID，請重新跑 meeting record 選一次")
-            case .ambiguous:
-                set(.window_exists, false, "有多個同 app、同標題的視窗，請重新用 meeting record 選")
-            }
-        } else {
-            set(.window_exists, false, "取不到視窗清單（螢幕錄製權限），無法確認視窗 \(ctx.windowRef.windowID)")
-        }
+        let (resolution, window) = checkWindow(ctx, content: content, into: &r)
 
         // 9 場次撞名（hard 2）
         if sessionCollides(ctx) {
-            set(.session_collision, false, "場次已存在（錄音/ 已有音源檔或 tracks/）：換一個場次名")
+            r.set(.session_collision, false, "場次已存在（錄音/ 已有音源檔或 tracks/）：換一個場次名")
         } else {
-            set(.session_collision, true, "")
+            r.set(.session_collision, true, "")
         }
 
         // 7 磁碟空間（含目標目錄可寫，hard 4）
         let (diskOK, diskMsg) = checkDisk(ctx)
-        set(.disk, diskOK, diskMsg)
+        r.set(.disk, diskOK, diskMsg)
 
         // 10 電源（warn）
-        let (powerOK, powerMsg) = checkPower()
-        set(.power, powerOK, powerMsg)
+        let (powerOK, powerMsg) = checkPower(log: ctx.log)
+        r.set(.power, powerOK, powerMsg)
 
-        // 11 已有錄製在跑（hard 2）：以 record.lock 為準（spec §3.15、§4.26.2）。呼叫端應已持有；
-        // 沒有（例如日後新的進入點忘了取）就在這裡補取，被持有即判失敗。record.pid 的檢查照舊保留。
+        // 11 已有錄製在跑（hard 2）
+        checkAlreadyRunning(ctx, into: &r)
+
+        // 13 Apple Events（warn，永不 hard；不跳授權框）
+        await checkAppleEvents(into: &r)
+
+        // 5、6、12 以 3 秒 probe stream 量測（與正式錄製同一組音訊設定）
+        await measureAudio(ctx, content: content, window: window, into: &r)
+
+        // 12（續）幕前調度提醒（spec §4.2.12）
+        let stageNotice = applyStageManagerNotice(into: &r)
+
+        let results = PreflightItem.allCases.map { r[$0] ?? PreflightResult(item: $0, ok: false, message: "沒有檢查") }
+        return PreflightOutcome(results: results, content: content, window: window, resolution: resolution,
+                                stageManagerNotice: stageNotice)
+    }
+
+    /// 11 已有錄製在跑（hard 2）：以 record.lock 為準（spec §3.15、§4.26.2）。呼叫端應已持有；
+    /// 沒有（例如日後新的進入點忘了取）就在這裡補取，被持有即判失敗。record.pid 的檢查照舊保留。
+    static func checkAlreadyRunning(_ ctx: RunContext, into r: inout PreflightResults) {
         var lockHeldByOther = false
         if recordLockFD == nil {
             switch acquireRecordLock(home: ctx.home) {
@@ -193,52 +167,51 @@ enum PreflightRunner {
             }
         }
         if lockHeldByOther {
-            set(.already_running, false, "已有錄製在跑（record.lock 被持有）：先 meeting record stop，或用 meeting record status 確認")
+            r.set(.already_running, false, "已有錄製在跑（record.lock 被持有）：先 meeting record stop，或用 meeting record status 確認")
         } else if let pid = readPid(ctx.pidURL), pid != getpid(), pidAlive(pid) {
-            set(.already_running, false, "已有錄製在跑（pid \(pid)）：先 meeting record stop，或用 meeting record status 確認")
+            r.set(.already_running, false, "已有錄製在跑（pid \(pid)）：先 meeting record stop，或用 meeting record status 確認")
         } else {
-            set(.already_running, true, "")
+            r.set(.already_running, true, "")
         }
+    }
 
-        // 13 Apple Events（warn，永不 hard；不跳授權框）
-        let ae = await chromeAutomationStatus(askUserIfNeeded: false)
-        if ae == .authorized {
-            set(.apple_events, true, "Chrome 會議分頁標記可用（Apple Events 已授權）")
-        } else {
-            let why: String
-            switch ae {
-            case .chromeNotRunning: why = "Chrome 沒有開"
-            case .notAuthorized: why = "沒有允許 MeetingRecorder 控制 Google Chrome"
-            case .notDetermined: why = "還沒決定是否允許 MeetingRecorder 控制 Google Chrome"
-            default: why = "查不到 Apple Events 狀態"
-            }
-            set(.apple_events, false, "會議分頁不會標記，不影響錄製（\(why)）。要開啟：系統設定 › 隱私權與安全性 › 自動化 › MeetingRecorder › Google Chrome")
-        }
-
-        // 5、6、12 以 3 秒 probe stream 量測（與正式錄製同一組音訊設定）
-        // 第 5 項兩段式（D19，spec §4.2.5）：(a) 目標視窗、不播測試音；(a) 沒聲音才開 (b) display filter＋afplay 測試音。
+    /// 5、6、12 以 3 秒 probe stream 量測（與正式錄製同一組音訊設定）。
+    /// 第 5 項兩段式（D19，spec §4.2.5）：(a) 目標視窗、不播測試音；(a) 沒聲音才開 (b) display filter＋afplay 測試音。
+    static func measureAudio(_ ctx: RunContext, content: SCShareableContent?, window: SCWindow?,
+                             into r: inout PreflightResults) async {
         if let content {
             func peakText(_ v: Double) -> String { v.isFinite ? String(format: "%.1f dBFS", v) : "-∞" }
             let m = await ProbeMeter.measureTarget(content: content, window: window, log: ctx.log)
             // 目標視窗認不到時 (a) 的系統聲音視為 -∞
             let target = window == nil ? -Double.infinity : m.system
             var display: Double?
-            if !(target > -60) {
+            if m.opened, !(target > -60) {
                 display = await ProbeMeter.measureDisplay(content: content, log: ctx.log)
             }
-            switch systemAudioCheck(targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60) {
-            case .pass:
-                set(.system_audio_rms, true, "系統聲音峰值 \(peakText(target))")
-            case .warnTargetSilent:
+            // probe stream 開不起來＝音訊裝置無法啟動（meeting-speed spec §4.10.1）：不再誤判成權限沒有生效
+            let verdict: AudioProbeVerdict = m.opened
+                ? .check(systemAudioCheck(targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60))
+                : audioProbeVerdict(opened: false, targetPeakDBFS: target, displayPeakDBFS: display, thresholdDBFS: -60)
+            switch verdict {
+            case .deviceFailed:
+                let d = currentDevices()
+                r.set(.system_audio_rms, false, audioDeviceFailedMessage(
+                    input: d.input?.name ?? "（無）", inputTransport: d.input?.transport ?? "（無）",
+                    output: d.output?.name ?? "（無）", outputTransport: d.output?.transport ?? "（無）"))
+            case .check(.pass):
+                r.set(.system_audio_rms, true, "系統聲音峰值 \(peakText(target))")
+            case .check(.warnTargetSilent):
                 r[.system_audio_rms] = PreflightResult(
                     item: .system_audio_rms, ok: false,
                     message: "會議 app 目前沒有聲音（會議視窗峰值 \(peakText(target))）；系統聲音擷取權限正常（測試音 \(peakText(display ?? -.infinity))）。開錄後若持續 15 秒沒有聲音會告警",
                     warnOnly: true)
-            case .fail:
-                set(.system_audio_rms, false, "3 秒內系統聲音的峰值都低於 -60 dBFS（會議視窗 \(peakText(target))、測試音 \(peakText(display ?? -.infinity))）：系統聲音擷取權限沒有生效。請到 系統設定 › 隱私權與安全性 › 螢幕與系統錄音 重新授權螢幕錄製給 MeetingRecorder；若剛授權，請完全結束 MeetingRecorder 再重開")
+            case .check(.fail):
+                r.set(.system_audio_rms, false, "3 秒內系統聲音的峰值都低於 -60 dBFS（會議視窗 \(peakText(target))、測試音 \(peakText(display ?? -.infinity))）：系統聲音擷取權限沒有生效。請到 系統設定 › 隱私權與安全性 › 螢幕與系統錄音 重新授權螢幕錄製給 MeetingRecorder；若剛授權，請完全結束 MeetingRecorder 再重開")
             }
-            if m.mic > -60 {
-                set(.mic_rms, true, "麥克風峰值 \(peakText(m.mic))")
+            if verdict == .deviceFailed {
+                r.set(.mic_rms, true, deviceFailedSkipMessage)
+            } else if m.mic > -60 {
+                r.set(.mic_rms, true, "麥克風峰值 \(peakText(m.mic))")
             } else {
                 // t7（§6 第 102 條）：開會時按下開錄的那 3 秒不一定有人說話——只提醒、照常開錄，錄製中 15 秒靜音告警兜底
                 r[.mic_rms] = PreflightResult(
@@ -247,86 +220,25 @@ enum PreflightRunner {
                     warnOnly: true)
             }
             if window == nil {
-                set(.window_minimized, true, "（目標視窗不存在，略過）")
+                r.set(.window_minimized, true, "（目標視窗不存在，略過）")
+            } else if verdict == .deviceFailed {
+                r.set(.window_minimized, true, deviceFailedSkipMessage)
             } else if m.screenFrames == 0 || m.nonSuspendedFrames == 0 {
-                set(.window_minimized, false, minimizedMessage)
+                r.set(.window_minimized, false, minimizedMessage)
             } else {
-                set(.window_minimized, true, "")
+                r.set(.window_minimized, true, "")
             }
         } else {
-            set(.system_audio_rms, false, "螢幕錄製權限沒生效，無法量測系統聲音：先處理螢幕錄製權限")
-            set(.mic_rms, false, "螢幕錄製權限沒生效，無法量測麥克風：先處理螢幕錄製權限")
-            set(.window_minimized, true, "（取不到視窗，略過）")
+            r.set(.system_audio_rms, false, "螢幕錄製權限沒生效，無法量測系統聲音：先處理螢幕錄製權限")
+            r.set(.mic_rms, false, "螢幕錄製權限沒生效，無法量測麥克風：先處理螢幕錄製權限")
+            r.set(.window_minimized, true, "（取不到視窗，略過）")
         }
-
-        // 12（續）幕前調度提醒（spec §4.2.12）：只讀設定；開啟 → 同一項 warn，與「疑似最小化」並列時以「；」串接
-        let stageNotice = stageManagerNotice(globallyEnabled: stageManagerGloballyEnabled())
-        if let stageNotice, let cur = r[.window_minimized] {
-            let parts = (cur.ok ? [] : [cur.message]) + [stageNotice]
-            set(.window_minimized, false, parts.joined(separator: "；"))
-        }
-
-        let results = PreflightItem.allCases.map { r[$0] ?? PreflightResult(item: $0, ok: false, message: "沒有檢查") }
-        return PreflightOutcome(results: results, content: content, window: window, resolution: resolution,
-                                stageManagerNotice: stageNotice)
     }
+
+    /// probe stream 開不起來時第 6、12 項的訊息（meeting-speed spec §4.10.1）：略過，不當成失敗
+    static let deviceFailedSkipMessage = "略過（音訊裝置無法啟動）"
 
     static let minimizedMessage = "會議視窗可能被最小化（3 秒內沒有畫面或只收到暫停狀態）：把它還原，最小化期間錄不到畫面"
-
-    /// 幕前調度是否開啟（spec §4.2.12）：只讀 com.apple.WindowManager 的 GloballyEnabled，不觸發任何授權框、不改設定。
-    /// 讀不到或型別不對回 nil。
-    static func stageManagerGloballyEnabled() -> Bool? {
-        guard let v = CFPreferencesCopyAppValue("GloballyEnabled" as CFString, "com.apple.WindowManager" as CFString) else {
-            return nil
-        }
-        if let b = v as? Bool { return b }
-        if let n = v as? NSNumber { return n.boolValue }
-        return nil
-    }
-
-    // MARK: - 個別檢查
-
-    static func checkSigning(home: URL) -> (Bool, String) {
-        var code: SecCode?
-        var staticCode: SecStaticCode?
-        var info: CFDictionary?
-        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
-              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
-              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any] else {
-            return (false, "讀不到自己的簽章資訊；若擷取失敗，到系統設定重新授權螢幕錄製與麥克風")
-        }
-        let certs = dict[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? []
-        let cdhash = (dict[kSecCodeInfoUnique as String] as? Data)?.map { String(format: "%02x", $0) }.joined() ?? ""
-        let store = home.appendingPathComponent("record.cdhash")
-        let previous = (try? String(contentsOf: store, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cdhash.isEmpty {
-            try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            try? cdhash.write(to: store, atomically: true, encoding: .utf8)
-        }
-        if certs.isEmpty {
-            return (false, "app 是 ad-hoc 簽章，每次重建授權都可能失效；建議建立「MeetingHarness Dev」簽章身分後重跑 build.sh")
-        }
-        if let previous, !previous.isEmpty, previous != cdhash {
-            return (false, "app 重建過（簽章指紋與上次不同）；若擷取失敗，到系統設定重新授權螢幕錄製與麥克風")
-        }
-        let name = SecCertificateCopySubjectSummary(certs[0]).map { $0 as String } ?? "固定身分"
-        return (true, "簽章身分：\(name)")
-    }
-
-    static func sessionCollides(_ ctx: RunContext) -> Bool {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: ctx.tracksDir.path) { return true }
-        let items = (try? fm.contentsOfDirectory(atPath: ctx.recordingDir.path)) ?? []
-        return items.contains { !$0.hasPrefix(".") && audioExtensions.contains(($0 as NSString).pathExtension.lowercased()) }
-    }
-
-    /// 最近一個已存在的上層目錄（場次目錄在 preflight 時可能還沒建立）。
-    static func existingAncestor(_ url: URL) -> URL {
-        var u = url
-        while !FileManager.default.fileExists(atPath: u.path), u.path != "/" { u = u.deletingLastPathComponent() }
-        return u
-    }
 
     /// 每次都讀當下的值（spec §4.5.9，缺陷 L）：以路徑新建 URL 並清掉快取，不沿用同一個 URL 物件的 resourceValues。
     static func availableBytes(_ url: URL) -> Int64? {
@@ -336,41 +248,6 @@ enum PreflightRunner {
                                                                     .volumeAvailableCapacityKey])
         if let n = v?.volumeAvailableCapacityForImportantUsage, n > 0 { return n }
         return v?.volumeAvailableCapacity.map { Int64($0) }
-    }
-
-    static func checkDisk(_ ctx: RunContext) -> (Bool, String) {
-        let gb = { (b: Int64) in String(format: "%.1f GB", Double(b) / 1e9) }
-        guard let avail = availableBytes(ctx.session) else {
-            return (false, "讀不到目標磁碟的可用空間：確認根目錄存在")
-        }
-        if avail < ctx.minFreeBytes {
-            return (false, "可用空間 \(gb(avail))，低於需要的 \(gb(ctx.minFreeBytes))：清出空間或換一個根目錄")
-        }
-        // 可寫探測：在最近的已存在目錄建一個探測檔再刪掉（寫 ~/Documents 底下要「文件」授權，失敗是靜默的）
-        let dir = existingAncestor(ctx.tracksDir)
-        let probe = dir.appendingPathComponent(".mh-write-probe-\(UUID().uuidString)")
-        if FileManager.default.createFile(atPath: probe.path, contents: Data("x".utf8)) {
-            try? FileManager.default.removeItem(at: probe)
-        } else {
-            return (false, "寫不進 \(dir.path)：若在 ~/Documents 底下，到 系統設定 › 隱私權與安全性 › 檔案與檔案夾 給 MeetingRecorder「文件」權限，然後重開")
-        }
-        return (true, "可用空間 \(gb(avail))（需要 \(gb(ctx.minFreeBytes))）")
-    }
-
-    static func checkPower() -> (Bool, String) {
-        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return (true, "") }
-        for ps in list {
-            guard let d = IOPSGetPowerSourceDescription(blob, ps)?.takeUnretainedValue() as? [String: Any] else { continue }
-            let onBattery = (d[kIOPSPowerSourceStateKey] as? String) == kIOPSBatteryPowerValue
-            let cur = d[kIOPSCurrentCapacityKey] as? Int ?? 100
-            let maxCap = d[kIOPSMaxCapacityKey] as? Int ?? 100
-            let pct = maxCap > 0 ? cur * 100 / maxCap : 100
-            if onBattery && pct < 20 {
-                return (false, "用電池且電量 \(pct)%（低於 20%）：接上電源，長時間錄製與收尾很耗電")
-            }
-        }
-        return (true, "")
     }
 }
 
