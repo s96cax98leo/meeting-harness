@@ -19,6 +19,7 @@ from tests.record import _media as m
 from tests.record._helpers import BIN, SLOW_FFMPEG, Sandbox, snapshot, tmpdir
 
 FINALIZE_PY = BIN / "_record_finalize.py"
+RECORD_LIB_PY = BIN / "lib" / "_record_lib.py"
 TIMEOUT_STEPS = {"normalize", "concat", "mix", "probe"}
 
 HOLD_FINALIZE_LOCK = r'''
@@ -89,12 +90,17 @@ class TestR3FinalizeGuard(unittest.TestCase):
 
     # spec §4.28.2：write_json_atomic 用同目錄 tempfile.mkstemp；不得有 + ".tmp" 或 '.tmp' 字面
     def test_atomic_write_uses_mkstemp(self):
+        # meeting-speed spec §6.2 第 27 條：定義移到 bin/lib/_record_lib.py，_record_finalize.py 改由 import 取得
         src = FINALIZE_PY.read_text(encoding="utf-8")
-        tree = ast.parse(src)
+        lib = RECORD_LIB_PY.read_text(encoding="utf-8")
+        tree = ast.parse(lib)
         fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "write_json_atomic"),
                   None)
-        self.assertIsNotNone(fn, "_record_finalize.py 應有 write_json_atomic")
-        body = ast.get_source_segment(src, fn)
+        self.assertIsNotNone(fn, "bin/lib/_record_lib.py 應有 write_json_atomic")
+        self.assertTrue(any(isinstance(n, ast.ImportFrom) and n.module == "_record_lib"
+                            and any(a.name == "write_json_atomic" for a in n.names) for n in ast.walk(ast.parse(src))),
+                        "_record_finalize.py 應 from _record_lib import write_json_atomic")
+        body = ast.get_source_segment(lib, fn)
         self.assertIn("mkstemp", body, "write_json_atomic 應以 tempfile.mkstemp 建暫存檔")
         self.assertIn("dir=", body, "mkstemp 應建在同目錄（dir=）")
         for lit in ('+ ".tmp"', "'.tmp'"):
