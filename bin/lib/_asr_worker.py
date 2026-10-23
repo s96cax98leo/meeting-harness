@@ -2,7 +2,7 @@
 """_asr_worker.py — 錄製中的增量轉錄 worker 與 stitch（meeting-speed spec §3.6、§3.9、§4.11；ADR adr-ms-incremental-asr.md）。
 
 子指令（內部介面，不是對外 CLI）：
-- run <場次>：持 錄音/tracks/asr/worker.lock（flock）；輪詢 錄音/tracks/manifest.json，只處理 finishedAt 不是 null 的段落
+- run <場次>：持 錄音/tracks/asr/worker.lock（flock）；輪詢 錄音/tracks/manifest.json，只處理 finishedAt 不是 null 的段落（停止後最後一段例外）
   （由第一段起連續的那一串），逐窗以 in-process 的 mlx_whisper.transcribe() 轉錄（模型只載一次），結果寫
   錄音/tracks/asr/w-NNNN.json（時間戳已平移到成品時間軸），狀態寫 state.json（原子寫入、定期更新心跳）。
   - 窗 k＝[cut_{k−1}, cut_k]：cut_k 取第 k 段最後 8 秒內、以整檔轉錄同一組 VAD 參數（levels_intervals）算出的
@@ -212,17 +212,22 @@ def other_finalizing(sess):
     return False
 
 
-def finished_segments(tracks):
-    """manifest.json 中由第一段起、finishedAt 不是 null 且檔案在的連續段落；回 (段落清單, levels dict)。"""
+def finished_segments(tracks, stopped=False):
+    """manifest.json 中由第一段起、finishedAt 不是 null 且檔案在的連續段落；回 (段落清單, levels dict)。
+    stopped（本場已停止）時，manifest 最後一列 finishedAt 為 null 但檔案在也算：錄製器在收尾前結束時
+    最後一段留 null，收尾照樣採用它（spec §4.11.5、§4.16）。"""
     man = load_json(os.path.join(tracks, "manifest.json"), None)
     if not isinstance(man, dict):
         return [], {}
     out = []
-    for s in man.get("segments") or []:
+    rows = man.get("segments") or []
+    for n, s in enumerate(rows):
         if not isinstance(s, dict):
             break
         f, a, b = s.get("file"), num(s.get("startedAt")), num(s.get("finishedAt"))
-        if not isinstance(f, str) or a is None or b is None or not os.path.isfile(os.path.join(tracks, f)):
+        if not isinstance(f, str) or a is None or not os.path.isfile(os.path.join(tracks, f)):
+            break
+        if b is None and not (stopped and n == len(rows) - 1):
             break
         out.append({"file": f, "startedAt": a, "finishedAt": b})
     lv = man.get("levels") if isinstance(man.get("levels"), dict) else {}
@@ -484,7 +489,7 @@ class Worker:
         while True:
             phase, st = recording_phase(self.sess)   # 先讀 phase 再讀 manifest：已停止時 manifest 已是最後版本
             stopped = phase in STOPPED_PHASES or phase == "gone"
-            segs, lv = finished_segments(self.tracks)
+            segs, lv = finished_segments(self.tracks, stopped)
             reason = None if stopped else self.pause_reason(phase, st)
             if reason is not None:
                 if self.state["status"] != "paused" or self.state["pausedReason"] != reason:
