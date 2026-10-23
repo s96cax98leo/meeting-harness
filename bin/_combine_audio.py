@@ -11,8 +11,10 @@ EXTS = ("m4a", "mp3", "wav", "mov", "mp4", "m4v")
 
 def audio_files(rec):
     fs = []
+    # 目錄部分先 glob.escape（場次名可能含 [ ] * ?，spec §4.8.9），只有副檔名樣式保留萬用字元
+    esc = glob.escape(rec)
     for e in EXTS:
-        fs += glob.glob(os.path.join(rec, f"*.{e}"))
+        fs += glob.glob(os.path.join(esc, f"*.{e}"))
     # 排除自己產生的 .combined.wav 與隱藏檔
     fs = [f for f in fs if not os.path.basename(f).startswith(".")]
     return sorted(fs)
