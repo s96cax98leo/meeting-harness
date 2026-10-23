@@ -70,7 +70,6 @@ import signal
 import subprocess
 import sys
 import threading
-import tempfile
 import time
 import wave
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
@@ -81,7 +80,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 # bin/lib/ 要先進 sys.path（noqa: E402）。共用 helper 由 _record_lib 提供（meeting-speed spec §4.13.2），
 # 不被測試釘住的純函式搬到 _finalize_*（§4.13.1）；模組內名稱照舊可用
-from _record_lib import load_json, paused_total, record_home, update_pipeline_state  # noqa: E402,F401
+from _record_lib import load_json, paused_total, record_home, update_pipeline_state, write_json_atomic  # noqa: E402,F401
 from _finalize_media import (LIMIT, audio_graph, even_up, first_stream, now_iso, num,  # noqa: E402
                              stream_dts, stream_start, tick_floor)
 from _finalize_sync import (COPY_CHUNK, SYNC_FRAME_BYTES, SYNC_MODES, SYNC_RATE, compensation_kind,  # noqa: E402
@@ -453,25 +452,6 @@ def defaults_ffmpeg():
         return v if isinstance(v, str) and os.path.isfile(v) else None
     except (OSError, ValueError, AttributeError):
         return None
-
-
-def write_json_atomic(path, data):
-    """JSON 原子寫入：同目錄 tempfile.mkstemp(dir=…) 建暫存檔，寫完 os.replace（spec §4.28.2）。
-    暫留本檔：既有 test_r3_finalize_guard.py::test_atomic_write_uses_mkstemp 要求本檔有這個 def，與 meeting-speed
-    spec §4.13.2「改由 _record_lib import」衝突，待決定（語意與 _record_lib.write_json_atomic 相同）。"""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
-                               prefix="." + os.path.basename(path) + ".", suffix=".part")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
 
 
 def find_tool(name, env):
