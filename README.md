@@ -35,21 +35,33 @@ meeting-harness/
 
 ```mermaid
 flowchart TD
-    A["📁 會議根目錄<br/>錄音 .m4a + 照片 .HEIC"] --> P{{"meeting.sh<br/>本機前處理"}}
-    P -->|並行| T["🎙️ transcribe<br/>mlx-whisper large-v3"]
+    REC["⏺️ meeting record<br/>錄製中逐段落盤"] -.每段收尾.-> W["🧩 增量轉錄 worker<br/>錄製中先轉完已收尾的段落"]
+    REC -->|停止| F["🧷 finalize<br/>音訊先出：正式 wav 先發佈"]
+    F -->|音訊就緒| P{{"meeting.sh prep<br/>本機前處理"}}
+    F -.影片仍在收尾.-> VID["🎞️ 影片/"]
+    A["📁 會議根目錄<br/>錄音 + 照片 .HEIC"] --> P
+    W -.stitch 接上逐字稿.-> T
+    P -->|並行| T["🎙️ transcribe<br/>Breeze-ASR-25（mlx-whisper）"]
+    P -->|並行| DZ["🗣️ diarize<br/>pyannote community-1 + 聲紋比對"]
     P -->|並行| O["🖼️ slide-ocr<br/>Apple Vision OCR"]
     O --> V["👁️ slide-vision<br/>架構圖視覺補讀"]
-    T --> S["📝 summarizer<br/>結構化繁中總結"]
+    T --> MS["👥 transcript.speakers.md<br/>逐字稿掛講者"]
+    DZ --> MS
+    MS --> S["📝 summarizer<br/>結構化繁中總結"]
     V --> S
     S --> C["✅ verifier<br/>逐條查核 pass/fail"]
     C -->|fail 回退| S
     C -->|pass| R["🔎 resolver<br/>上網查證補足存疑"]
     R --> Pub["📤 publisher<br/>wiki + docx + 索引"]
-    Pub --> W["🗂️ Obsidian wiki"]
+    Pub --> Wk["🗂️ Obsidian wiki"]
     Pub --> D["📄 Word .docx"]
     M["🧠 vault/術語表.md<br/>長期記憶"] -.注入.-> T
     M -.注入.-> S
 ```
+
+- **音訊先出**：停止錄製後，收尾先發佈 `錄音/` 第一層的正式 wav 並印「音訊就緒：」，前處理隨即開跑；影片可能仍在收尾，不擋逐字稿。
+- **增量轉錄**：錄製中由背景 worker（`bin/lib/_asr_worker.py`）逐段先轉；停止後 prep 用 `stitch` 拼好的結果直接交給 `transcribe.sh`，條件不合（參數不同、窗沒補完等）就退回整檔轉錄。
+- **轉錄與講者分離並行**：prep 讓 transcribe 與 diarize（pyannote）同時跑，兩邊都完成後再合成 `錄音/transcript.speakers.md`。
 
 ## 一次性安裝
 ```bash

@@ -1,3 +1,6 @@
+// 【已棄用】這支 workflow 不再維護：請改用 meeting-summary skill（/meeting-summary）。
+// 本機前處理已由 bin/meeting.sh prep 負責（音訊先出、轉錄與講者分離並行、增量轉錄），
+// 這裡的 Transcribe 階段仍是舊的整檔流程；保留檔案只為相容既有呼叫，新的場次不要再走這條路。
 export const meta = {
   name: 'meeting-pipeline',
   description: '逐場會議流水線：轉錄 + 投影片OCR/視覺 → 總結 → 驗證(可恢復) → 發佈 wiki + docx',
