@@ -368,8 +368,36 @@ prep() {
     exit 3
   fi
   echo
+  # 結尾摘要（spec §4.8.10）：讀各場 .pipeline-state.json，列出這次 prep（prep.runId）失敗的 stage；
+  # 有失敗時不印 ✅、改印 ⚠。結束碼不變（§4.8.5，失敗仍回 0）。
+  local fails; fails="$(list_sessions "$root" | python3 -c '
+import json, os, sys
+for sess in (ln.rstrip("\n") for ln in sys.stdin):
+    if not sess:
+        continue
+    try:
+        with open(os.path.join(sess, ".pipeline-state.json"), encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        continue
+    if not isinstance(st, dict):
+        continue
+    prep = st.get("prep") if isinstance(st.get("prep"), dict) else {}
+    rid = prep.get("runId")
+    stages = st.get("stages") if isinstance(st.get("stages"), dict) else {}
+    bad = [k for k, v in stages.items()
+           if isinstance(v, dict) and v.get("status") == "failed" and (not rid or v.get("runId") in (None, rid))]
+    if bad:
+        print(os.path.basename(sess) + "：" + "、".join(bad))
+' 2>/dev/null || true)"
   echo "════════════════════════════════════════════════════"
-  echo "✅ 本機前處理完成（$n 場）：transcript.raw.md + 照片/.ocr/*.txt 已就緒。"
+  if [[ -n "$fails" ]]; then
+    echo "⚠ 本機前處理完成，但有步驟失敗："
+    printf '%s\n' "$fails" | sed 's/^/    /'
+    echo "  詳見各場次的 .pipeline-state.json（stages 的 status）與上面的訊息。"
+  else
+    echo "✅ 本機前處理完成（$n 場）：transcript.raw.md + 照片/.ocr/*.txt 已就緒。"
+  fi
   echo
   echo "接著在 Claude Code 執行 AI 步驟（逐字稿精修→總結→驗證→發佈 wiki+docx）："
   echo
