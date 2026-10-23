@@ -150,7 +150,7 @@ class TestMSVideoCopy(VideoCase):
         self.ok(self.fin(sess))
         self.assertEqual(self.video_path(sess), "copy")
         v = self.the_video(sess)
-        for sel in (0, 1):
+        for sel in ("v:0", "a:0"):
             dts = m.packet_dts(v, sel)
             self.assertTrue(dts, f"串流 {sel} 應有封包")
             self.assertTrue(all(b > a for a, b in zip(dts, dts[1:])), f"串流 {sel} 的 dts 應嚴格遞增")
