@@ -276,6 +276,7 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | 4.4.11 | 實機（test 段）：用新錄製器錄一場 ≥ 30 分鐘、錄製中至少縮放視窗兩次與跨一次 60 秒輪替，`e2e_check.py` 的 `video_format`、`video_covers_audio`、`one_audio_file`、`wav`、`c_canvas` 應 PASS，且 `finalize.json.videoPath == "copy"`；缺陷 B、F、N 的情境照 meeting-record 原判準重驗。 | G1、G4 | intent §7 Q3 | 人工（plan §4） |
 | 4.4.12 | （D3 a）重編路徑（含 copy 不成立時的整場退回）的 `normalize` 補尾時，tpad 的補幀數不得只依 `r_frame_rate`／`link_fps` 推算：應以 `ceil((cap − last) × max(link_fps, TAIL_PAD_FPS_FLOOR)) + 1` 計算（`TAIL_PAD_FPS_FLOOR = 240`），多補的複製幀交給現行的夾 cap＋`select` 去重。當段落的 `link_fps` 低於 ffmpeg 實際連結影格率（例 58 對 60）、且最後一幀距段落結束 ≥ 1 秒時，正規化後最後一幀應落在 cap（± 1 tick），`check_norm` 通過、finalize 回 0。 | G4、G5 | `incident-2018-windowserver.md:22-28`；`bin/_record_finalize.py:1233,1254-1256` | `test_ms_video_copy.py::test_tail_pad_low_r_frame_rate`（60 fps 合成段落、末 9 秒靜止，以測試替換模組的 `link_fps` 回 58）；既有 `test_finalize.py` 補尾相關測試（不改） |
 | 4.4.13 | **使用者 2026-10-22 決定：先維持 60 fps、原生像素（§4.4.2 不變），WindowServer 三種設定之後擇期在使用者在場時照 `evidence/video-spike.md` §4 實測；30 fps 若讓 WindowServer 平均 CPU 降 ≥ 25% 再另開小改動。recorder-capture 依此開工。** 原條文：（D3 d）擷取幀率（60 或 30 fps）與擷取尺寸上限**不在本 spec 預先定案**：`video-spike` 應量「60 fps 原尺寸」「30 fps 原尺寸」「60 fps＋尺寸上限」三種設定下 WindowServer 的 CPU 負擔，以及各設定的段落走 copy 串接的結果，寫進證據檔並以 `needs_decision` 回報；使用者決定前 `recorder-capture` 不得開工。使用者若選非 60 fps 或加尺寸上限，主 session 先修 §4.4.2 與對應新測試，並在 §6.1 記為 intent §7 Q3「維持 60 fps」的修訂，再派工。 | G1、G3 | D3 d；`incident-2018-windowserver.md:4,18` | `specs/meeting-speed/evidence/video-spike.md` 第 5 節；使用者決定（plan §4） |
+| 4.4.14 | （使用者 2026-10-23 要求寫派工單；build 第二批後重放量測發現）重編路徑（沒有 `canvasLock` 的舊段落）的每段 `normalize` 牆鐘時間，同一段、同一台機器、沒有其他負載時，不得比 `042c404` 慢超過 15%。重放量測中 141 段的影片要 2302 秒，約每段 48 秒（平行度 3），10/20 基準約 24 秒。先找出根因（候選：§4.4.12 的 `TAIL_PAD_FPS_FLOOR=240` 加上 select 去重、濾鏡鏈改動、編碼參數），再修。若根因是 §4.4.12 本身、要改它的公式才能修，停下以 `needs_decision` 回報，不得自行放寬 §4.4.12。 | G1 | 重放量測 2026-10-23 | `specs/meeting-speed/evidence/reencode-regress.md`：用 `tools/bench/` 或等價腳本對同一段（`tests/record` 的合成段落＋至少一段 ≥ 60 秒、2560×1440、60 fps 的合成段落）在 `042c404` 與 HEAD 各跑 3 次取中位數；`test_ms_video_copy.py` 全部照舊綠 |
 
 ### 4.5 驗證移到發佈之後（C9）
 
@@ -324,6 +325,8 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | 4.8.6 | `prepOutcome` 應在 `prep.runId` 等於這次、`expect` 的每個 stage 都是 `done` 且帶同一 `runId` 時回 `.ok`；有任何一個不是時回 `.failed([stage…])`（依 `expect` 順序）；讀不到檔、JSON 壞、`prep.runId` 不同時回 `.unknown`。 | G5 | design §6 選項 A | `swift:testMSPrepOutcomeOk`、`swift:testMSPrepOutcomeFailed`、`swift:testMSPrepOutcomeUnknown` |
 | 4.8.7 | 當 `AutoPrepRunner` 的 prep 結束時，應讀該場 `.pipeline-state.json` 交給 `prepOutcome`，再用 `prepNotification` 決定通知標題與內文；只有 `.ok` 且結束碼 0 時發「前處理完成」。 | G5 | intent §4.5 | `swift:testMSPrepNotification`；`test_ms_app_static.py::TriggerStatic::test_prep_outcome_read` |
 | 4.8.8 | （§6 第 14、19 條，使用者 2026-10-21 核准）輸入已是 16 kHz 單聲道 wav 時，`diarize.sh` 應跳過轉檔。 | G1 | design §14 | `test_ms_iron_rules.py::test_diarize_skips_16k_conversion` |
+| 4.8.9 | （使用者 2026-10-23 要求寫派工單；build 第二批後重放量測發現）場次路徑含 glob 特殊字元（`[`、`]`、`*`、`?`，例「[Stand-up] 範例專案」）時，`bin/_combine_audio.py` 應照常找到 `錄音/` 第一層的音檔，`bin/_ocr.py` 應照常找到圖檔：目錄部分一律先 `glob.escape`，只有副檔名樣式保留萬用字元。 | G5 | 重放量測：沙盒場次名含 `[Stand-up]`，`_combine_audio.py` 回空、轉錄收到空參數、`diarize.sh` 回 3 | `test_ms_prep_visible.py::test_combine_audio_bracket_path`、`::test_ocr_bracket_path`、`::test_prep_bracket_session_end_to_end`（替身 ASR／diarize，場次名含 `[` `]`，prep 後 `transcript.speakers.md` 存在） |
+| 4.8.10 | 當這次 prep 有任一場的轉錄、OCR 或分離失敗時，結尾不得印「✅ 本機前處理完成」：應改印「⚠ 本機前處理完成，但有步驟失敗：<場次代號>：<失敗 stage 以「、」連接>」（每場一行），並提示看 `.pipeline-state.json`。全部成功時照舊印 ✅。結束碼仍照 §4.8.5（失敗仍回 0，不改）。 | G5 | 同上：兩步都失敗仍印 ✅ | `test_ms_prep_visible.py::test_prep_banner_reports_failure`、`::test_prep_banner_ok_when_all_done`；既有 `test_ms_prep.py::test_prep_exit_zero_on_stage_failure` 照舊綠 |
 
 ### 4.9 狀態檔加鎖（G7）
 
@@ -419,6 +422,8 @@ func abnormalStopNotification(label: String) -> (title: String, body: String)
 | `tools/MeetingRecorder/Sources/Capture/` | 畫布鎖定、`preservesAspectRatio`、`droppedFrames`、`audioReady`、起 worker、preflight 裝置失敗、停止路徑 log、完成通知；擷取幀率／尺寸上限依 §4.4.13 的決定 | recorder-capture（含拆 `RecordingSession.swift`、`PreflightRunner.run`） | 成品解析度停在開錄時視窗大小 |
 | `tools/MeetingRecorder/Sources/Trigger/` | `.early` 觸發、`prepOutcome`、通知、停止路徑 log、啟動時偵測異常中止並一鍵收尾 | trigger-ui（含拆 `MenuBar.swift`） | 通知文字改用場次代號；多一則異常中止通知 |
 | `.claude/skills/meeting-record/`、`meeting-transcribe/`、`meeting-speakers/`、`meeting-summary/` | 行為說明 | finalize-fast、asr-robust、diarize-iron | 改 repo 的 SKILL 等於改全域（專案規則 7） |
+| `bin/_combine_audio.py`、`bin/_ocr.py`、`bin/meeting.sh` 的 prep 結尾摘要 | glob 跳脫（§4.8.9）、失敗摘要（§4.8.10） | prep-visible | 結束碼不變；結尾文字在有失敗時改為 ⚠ |
+| `bin/_record_finalize.py`／`bin/lib/_finalize_media.py` 的重編路徑 | 退回重編的速度退化（§4.4.14） | reencode-regress | 無 |
 | `tools/bench/`（新） | 重放量測工具 | replay-bench | 測試工具，不是對外介面 |
 | `.gitignore`、`README.md`、`.claude/workflows/meeting-pipeline.js` | 見 §4.6.8、§4.13.4 | diarize-iron、docs-cleanup | 無 |
 | `bin/record.sh` | `finish` 不帶參數接手異常中止的場次（§4.16.3）；結構重構（`cmd_control` 拆函式、`record.sh:973` 註解） | record-sh-split | 子指令、usage 與結束碼集合不變 |
