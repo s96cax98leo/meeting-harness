@@ -10,11 +10,20 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import unittest
 
 from tests.record import test_ms_support as s
-from tests.record.test_ms_incremental_asr import WorkerCase
+from tests.record.test_ms_incremental_asr import SEG, WorkerCase
+
+
+def tree(root):
+    out = set()
+    for d, dirs, files in os.walk(root):
+        for x in dirs + files:
+            out.add(os.path.relpath(os.path.join(d, x), root))
+    return out
 
 
 class LangCase(WorkerCase):
@@ -97,6 +106,66 @@ class TestMeetingShPassesLang(unittest.TestCase):
         self.assertEqual(r.returncode, 0, s.out_of(r))
         self.assertTrue(seen.is_file(), f"應呼叫 stitch{s.out_of(r)}")
         self.assertEqual(seen.read_text(encoding="utf-8"), "en", "stitch 應拿到 meeting.sh 實際使用的語言")
+
+
+class TestWorkerStopsOnDiscard(WorkerCase):
+    def started(self):
+        # 第 1 段 4–7 秒無聲：第 1 窗切在 5.5 秒，停止後還要補 5.5–10 秒那一窗（會建 .work）
+        sess = self.session(3, silences=[(4.0, 7.0)], unfinished=(2, 3))
+        self.status(sess, "recording")
+        w = self.start_worker(sess)
+        self.wait_windows(sess, 1)
+        self.assertLess(self.windows(sess)[-1]["end"], SEG, "前提：第 1 段還有沒轉完的部分")
+        return sess, w
+
+    def trash_recording(self, sess):
+        trash = self.base / "垃圾桶"
+        trash.mkdir()
+        shutil.move(str(sess / "錄音"), str(trash / "錄音"))
+        return trash / "錄音"
+
+    def assert_quiet_exit(self, w, sess, before):
+        self.assertTrue(s.wait_until(lambda: w.poll() is not None, timeout=60), "捨棄後 worker 應結束")
+        o, e = w.communicate(timeout=10)
+        self.assertEqual(w.returncode, 0, f"捨棄後 worker 應回 0\nstdout:{o}\nstderr:{e}")
+        self.assertEqual(tree(sess) - before, set(), "場次底下不得新增任何路徑（不得重建 錄音/tracks/asr/.work）")
+
+    # 錄音/ 已移走、phase＝done＋discarded＝true
+    def test_exit_when_tracks_removed_and_discarded(self):
+        sess, w = self.started()
+        self.trash_recording(sess)
+        before = tree(sess)
+        self.status(sess, "done", discarded=True)
+        self.assert_quiet_exit(w, sess, before)
+
+    # 錄音/ 已移走、狀態還沒更新（finishDiscard 先 trashItem 再改 phase）
+    def test_exit_when_tracks_removed_still_recording(self):
+        sess, w = self.started()
+        self.trash_recording(sess)
+        before = tree(sess)
+        self.assert_quiet_exit(w, sess, before)
+
+    # discarded＝true 但 tracks 還在：也直接結束，state.json 不改寫（不寫 complete／failed）
+    def test_exit_when_discarded_flag(self):
+        sess, w = self.started()
+        sp = s.tracks_of(sess) / "asr" / "state.json"
+        before = tree(sess)
+        self.status(sess, "done", discarded=True)
+        self.assertTrue(s.wait_until(lambda: w.poll() is not None, timeout=60), "discarded 後 worker 應結束")
+        w.communicate(timeout=10)
+        self.assertEqual(w.returncode, 0)
+        st = json.loads(sp.read_text(encoding="utf-8"))
+        self.assertNotIn(st.get("status"), ("complete", "failed"), f"discarded 後不得再寫 state.json：{st}")
+        self.assertEqual(len(st.get("windows") or []), 1, "discarded 後不得再開新窗")
+        self.assertEqual(tree(sess) - before, set(), "場次底下不得新增任何路徑")
+
+    # 起動時就已捨棄：不建 asr/、不寫 state.json
+    def test_no_start_when_discarded(self):
+        sess = self.session(2)
+        self.status(sess, "done", discarded=True)
+        before = tree(sess)
+        r = self.run_worker(sess)
+        self.assertEqual(tree(sess) - before, set(), f"已捨棄的場次不得新增任何路徑{s.out_of(r)}")
 
 
 if __name__ == "__main__":

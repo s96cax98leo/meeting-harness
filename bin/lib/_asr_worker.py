@@ -12,7 +12,9 @@
     的 pid 活著且持有 <runId>.lock）還在跑 → paused／otherFinalizing。
   - 本場 phase 變成 finalizing／done／failed（或狀態檔已換成別場、錄製器 pid 不在）→ 補完所有窗，最後一窗延伸到
     最後一段結尾，state.json.status＝complete 後結束。
-  - 結束碼：0 完成（或另一個 worker 正持有 worker.lock、config.json 關掉增量轉錄時直接結束）；2 參數錯或轉錄失敗
+  - 本場已捨棄（record.status.json 的 discarded 為真）或 錄音/tracks 已不在 → 每輪與建目錄前都檢查，成立就直接
+    結束、回 0，不建任何目錄、不寫 state.json。
+  - 結束碼：0 完成（或另一個 worker 正持有 worker.lock、config.json 關掉增量轉錄、本場已捨棄時直接結束）；2 參數錯或轉錄失敗
     （state.json.status＝failed）。
 - stitch <場次> <out.json>：worker 還活著（持有 worker.lock）且 60 秒內有心跳時先等它結束；再檢查
   status＝complete、各窗涵蓋的段落（檔名＋大小）與 audio-ready.json（沒有時 finalize.json.inputs）相同、
@@ -275,6 +277,10 @@ def cut_point(lv, seg, params):
 
 # ── worker ────────────────────────────────────────────────────────────────────
 
+class Abandoned(Exception):
+    """本場已捨棄（record.status.json 的 discarded 為真）或 錄音/tracks 已不在：worker 直接結束、回 0。"""
+
+
 class Worker:
     def __init__(self, sess):
         self.sess = os.path.abspath(sess)
@@ -292,10 +298,32 @@ class Worker:
         self.drop_paused = False
         self.stop_beat = threading.Event()
 
+    def abandoned(self):
+        """捨棄錄製（finishDiscard）會把 錄音/ 移到垃圾桶、再把 phase 設 done＋discarded＝true；兩者任一成立就不再
+        碰這一場——不建目錄、不寫 state.json（否則會在原處重建 錄音/tracks/asr/.work）。"""
+        if not os.path.isdir(self.tracks):
+            return True
+        st = own_status(self.sess)
+        return isinstance(st, dict) and st.get("discarded") is True
+
+    def check_abandoned(self):
+        if self.abandoned():
+            raise Abandoned()
+
+    def ensure_work(self):
+        """建 asr/.work：只建這一層，上層（錄音/tracks/asr）不在就失敗，不重建被移走的目錄。"""
+        self.check_abandoned()
+        try:
+            os.mkdir(self.work)
+        except FileExistsError:
+            pass
+
     # 狀態檔
     def save(self, **fields):
         with self.lock:
             self.state.update(fields)
+            if self.abandoned():
+                return
             self.state["heartbeat"] = now_iso()
             write_json_atomic(self.state_path, self.state)
 
@@ -326,13 +354,13 @@ class Worker:
 
     def segment_pcm(self, f):
         if f not in self.pcm:
-            os.makedirs(self.work, exist_ok=True)
+            self.ensure_work()
             self.pcm[f] = finalize_mod().segment_audio_pcm(os.path.join(self.tracks, f), self.info[f]["a"], self.work)
         return self.pcm[f]
 
     def window_wav(self, ws, we, index):
         """[ws, we]（成品時間）的音訊：各段 PCM 依框數切片接起來，再轉 16 kHz 單聲道（同正式 wav 的轉法）。"""
-        os.makedirs(self.work, exist_ok=True)
+        self.ensure_work()
         files = []
         w48 = os.path.join(self.work, f"w-{index:04d}.48k.wav")
         with wave.open(w48, "wb") as out:
@@ -459,7 +487,13 @@ class Worker:
         return None
 
     def run(self):
-        os.makedirs(self.asr, exist_ok=True)
+        if self.abandoned():
+            log("這一場已捨棄或 錄音/tracks 已不在，不做增量轉錄")
+            return 0
+        try:
+            os.mkdir(self.asr)
+        except FileExistsError:
+            pass
         fd = os.open(os.path.join(self.asr, "worker.lock"), os.O_CREAT | os.O_RDWR, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -484,20 +518,29 @@ class Worker:
         beat.start()
         try:
             self.loop()
+        except Abandoned:
+            self.stop_beat.set()
+            log("這一場已捨棄或 錄音/tracks 已被移走，結束（不寫 state.json）")
+            return 0
         except Exception as e:  # noqa: BLE001 — 任何失敗都記進 state.json，stitch 會回 3、prep 改整檔轉錄
             self.stop_beat.set()
+            if self.abandoned():   # 轉錄途中 錄音/ 被移走而失敗：同捨棄，不留 failed
+                log(f"這一場已捨棄或 錄音/tracks 已被移走，結束（{type(e).__name__}）")
+                return 0
             self.save(status="failed", pausedReason=None, error=f"{type(e).__name__}: {e}"[:500])
             print(f"✗ 增量轉錄失敗：{type(e).__name__}: {e}", file=sys.stderr, flush=True)
             return 2
         finally:
             self.stop_beat.set()
-            shutil.rmtree(self.work, ignore_errors=True)
+            if os.path.isdir(self.asr):
+                shutil.rmtree(self.work, ignore_errors=True)
         log(f"完成：{len(self.state['windows'])} 窗，涵蓋到 {self.covered():.3f} 秒")
         return 0
 
     def loop(self):
         next_seg = 0
         while True:
+            self.check_abandoned()   # 每輪先看：已捨棄或 tracks 已被移走就結束
             phase, st = recording_phase(self.sess)   # 先讀 phase 再讀 manifest：已停止時 manifest 已是最後版本
             stopped = phase in STOPPED_PHASES or phase == "gone"
             segs, lv = finished_segments(self.tracks, stopped)
@@ -535,6 +578,7 @@ class Worker:
                     end = self.info[f]["start"] + self.info[f]["length"]
                     if end - self.covered() >= MIN_WINDOW_SECONDS:
                         self.make_window(self.covered(), end)
+                self.check_abandoned()
                 self.save(status="complete", pausedReason=None)
                 return
             time.sleep(POLL_SECONDS)
