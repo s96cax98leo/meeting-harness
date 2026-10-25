@@ -303,7 +303,8 @@ transcribe_session() { # <場次dir> <音源> <MH_EMIT_SEGMENTS>
   local sess="$1" audio="$2" seg="$3" worker="$BIN/lib/_asr_worker.py" st rc
   if [[ -f "$worker" ]]; then
     st="$(mktemp -d)"
-    if python3 "$worker" stitch "$sess" "$st/stitched.json" && [[ -s "$st/stitched.json" ]]; then
+    # MH_LANG 是 load_profile 以 eval 設的（沒 export）：明確交給 stitch，與下面傳給 transcribe.sh 的語言相同
+    if MH_LANG="${MH_LANG:-zh}" python3 "$worker" stitch "$sess" "$st/stitched.json" && [[ -s "$st/stitched.json" ]]; then
       echo "  · 用錄製中已完成的增量轉錄（不再整檔轉錄）"
       MH_ASR_SEGMENTS_JSON="$st/stitched.json" MH_EMIT_SEGMENTS=$seg \
         bash "$BIN/transcribe.sh" "$audio" "$sess/錄音/transcript.raw.md" "${MH_LANG:-zh}"; rc=$?

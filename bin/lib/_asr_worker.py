@@ -21,7 +21,7 @@
 
 段落音訊用 bin/_record_finalize.py 的 analyze()／segment_audio_pcm()（與音訊先出同一段程式）；段落在成品時間軸上的
 起點＝前面可讀段落長度的和（與 audio-ready.json 同一個算法）。讀不到的段落不進任何窗（收尾也會略過它）。
-環境變數：與 transcribe.sh 相同的 MH_ASR_MODEL、MH_LANG（預設 zh）、MH_TRANSCRIBE_HINT、MH_VAD、MH_VAD_THRESHOLD_DB、
+環境變數：與 transcribe.sh 相同的 MH_ASR_MODEL、MH_LANG（沒設時讀 錄音/meeting.json 的 language，再沒有＝zh）、MH_TRANSCRIBE_HINT、MH_VAD、MH_VAD_THRESHOLD_DB、
 MH_VAD_PAD、MH_VAD_MERGE_GAP；MH_RECORD_HOME（狀態檔所在）；MH_SYNC_COMPENSATION（同 _record_finalize）。
 """
 import argparse
@@ -115,10 +115,21 @@ def _cfg_model(key):
     return v if isinstance(v, str) and v else DEFAULT_MODELS[key]
 
 
-def transcribe_params():
-    """與 transcribe.sh 同一套規則：MH_ASR_MODEL 優先；語言 MH_LANG（meeting.sh 預設 zh）；zh 用 config 的 zh 模型、
+def session_language(sess):
+    """這一場 transcribe.sh 會拿到的語言：環境變數 MH_LANG 有值時優先；否則讀 錄音/meeting.json 的 language
+    （與 bin/_profile.py 同一個檔、同一個欄位；meeting.sh 的 load_profile 由它設 MH_LANG）；都沒有就 zh。"""
+    lang = os.environ.get("MH_LANG")
+    if lang:
+        return lang
+    meta = load_json(os.path.join(sess, "錄音", "meeting.json"), None)
+    v = meta.get("language") if isinstance(meta, dict) else None
+    return str(v) if v not in (None, "") and not isinstance(v, (dict, list)) else "zh"
+
+
+def transcribe_params(sess):
+    """與 transcribe.sh 同一套規則：MH_ASR_MODEL 優先；語言見 session_language()；zh 用 config 的 zh 模型、
     其他用 default；提示詞 MH_TRANSCRIBE_HINT（空值＝預設）；VAD 門檻／補／合併間隔同 _record_lib；MH_VAD=0 不套用。"""
-    lang = os.environ.get("MH_LANG") or "zh"
+    lang = session_language(sess)
     model = os.environ.get("MH_ASR_MODEL") or _cfg_model("zh" if lang == "zh" else "default")
     return {
         "model": model,
@@ -456,7 +467,7 @@ class Worker:
             log("另一個 worker 正在處理這一場（worker.lock 被持有），結束")
             os.close(fd)
             return 0
-        params = transcribe_params()
+        params = transcribe_params(self.sess)
         old = load_json(self.state_path, None)
         if isinstance(old, dict) and old.get("status") == "complete" and old.get("params") == params:
             log("這一場的增量轉錄已完成，不重做")
@@ -597,7 +608,7 @@ def stitch(sess, out):
         raise Unusable(f"窗涵蓋的段落（{len(covered)} 段）與收尾採用的段落（{len(want)} 段）不同")
     if total is not None and abs(prev - total) > DURATION_TOL:
         raise Unusable(f"窗的總長 {prev:.3f} 秒與 audio-ready.json 的 {total:.3f} 秒不符")
-    params = transcribe_params()
+    params = transcribe_params(sess)
     if st.get("params") != params:
         old = st.get("params") if isinstance(st.get("params"), dict) else {}
         diff = sorted(k for k in set(old) | set(params) if old.get(k) != params.get(k))
