@@ -12,7 +12,9 @@
     的 pid 活著且持有 <runId>.lock）還在跑 → paused／otherFinalizing。
   - 本場 phase 變成 finalizing／done／failed（或狀態檔已換成別場、錄製器 pid 不在）→ 補完所有窗，最後一窗延伸到
     最後一段結尾，state.json.status＝complete 後結束。
-  - 結束碼：0 完成（或另一個 worker 正持有 worker.lock、config.json 關掉增量轉錄時直接結束）；2 參數錯或轉錄失敗
+  - 本場已捨棄（record.status.json 的 discarded 為真）或 錄音/tracks 已不在 → 每輪與建目錄前都檢查，成立就直接
+    結束、回 0，不建任何目錄、不寫 state.json。
+  - 結束碼：0 完成（或另一個 worker 正持有 worker.lock、config.json 關掉增量轉錄、本場已捨棄時直接結束）；2 參數錯或轉錄失敗
     （state.json.status＝failed）。
 - stitch <場次> <out.json>：worker 還活著（持有 worker.lock）且 60 秒內有心跳時先等它結束；再檢查
   status＝complete、各窗涵蓋的段落（檔名＋大小）與 audio-ready.json（沒有時 finalize.json.inputs）相同、
@@ -21,7 +23,7 @@
 
 段落音訊用 bin/_record_finalize.py 的 analyze()／segment_audio_pcm()（與音訊先出同一段程式）；段落在成品時間軸上的
 起點＝前面可讀段落長度的和（與 audio-ready.json 同一個算法）。讀不到的段落不進任何窗（收尾也會略過它）。
-環境變數：與 transcribe.sh 相同的 MH_ASR_MODEL、MH_LANG（預設 zh）、MH_TRANSCRIBE_HINT、MH_VAD、MH_VAD_THRESHOLD_DB、
+環境變數：與 transcribe.sh 相同的 MH_ASR_MODEL、MH_LANG（沒設時讀 錄音/meeting.json 的 language，再沒有＝zh）、MH_TRANSCRIBE_HINT、MH_VAD、MH_VAD_THRESHOLD_DB、
 MH_VAD_PAD、MH_VAD_MERGE_GAP；MH_RECORD_HOME（狀態檔所在）；MH_SYNC_COMPENSATION（同 _record_finalize）。
 """
 import argparse
@@ -115,10 +117,21 @@ def _cfg_model(key):
     return v if isinstance(v, str) and v else DEFAULT_MODELS[key]
 
 
-def transcribe_params():
-    """與 transcribe.sh 同一套規則：MH_ASR_MODEL 優先；語言 MH_LANG（meeting.sh 預設 zh）；zh 用 config 的 zh 模型、
+def session_language(sess):
+    """這一場 transcribe.sh 會拿到的語言：環境變數 MH_LANG 有值時優先；否則讀 錄音/meeting.json 的 language
+    （與 bin/_profile.py 同一個檔、同一個欄位；meeting.sh 的 load_profile 由它設 MH_LANG）；都沒有就 zh。"""
+    lang = os.environ.get("MH_LANG")
+    if lang:
+        return lang
+    meta = load_json(os.path.join(sess, "錄音", "meeting.json"), None)
+    v = meta.get("language") if isinstance(meta, dict) else None
+    return str(v) if v not in (None, "") and not isinstance(v, (dict, list)) else "zh"
+
+
+def transcribe_params(sess):
+    """與 transcribe.sh 同一套規則：MH_ASR_MODEL 優先；語言見 session_language()；zh 用 config 的 zh 模型、
     其他用 default；提示詞 MH_TRANSCRIBE_HINT（空值＝預設）；VAD 門檻／補／合併間隔同 _record_lib；MH_VAD=0 不套用。"""
-    lang = os.environ.get("MH_LANG") or "zh"
+    lang = session_language(sess)
     model = os.environ.get("MH_ASR_MODEL") or _cfg_model("zh" if lang == "zh" else "default")
     return {
         "model": model,
@@ -264,6 +277,10 @@ def cut_point(lv, seg, params):
 
 # ── worker ────────────────────────────────────────────────────────────────────
 
+class Abandoned(Exception):
+    """本場已捨棄（record.status.json 的 discarded 為真）或 錄音/tracks 已不在：worker 直接結束、回 0。"""
+
+
 class Worker:
     def __init__(self, sess):
         self.sess = os.path.abspath(sess)
@@ -281,10 +298,32 @@ class Worker:
         self.drop_paused = False
         self.stop_beat = threading.Event()
 
+    def abandoned(self):
+        """捨棄錄製（finishDiscard）會把 錄音/ 移到垃圾桶、再把 phase 設 done＋discarded＝true；兩者任一成立就不再
+        碰這一場——不建目錄、不寫 state.json（否則會在原處重建 錄音/tracks/asr/.work）。"""
+        if not os.path.isdir(self.tracks):
+            return True
+        st = own_status(self.sess)
+        return isinstance(st, dict) and st.get("discarded") is True
+
+    def check_abandoned(self):
+        if self.abandoned():
+            raise Abandoned()
+
+    def ensure_work(self):
+        """建 asr/.work：只建這一層，上層（錄音/tracks/asr）不在就失敗，不重建被移走的目錄。"""
+        self.check_abandoned()
+        try:
+            os.mkdir(self.work)
+        except FileExistsError:
+            pass
+
     # 狀態檔
     def save(self, **fields):
         with self.lock:
             self.state.update(fields)
+            if self.abandoned():
+                return
             self.state["heartbeat"] = now_iso()
             write_json_atomic(self.state_path, self.state)
 
@@ -315,13 +354,13 @@ class Worker:
 
     def segment_pcm(self, f):
         if f not in self.pcm:
-            os.makedirs(self.work, exist_ok=True)
+            self.ensure_work()
             self.pcm[f] = finalize_mod().segment_audio_pcm(os.path.join(self.tracks, f), self.info[f]["a"], self.work)
         return self.pcm[f]
 
     def window_wav(self, ws, we, index):
         """[ws, we]（成品時間）的音訊：各段 PCM 依框數切片接起來，再轉 16 kHz 單聲道（同正式 wav 的轉法）。"""
-        os.makedirs(self.work, exist_ok=True)
+        self.ensure_work()
         files = []
         w48 = os.path.join(self.work, f"w-{index:04d}.48k.wav")
         with wave.open(w48, "wb") as out:
@@ -448,7 +487,13 @@ class Worker:
         return None
 
     def run(self):
-        os.makedirs(self.asr, exist_ok=True)
+        if self.abandoned():
+            log("這一場已捨棄或 錄音/tracks 已不在，不做增量轉錄")
+            return 0
+        try:
+            os.mkdir(self.asr)
+        except FileExistsError:
+            pass
         fd = os.open(os.path.join(self.asr, "worker.lock"), os.O_CREAT | os.O_RDWR, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -456,7 +501,7 @@ class Worker:
             log("另一個 worker 正在處理這一場（worker.lock 被持有），結束")
             os.close(fd)
             return 0
-        params = transcribe_params()
+        params = transcribe_params(self.sess)
         old = load_json(self.state_path, None)
         if isinstance(old, dict) and old.get("status") == "complete" and old.get("params") == params:
             log("這一場的增量轉錄已完成，不重做")
@@ -473,20 +518,29 @@ class Worker:
         beat.start()
         try:
             self.loop()
+        except Abandoned:
+            self.stop_beat.set()
+            log("這一場已捨棄或 錄音/tracks 已被移走，結束（不寫 state.json）")
+            return 0
         except Exception as e:  # noqa: BLE001 — 任何失敗都記進 state.json，stitch 會回 3、prep 改整檔轉錄
             self.stop_beat.set()
+            if self.abandoned():   # 轉錄途中 錄音/ 被移走而失敗：同捨棄，不留 failed
+                log(f"這一場已捨棄或 錄音/tracks 已被移走，結束（{type(e).__name__}）")
+                return 0
             self.save(status="failed", pausedReason=None, error=f"{type(e).__name__}: {e}"[:500])
             print(f"✗ 增量轉錄失敗：{type(e).__name__}: {e}", file=sys.stderr, flush=True)
             return 2
         finally:
             self.stop_beat.set()
-            shutil.rmtree(self.work, ignore_errors=True)
+            if os.path.isdir(self.asr):
+                shutil.rmtree(self.work, ignore_errors=True)
         log(f"完成：{len(self.state['windows'])} 窗，涵蓋到 {self.covered():.3f} 秒")
         return 0
 
     def loop(self):
         next_seg = 0
         while True:
+            self.check_abandoned()   # 每輪先看：已捨棄或 tracks 已被移走就結束
             phase, st = recording_phase(self.sess)   # 先讀 phase 再讀 manifest：已停止時 manifest 已是最後版本
             stopped = phase in STOPPED_PHASES or phase == "gone"
             segs, lv = finished_segments(self.tracks, stopped)
@@ -524,6 +578,7 @@ class Worker:
                     end = self.info[f]["start"] + self.info[f]["length"]
                     if end - self.covered() >= MIN_WINDOW_SECONDS:
                         self.make_window(self.covered(), end)
+                self.check_abandoned()
                 self.save(status="complete", pausedReason=None)
                 return
             time.sleep(POLL_SECONDS)
@@ -597,7 +652,7 @@ def stitch(sess, out):
         raise Unusable(f"窗涵蓋的段落（{len(covered)} 段）與收尾採用的段落（{len(want)} 段）不同")
     if total is not None and abs(prev - total) > DURATION_TOL:
         raise Unusable(f"窗的總長 {prev:.3f} 秒與 audio-ready.json 的 {total:.3f} 秒不符")
-    params = transcribe_params()
+    params = transcribe_params(sess)
     if st.get("params") != params:
         old = st.get("params") if isinstance(st.get("params"), dict) else {}
         diff = sorted(k for k in set(old) | set(params) if old.get(k) != params.get(k))
