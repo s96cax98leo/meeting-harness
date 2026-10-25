@@ -112,6 +112,10 @@ def already_done(sess, tracks, segs, mode="off"):
     verify = fin.get("verify")
     if isinstance(verify, dict) and verify.get("status") != "ok":
         return None
+    # 音訊先出的第一階段（videoPublishedAt: null）＝影片還沒發佈：outputs.video 可能是上一次留下的同名影片，
+    # 不得算完成（與 record.sh、AbnormalStop.swift 同判準）；沒有這個鍵的舊 schema 照舊判斷
+    if "videoPublishedAt" in fin and fin["videoPublishedAt"] is None:
+        return None
     outs = fin.get("outputs") or {}
     paths = [os.path.join(sess, outs.get(k, "")) for k in ("video", "audio")]
     if all(outs.get(k) for k in ("video", "audio")) and all(os.path.isfile(p) for p in paths) \

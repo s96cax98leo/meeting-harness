@@ -1171,7 +1171,7 @@ def finalize_locked(sess, name, rec, tracks):
                 "schemaVersion": 1, "stamp": stamp, "inputs": inputs, "skipped": skipped_out,
                 "outputs": {"video": os.path.relpath(video_out, sess), "audio": os.path.relpath(wav_out, sess)},
                 "syncCompensation": {"mode": mode, "segments": plan},
-                "finishedAt": now_iso(), "videoPublishedAt": None})
+                "finishedAt": now_iso(), "videoPublishedAt": None, "verify": {"status": "pending"}})
             os.replace(wav_tmp, wav_out)
         say(f"音訊就緒：錄音/{os.path.basename(wav_out)}")
 
