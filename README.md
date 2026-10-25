@@ -16,6 +16,7 @@ meeting-harness/
 │  ├─ _diarize_pyannote.py + setup-diarize.sh  # 講者分離（pyannote community-1，跑 MPS）
 │  ├─ _voiceprint.py    # 跨會議聲紋庫（vault/voiceprints/）
 │  ├─ _lint.sh          # shell/py 語法與 CJK 字串常見坑檢查
+│  ├─ lib/              # 共用模組：增量轉錄 worker（_asr_worker.py）、收尾狀態與媒體、錄製共用函式、search／reminders
 │  ├─ ocr-slides.sh + _ocr.py   # sips HEIC→JPG + Apple Vision(ocrmac) OCR
 │  ├─ to-docx.sh        # pandoc md→docx
 │  ├─ publish.py        # 發佈 wiki + docx + 索引（自動移除來源標註）
@@ -23,8 +24,9 @@ meeting-harness/
 ├─ .claude/
 │  ├─ agents/           # 8 個專職 subagent
 │  ├─ skills/           # 7 個 skill（已 symlink 到 ~/.claude/skills，本機任何 session 都能用）
-│  └─ workflows/meeting-pipeline.js   # 確定性編排引擎（可觀測/可恢復）
+│  └─ workflows/meeting-pipeline.js   # 已棄用：改用 /meeting-summary（前處理由 meeting.sh prep 負責）
 ├─ tools/MeetingRecorder/  # 錄製器 MeetingRecorder.app 的原始碼與 build.sh
+├─ tools/bench/replay.py   # 用舊段落重放，量停止後到 wav／逐字稿的時間
 ├─ schema/              # meeting-record.v1.json（總結的正規化 schema）
 ├─ seeds/               # 乾淨 vault 種子（術語表 / 會議索引 範本）
 ├─ vault/               # Obsidian wiki + 長期記憶（不進版控）
@@ -160,6 +162,7 @@ meeting record "<會議根目錄>"   # 互動：問場次名、型態、出席�
 meeting record stop             # 停止並收尾
 meeting record status           # 目前狀態；回 5 表示上次錄製異常中止
 meeting record finish "<場次>"  # 中斷後把已落盤的段落收尾（可重跑）
+meeting record finish           # 不帶參數：接手上次異常中止的場次；沒有可接手的回 2
 meeting record pause            # 整段暫停（暫停的時段在成品裡剪掉）；meeting record resume 繼續
 meeting record mute             # 只靜音麥克風，系統聲音照錄；meeting record unmute 取消
 meeting record mark             # 加一個「標記 N」，收尾後在 錄音/markers.json
@@ -211,6 +214,17 @@ menu bar 的「錄這個視窗」「存到」、偏好設定（登入時自動�
 - **`finish`** 成功後清掉該場次異常中止留下的背景收尾狀態（`~/.meeting-harness/finalizing/`）。
 - **menu bar**：多一個「背景收尾中」階段（可以開始錄製、也可以取消收尾，取消前先確認是哪一場）；**錄製中不能取消上一場收尾**，狀態列結尾只加「（上一場收尾中）」。
 - **收尾平行度 `MH_FINALIZE_JOBS`**：分析與逐段正規化同時跑幾段，預設 3、上限 3，`1`＝串行；有下一場在錄製時自動降為 2、改用 libx264 時降為 1。menu bar 啟動的收尾讀不到終端機的環境變數，要串行時對場次跑 `MH_FINALIZE_JOBS=1 meeting record finish "<場次>"`。
+
+**meeting-speed：停止後幾分鐘內就能開始整理**（細節見 SKILL.md〈4. 停止〉的「收尾的順序」與〈finish〉）：
+
+- **音訊先出**：收尾先把各段音訊混成 `錄音/<場次名> <時間>.wav`，印「音訊就緒：錄音/…」，不等影片；這時 `meeting status`／`meeting prep` 已經看得到這場，可以先跑轉錄與講者分離。影片之後才進 `影片/`（印「成品就緒：影片/…」）。
+- **錄製中先轉錄**：每段收尾後由背景 worker 先轉；停止後 prep 把結果拼起來直接用，條件不合（參數不同、窗沒補完等）就退回整檔轉錄。
+- **畫布鎖定與 copy 串接**：新錄製器開錄時把會議視窗當下的像素尺寸記成畫布（`record.meta.json` 的 `canvasLock`），各段尺寸與編碼參數都相同時直接串接、不重新編碼（`finalize.json` 的 `videoPath` 是 `copy`）。
+  代價：開錄後再把視窗放大，影片解析度**不會**跟著提高（等比縮進開錄時的畫布、留黑邊），要高解析度請先把視窗拉到想要的大小再開錄。沒有畫布的舊場次或任一段不符條件時，整場照舊重新編碼（`reencode`），會比較久。
+- **驗證在發佈之後**：影片進 `影片/` 後才做整支解碼檢查；沒過時改名為 `<同名>.verify-failed.mov`（不刪，正式 wav 不受影響）、段落保留、回 5，再跑一次 `meeting record finish "<場次>"` 即可（這次會改走重新編碼）。
+- **異常中止接手**：錄製器在收尾前就結束（例如 WindowServer 重啟）時，選單 app 下次啟動會發「上次錄製異常中止」的通知，按「收尾」才跑；終端機用不帶參數的 `meeting record finish`。
+- **通知不含場次名**：錄製完成、前處理完成／失敗、異常中止的通知只寫時間，不寫場次名稱。
+- **實測**（40 分鐘實錄）：停止→正式 wav 6 秒、→`transcript.speakers.md` 81 秒、→影片 54 秒（copy 串接）。
 
 > **會議視窗標記**：清單裡 ★ 的列是會議視窗（Teams、Zoom 等原生 app，或作用中分頁是會議網址的 Chrome 視窗）。
 > Chrome 的標記要允許 Apple Events（選用，不授權也能錄），細節、preflight 各項怎麼救、Shortcuts 快捷鍵與 menu bar 見
@@ -397,7 +411,8 @@ bash bin/meeting.sh doctor   # 會告訴你環境、裝置（MPS/CPU）與模型
 ```
 
 分離會隨 `meeting <型態> <根>` 自動跑；也可單獨補：`meeting diarize "<場次目錄>"`。
-產出 `錄音/transcript.speakers.md`（`[SPEAKER_00] …`）與 `錄音/embeddings.json`（語者向量）。
+產出 `錄音/diarization.json`（講者時間段）與 `錄音/transcript.speakers.md`（`[SPEAKER_00] …`）。
+語者向量**不再落場次資料夾**：只寫進暫存檔，聲紋比對完（含失敗）就刪；舊場次留下的 `錄音/embeddings.json` 建完聲紋後可手動刪掉（屬生物特徵資料）。
 
 - **講者數**由會議型態決定：一對一／訪談鎖 2 人；內部／客戶會議 2–8、工作坊 3–12、研討會 1–6。
   出席名單只當**上限提示**（max = 名單人數 +1），不拿去鎖死——實測硬鎖人數反而把一致率從 94.1% 打到 80.0%
@@ -420,7 +435,8 @@ bash bin/meeting.sh doctor   # 會告訴你環境、裝置（MPS/CPU）與模型
 {"SPEAKER_01": {"name": "Kevin", "confidence": 0.92, "evidence": "多次被直呼 Kevin 並主持議程"}}
 {"SPEAKER_00": "講者", "SPEAKER_01": "提問者A"}
 ```
-**信心 < 0.7 不改名**。
+`apply` 決定要不要真的改名；沒有這個欄位就看信心，**信心 < 0.7 不改名**；dict 沒有 `confidence` 也沒有 `apply` 視為未確認、不改名。
+聲紋比對不會覆蓋人工填的對應：字串值、或 `evidence` 不以「聲紋庫比對」開頭的 dict 一律保留。
 
 ## 聲紋庫：同一批人不用每場重猜
 每週開會就是那幾個人。第一次由你確認「SPEAKER_01 就是 Kevin」後建檔，之後每場自動認出來。
@@ -431,7 +447,8 @@ meeting voiceprint list
 meeting voiceprint remove Kevin
 ```
 
-- 向量直接取自 pyannote pipeline 的 `return_embeddings`，不用另外載模型；同一人多場會累積平均。
+- 比對用的向量取自分離當下 pyannote pipeline 的 `return_embeddings`（暫存檔，比對完即刪），不用另外載模型。
+  `voiceprint add` 先讀舊場次的 `錄音/embeddings.json`（只讀），沒有就用分離環境從音檔重算該講者；同一人多場會累積平均。
 - 比對門檻：**cos ≥ 0.75 才改名**；0.60–0.75 只寫成低信心線索（不改名），< 0.60 不寫。
   每筆都附 `evidence`（cos 值與建檔來源），可追可刪。
   實測跨天辨識：用 9/7 建的聲紋比對 9/15 的錄音，本人 **cos 0.857**（自動改名），
