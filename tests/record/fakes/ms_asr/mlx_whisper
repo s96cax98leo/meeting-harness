@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# ms_asr/mlx_whisper —— 慢速轉錄替身（meeting-speed spec §4.8.1）：在 FAKE_ASR_TIMES 附加「START <秒>」，
+# 睡 FAKE_ASR_SLEEP（預設 0）秒，交給 fakes/asr/mlx_whisper（同參數），結束後附加「END <秒>」。
+set -uo pipefail
+now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
+here="$(cd "$(dirname "$0")/.." && pwd)"
+[[ -n "${FAKE_ASR_TIMES:-}" ]] && echo "START $(now)" >> "${FAKE_ASR_TIMES}"
+sleep "${FAKE_ASR_SLEEP:-0}"
+"${here}/asr/mlx_whisper" "$@"
+rc=$?
+[[ -n "${FAKE_ASR_TIMES:-}" ]] && echo "END $(now)" >> "${FAKE_ASR_TIMES}"
+exit "${rc}"

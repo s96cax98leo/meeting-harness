@@ -13,16 +13,20 @@
      pad 置中補黑邊（不縮放、不裁切）、影片短於段落時以最後一幀補尾、沒有影片的段以前一段最後一幀（第一段則黑畫面）補；
      系統聲音與麥克風兩軌等權混音＋限幅（-1 dBFS），音訊統一 48 kHz 雙聲道 PCM（pcm_s16le，不在這一步編 AAC；
      -t 微秒精度截在段落長，PCM 沒有 priming 也沒有封包補零，解碼長度＝時間戳長度）；正規化後條件不成立即失敗；
-  4. concat demuxer 串接：影片 -c:v copy、音訊 -c:a aac 256k 全片一次編碼（缺陷 J：-c copy 會丟掉每段 AAC 的
-     edit list，priming 與補零變成真的音訊、逐段延後；spec §4.6.20），以 -enc_time_base demux 確認可完整解碼、
-     以 ffprobe 確認每條軌 dts 嚴格遞增；
-  5. 由串接結果抽 wav（.part）；
-  6. 影片 rename 進 影片/；manifest.json 寫回 gapStats（R2：暫停邊界扣暫停長度、pausedTotal，spec §3.11）、各段 audioDuration、outputCanvas、outputVideoBitrate（其他鍵不動）；
-     寫 finalize.json；
-  7. 最後才把 wav rename 進 錄音/（同一檔案系統，原子）——場次在這一刻才存在，finalize 期間不會被 status／prep 列出；
-  8. 清掉 .finalize/；.pipeline-state.json 記 record: done。
+  4. 音訊先出（meeting-speed spec §3.2、§4.2）：各段以與正規化相同的原點與混音抽成 48 kHz PCM（segment_audio_pcm），
+     接成一條（補償時用 compensated_audio 的結果）轉 16 kHz wav；依序寫 audio-ready.json → finalize.json 第一階段
+     （finishedAt、videoPublishedAt: null）→ os.replace 成 錄音/<同名>.wav → 印「音訊就緒：」——正式 wav 不等影片；
+     audio-ready.json 與這次的段落、補償相同且 wav 在時不重寫（§4.3.2）；
+  5. 影片：copy 條件（canvasLock、同尺寸、同 codec／profile／pix_fmt／time_base、同 extradata、沒有重複 PTS，§4.4.3）
+     全部成立且上次不是 copy 驗證失敗 → 逐段 remux（-c:v copy，首幀拉到 0、最後封包補到段長）；否則整場走第 3 步的
+     正規化。concat demuxer 串接：影片 -c:v copy、音訊 -c:a aac 256k 全片一次編碼（缺陷 J，spec §4.6.20）；
+  6. 影片 rename 進 影片/；manifest.json 寫回 gapStats（R2：暫停邊界扣暫停長度、pausedTotal，spec §3.11）、各段 audioDuration、
+     outputCanvas、outputVideoBitrate（其他鍵不動）；finalize.json 第二階段（videoPublishedAt、videoPath、verify pending）；
+     印「成品就緒：」；
+  7. 驗證（整支解碼＋dts 嚴格遞增，記為 concat（verify:<影片檔名>））：通過 → verify ok、.pipeline-state.json 記 record: done
+     （加鎖）、刪段落；失敗或逾時 → 影片改名 <同名>.verify-failed.mov、verify failed、段落保留、回 5（§4.5）。
 R2：一開始（已完成判斷之前）把 tracks/markers.json 原樣複製成 錄音/markers.json（內容相同不重寫，spec §4.19.3）。
-冪等：finalize.json 存在、兩個輸出都在、輸入段（檔名＋大小）相同 → 印「已完成」回 0，不寫任何檔。
+冪等：finalize.json 存在、兩個輸出都在、輸入段（檔名＋大小）相同、verify 不是 failed／pending → 印「已完成」回 0，不寫任何檔。
 收尾成功後刪已併入成品的 tracks/seg-*.mov（manifest、record.meta.json、finalize.json 留著；keep-segments 或
 MH_KEEP_SEGMENTS=1 時保留，spec §6 第 111 條）。
 段落只刪掉一部分（刪檔失敗）的場次：剩下的段落都在 finalize.json 的輸入裡、成品都在 → 視為已完成並重試清除，不拿殘缺段落重做。
@@ -57,7 +61,6 @@ MH_FINALIZE_STEP_TIMEOUT（秒，正數；設了就一律用它當每一步的�
 覆寫 record.defaults.json 的 syncCompensation）、MH_FINALIZE_JOBS（收尾平行度）、MH_FINALIZE_WAIT_LOCK（1＝等收尾鎖）。
 """
 import contextlib
-import datetime
 import fcntl
 import json
 import math
@@ -66,11 +69,25 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
+import wave
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
+
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+# bin/lib/ 要先進 sys.path（noqa: E402）。共用 helper 由 _record_lib 提供（meeting-speed spec §4.13.2），
+# 不被測試釘住的純函式搬到 _finalize_*（§4.13.1）；模組內名稱照舊可用
+from _record_lib import load_json, paused_total, record_home, update_pipeline_state, write_json_atomic  # noqa: E402,F401
+from _finalize_media import (LIMIT, audio_graph, even_up, first_stream, now_iso, num,  # noqa: E402
+                             stream_dts, stream_start, tick_floor)
+from _finalize_sync import (COPY_CHUNK, SYNC_FRAME_BYTES, SYNC_MODES, SYNC_RATE, compensation_kind,  # noqa: E402
+                            delay_ops, sync_plan, track_roles, write_zeros)
+from _finalize_state import (already_done, audio_reusable, copy_markers, copy_plan, copy_verify_failed,  # noqa: E402
+                             finalized_with_partial_cleanup, finalized_without_segments, input_list,
+                             move_unreadable, ready_segments, session_stamp, unmerged_files, write_manifest)
 
 AAC_RATE = "256k"
 MIN_BITRATE = 8_000_000
@@ -79,15 +96,14 @@ TAIL_PAD_MIN = 0.01       # 影片比段落短超過這麼多就以最後一幀�
 CLOSE_GAP = 1 / 60 - 0.001  # 「過近」的相鄰影格間隔（spec §4.3.3 (ii)）：finalize 每個段落邊界最多只能製造 1 個
 TAIL_SNAP = 0.01          # 依連結影格率下一幀落在段落結束前這麼多秒內就算已到結尾（grid_reaches_end）
 CLONE_SNAP = 1 / 60       # 補尾的複製幀落在 cap 前這麼多秒內就併進 cap（複製幀與 cap 之間不留過近間隔）
+TAIL_PAD_FPS_FLOOR = 240   # 補尾 tpad 的補幀數以 max(link_fps, 這個值) 推算（meeting-speed spec §4.4.12，D3 a）
 TAIL_CAP_MARGIN = 0.005   # 補尾上限 cap＝段落長−5 ms（不依連結影格率，design.md §7.4 第 3 步、spec §4.6.17／§4.6.18）
 LATE_VIDEO_MIN = 0.001    # 影片比原點 O 晚這麼多才把第一幀往前延到 0
-LIMIT = 0.891             # 混音後限幅上限 -1 dBFS（design.md §7.4）
 NORM_START_MAX = 0.05     # 正規化後每條軌 start_time 必須在 [0, 0.05] 秒
 NORM_LENGTH_TOL = 0.05    # 正規化後各軌長與段落長差必須 < 50 ms
 KEYFRAME_EVERY = 2.0      # 正規化時每 2 秒強制一個關鍵幀（以時間計，VFR 也一致；兼顧拖曳定位）
 GOP_FRAMES_MAX = 100000   # 以影格數計的 GOP 上限設到用不到，關鍵幀只由 KEYFRAME_EVERY 決定（缺陷 N）
 KILL_GRACE = 5.0          # 逾時：SIGTERM 之後等這麼多秒仍在就 SIGKILL（R3-D3）
-UNREADABLE_DIR = "unreadable"
 FINALIZE_JOBS_DEFAULT = 3     # 收尾平行度預設（spec §3.25；`pf` §2.3：瓶頸在 VideoToolbox，3 最佳）
 FINALIZE_JOBS_MAX = 3
 FINALIZE_JOBS_RECORDING = 2   # 錄製中的上限（design R3x-D9）
@@ -139,6 +155,7 @@ _X264_LOCK = threading.Lock()     # libx264 編碼同時最多 1 個
 _SAY_LOCK = threading.Lock()      # say() 一次寫完一行
 _X264_FALLBACK = threading.Event()  # 本次收尾已有段退回 libx264（之後派出的段平行度一律 1）
 _FALLBACK_LOCK = threading.Lock()
+_X264_NOTED = False               # 已印過「改用 libx264」（N-3：成功後才印）；_FALLBACK_LOCK 保護
 _JOBS_LAST = 1                    # 最近一次算出的平行度（不含 libx264 退回）；決定要不要印「降為 1」
 
 
@@ -406,10 +423,6 @@ def say(msg):
         sys.stdout.flush()
 
 
-def record_home():
-    return os.environ.get("MH_RECORD_HOME") or os.path.expanduser("~/.meeting-harness")
-
-
 def keep_segments():
     """收尾成功後是否保留原始段落：MH_KEEP_SEGMENTS=1 或 <record home>/keep-segments 存在（實機驗收要用段落時）。"""
     return os.environ.get("MH_KEEP_SEGMENTS") == "1" or os.path.exists(os.path.join(record_home(), "keep-segments"))
@@ -429,86 +442,6 @@ def cleanup_segments(segs):
         except OSError as e:
             say(f"  ⚠ 刪不掉 {os.path.basename(p)}：{e}")
     say(f"  已刪除原始段落 {removed} 個（成品已驗證；內容與 影片/ 重疊）")
-
-
-def skipped_entries(fin):
-    """spec §3.17：finalize.json 的 skipped[]；舊場次的字串 "x" 視同 {"file": "x", "movedTo": null}。"""
-    raw = fin.get("skipped") if isinstance(fin, dict) else None
-    out = []
-    for e in raw if isinstance(raw, list) else []:
-        if isinstance(e, str):
-            out.append({"file": e, "movedTo": None})
-        elif isinstance(e, dict) and isinstance(e.get("file"), str):
-            mv = e.get("movedTo")
-            out.append({"file": e["file"], "movedTo": mv if isinstance(mv, str) else None})
-    return out
-
-
-def recorded_inputs(fin):
-    """finalize.json 的 inputs，扣掉已搬進 tracks/unreadable/ 的段落（它們不再出現在 tracks/seg-*.mov）。"""
-    moved = {e["file"] for e in skipped_entries(fin) if e["movedTo"]}
-    return [{"file": d.get("file"), "size": d.get("size")} for d in (fin or {}).get("inputs") or []
-            if isinstance(d, dict) and d.get("file") not in moved]
-
-
-def move_unreadable(tracks, path):
-    """spec §4.28.7：讀不到的段落搬到 tracks/unreadable/（同名，撞名加 -1、-2；不覆蓋既有的檔）。
-    回傳相對 錄音/ 的路徑；搬移失敗回 None（段落留在原處）。"""
-    name = os.path.basename(path)
-    dest_dir = os.path.join(tracks, UNREADABLE_DIR)
-    stem, ext = os.path.splitext(name)
-    try:
-        os.makedirs(dest_dir, exist_ok=True)
-        for k in range(0, 1000):
-            cand = name if k == 0 else f"{stem}-{k}{ext}"
-            dst = os.path.join(dest_dir, cand)
-            if os.path.lexists(dst):
-                continue
-            try:
-                os.link(path, dst)   # 不覆蓋：目的地已存在就失敗（FileExistsError），換下一個名字
-                os.remove(path)
-            except FileExistsError:
-                continue
-            except OSError:
-                if os.path.lexists(dst):
-                    continue
-                os.rename(path, dst)
-            return "/".join(("tracks", UNREADABLE_DIR, cand))
-    except OSError as e:
-        say(f"  ⚠ 搬不動 {name} 到 tracks/{UNREADABLE_DIR}/：{e}")
-    return None
-
-
-def finalized_without_segments(sess, tracks):
-    """原始段落已在收尾成功後刪掉：finalize.json 記的成品都還在 → 已完成。"""
-    fin = load_json(os.path.join(tracks, "finalize.json"), None)
-    if not isinstance(fin, dict):
-        return None
-    outs = fin.get("outputs") or {}
-    paths = [os.path.join(sess, outs.get(k, "")) for k in ("video", "audio")]
-    if all(outs.get(k) for k in ("video", "audio")) and all(os.path.isfile(p) for p in paths):
-        return paths
-    return None
-
-
-def finalized_with_partial_cleanup(sess, tracks, segs):
-    """上次收尾成功、清除段落時只刪掉一部分：剩下的段落是 finalize.json 輸入的真子集、成品都在。
-    這時不得用殘缺的段落重做收尾、覆蓋好的成品（ultrareview）。"""
-    done = finalized_without_segments(sess, tracks)
-    if not done:
-        return None
-    fin = load_json(os.path.join(tracks, "finalize.json"), None) or {}
-    recorded = [(d["file"], d["size"]) for d in recorded_inputs(fin)]
-    now = [(d["file"], d["size"]) for d in input_list(segs)]
-    if now and len(now) < len(recorded) and set(now) <= set(recorded):
-        return done
-    return None
-
-
-def unmerged_files(tracks):
-    """上次收尾記為讀不到、仍留在原處的段落（搬移失敗）：不是成品的一部分，清除段落時不得刪（spec §4.28.7）。"""
-    fin = load_json(os.path.join(tracks, "finalize.json"), None)
-    return {e["file"] for e in skipped_entries(fin) if not e["movedTo"]}
 
 
 def defaults_ffmpeg():
@@ -557,8 +490,9 @@ def ffmpeg(*args, what="", step="normalize", target="", seconds=0.0):
 
 
 def probe(path):
-    r = run_step([FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
-                 "probe", step_target(path))
+    # -show_data_hash：streams 多 extradata_hash（copy 條件比對 SPS/PPS，spec §4.4.3），不另跑一次 ffprobe（§4.4.7）
+    r = run_step([FFPROBE, "-v", "error", "-show_streams", "-show_format", "-show_data_hash", "sha256",
+                  "-of", "json", str(path)], "probe", step_target(path))
     if r.returncode != 0:
         return None
     try:
@@ -567,36 +501,25 @@ def probe(path):
         return None
 
 
-def num(v):
+def probe_packets(path):
+    """一次 ffprobe 掃出全部封包（stream_index、pts、dts、duration、flags）；packets_by_stream／packet_rows_dts 共用，
+    同一個檔不重跑（meeting-speed spec §4.4.7）。讀不懂回 []。"""
+    r = run_step([FFPROBE, "-v", "quiet", "-show_entries",
+                  "packet=stream_index,pts_time,dts_time,duration_time,flags", "-of", "json", str(path)],
+                 "probe", step_target(path))
     try:
-        f = float(v)
-        return f if math.isfinite(f) else None
-    except (TypeError, ValueError):
-        return None
-
-
-def first_stream(info, kind):
-    for s in info.get("streams", []):
-        if s.get("codec_type") == kind:
-            return s
-    return None
-
-
-def stream_start(s):
-    """套用 edit list 之後的呈現起點（ffprobe stream 層的 start_time）；讀不到時回 None。"""
-    return num((s or {}).get("start_time"))
-
-
-def packets_by_stream(path, keep_discard=False):
-    """每條軌的封包（pts、duration、flags）；略過標了 D（discard，例如 AAC priming）或 C（corrupt，
-    例如被中斷的 fragment 檔最後半個封包）的封包——只留「可解碼」的部分（design.md §7.4 第 1 步）。"""
-    r = run_step([FFPROBE, "-v", "quiet", "-show_entries", "packet=stream_index,pts_time,duration_time,flags",
-                  "-of", "json", str(path)], "probe", step_target(path))
-    out = {}
-    try:
-        pkts = json.loads(r.stdout or "{}").get("packets") or []
+        return json.loads(r.stdout or "{}").get("packets") or []
     except ValueError:
-        return out
+        return []
+
+
+def packets_by_stream(path, keep_discard=False, pkts=None):
+    """每條軌的封包（pts、duration、flags）；略過標了 D（discard，例如 AAC priming）或 C（corrupt，
+    例如被中斷的 fragment 檔最後半個封包）的封包——只留「可解碼」的部分（design.md §7.4 第 1 步）。
+    pkts：probe_packets 已掃好的結果（給了就不再跑 ffprobe）。"""
+    out = {}
+    if pkts is None:
+        pkts = probe_packets(path)
     for k in pkts:
         flags = k.get("flags") or ""
         if "C" in flags or ("D" in flags and not keep_discard):
@@ -663,173 +586,6 @@ def link_fps(s):
     return 30.0
 
 
-def tick_floor(t, s):
-    """t 往下對齊到 stream s 的 time_base tick（讀不到 time_base 時原值）。"""
-    tb = (s or {}).get("time_base", "")
-    if "/" in tb:
-        a, b = tb.split("/", 1)
-        if num(a) and num(b) and num(a) > 0 and num(b) > 0:
-            step = num(a) / num(b)
-            return math.floor(t / step + 1e-6) * step
-    return t
-
-
-def even_up(n):
-    n = int(n)
-    return n + (n % 2)
-
-
-def load_json(path, default):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def write_bytes_atomic(path, data):
-    """同目錄 tempfile.mkstemp 建暫存檔，寫完 rename（spec §4.28.2；不用固定後綴，兩個寫者不會撞同一個暫存檔）。"""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
-                               prefix="." + os.path.basename(path) + ".", suffix=".part")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def write_json_atomic(path, data):
-    """JSON 原子寫入：同目錄 tempfile.mkstemp(dir=…) 建暫存檔，寫完 os.replace（spec §4.28.2）。"""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
-                               prefix="." + os.path.basename(path) + ".", suffix=".part")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def input_list(segs):
-    return [{"file": os.path.basename(p), "size": os.path.getsize(p)} for p in segs]
-
-
-def finalized_mode(fin):
-    """上次收尾用的影音延遲補償 mode；R2 以前的場次（沒有 syncCompensation）視為 off。"""
-    sc = fin.get("syncCompensation") if isinstance(fin, dict) else None
-    m = sc.get("mode") if isinstance(sc, dict) else None
-    return m if m in SYNC_MODES else "off"
-
-
-def already_done(sess, tracks, segs, mode="off"):
-    """段落還在時的冪等判斷；mode 與上次收尾不同時不算已完成（ADR adr-r3-sync-compensation.md：
-    保留段落時可換 mode 重跑收尾比較）。"""
-    fin = load_json(os.path.join(tracks, "finalize.json"), None)
-    if not isinstance(fin, dict) or finalized_mode(fin) != mode:
-        return None
-    outs = fin.get("outputs") or {}
-    paths = [os.path.join(sess, outs.get(k, "")) for k in ("video", "audio")]
-    if all(outs.get(k) for k in ("video", "audio")) and all(os.path.isfile(p) for p in paths) \
-            and recorded_inputs(fin) == input_list(segs):
-        return paths
-    return None
-
-
-def paused_total(events):
-    """spec §3.14 pausedTotal：Σ（resume.t − 緊接在前的 pause.t）；沒配對的 pause、沒有前導 pause 的 resume 不計；小數 3 位。"""
-    total, last_pause = 0.0, None
-    for e in events:
-        t = num(e.get("t"))
-        if t is None:
-            continue
-        if e.get("kind") == "pause":
-            last_pause = t
-        elif e.get("kind") == "resume":
-            if last_pause is not None:
-                total += t - last_pause
-            last_pause = None
-    return round(total, 3)
-
-
-def pause_events_of(tracks):
-    """record.meta.json 的 pauseEvents（R2，§3.11）；沒有或格式不對 → []。"""
-    meta = load_json(os.path.join(tracks, "record.meta.json"), {})
-    ev = meta.get("pauseEvents") if isinstance(meta, dict) else None
-    return [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
-
-
-def has_pause_events_key(tracks):
-    """record.meta.json 有 pauseEvents 鍵（R2 錄製器開錄就寫 []）。"""
-    meta = load_json(os.path.join(tracks, "record.meta.json"), {})
-    return isinstance(meta, dict) and "pauseEvents" in meta
-
-
-def pause_length_before(events, resume_t):
-    """邊界上那筆 resume 的暫停長度（resume.t − 前一筆 pause.t）；找不到前導 pause → 0。"""
-    for k, e in enumerate(events):
-        if e.get("kind") == "resume" and num(e.get("t")) == resume_t:
-            for prev in reversed(events[:k]):
-                if prev.get("kind") == "pause" and num(prev.get("t")) is not None:
-                    return resume_t - num(prev["t"])
-                if prev.get("kind") == "resume":
-                    return 0.0
-            return 0.0
-    return 0.0
-
-
-def boundary_gaps(used, events):
-    """spec §3.2＋§3.11：g_k＝startedAt_{k+1} − startedAt_k − audioDuration_k；暫停邊界（有 resume.t 與
-    startedAt_{k+1} 相差 < 0.5 秒）再扣掉該次暫停長度。"""
-    resumes = [num(e.get("t")) for e in events if e.get("kind") == "resume" and num(e.get("t")) is not None]
-    gaps = []
-    for k in range(len(used) - 1):
-        nxt = used[k + 1]["startedAt"]
-        g = nxt - used[k]["startedAt"] - used[k]["audioDuration"]
-        near = [r for r in resumes if abs(r - nxt) < 0.5]
-        if near:
-            r = min(near, key=lambda x: abs(x - nxt))
-            g -= pause_length_before(events, r)
-        gaps.append(round(g, 3))
-    return gaps
-
-
-def copy_markers(rec, tracks):
-    """spec §3.12、§4.19.3：tracks/markers.json 原樣複製成 錄音/markers.json；內容相同就不重寫（mtime 不變）。"""
-    src = os.path.join(tracks, "markers.json")
-    if not os.path.isfile(src):
-        return
-    dst = os.path.join(rec, "markers.json")
-    with open(src, "rb") as f:
-        data = f.read()
-    try:
-        with open(dst, "rb") as f:
-            if f.read() == data:
-                return
-    except OSError:
-        pass
-    write_bytes_atomic(dst, data)
-
-
-def session_stamp(segs, fin_old):
-    """輸出檔名的時間戳：沿用上次 finalize.json 的值，否則取第一段的建立時間（≈開錄時間）。"""
-    if isinstance(fin_old, dict) and isinstance(fin_old.get("stamp"), str):
-        return fin_old["stamp"]
-    st = os.stat(segs[0])
-    t = getattr(st, "st_birthtime", None) or st.st_mtime
-    return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H.%M.%S")
-
-
 def encoders():
     """videotoolbox 不能用時（例如沒有硬體編碼器的環境）退回 libx264，參數同為 high profile。
     關鍵幀一律以時間計（每 KEYFRAME_EVERY 秒強制一個），以影格數計的 GOP 設成用不到：h264_videotoolbox
@@ -864,6 +620,8 @@ def encode(inputs, graph, out, *, dur, bitrate, what="", target=""):
                        "-video_track_timescale", VIDEO_TIMESCALE,
                        "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le",
                        "-t", f"{dur:.6f}", "-f", "mov", out, what=what, step="normalize", target=target, seconds=dur)
+                if x264:
+                    note_x264_success()
                 return
             except SegmentAborted:
                 # 被中止的段不是失敗：只刪不完整的輸出、往上丟，不改試 libx264（spec §4.55.10）
@@ -882,44 +640,21 @@ def encode(inputs, graph, out, *, dur, bitrate, what="", target=""):
 
 
 def note_x264_fallback():
-    """本次收尾第一次退回 libx264：之後派出的段平行度一律 1；平行度原本大於 1 時印一行（spec §3.25）。"""
+    """本次收尾第一次改試 libx264：之後派出的段平行度一律 1（spec §3.25）。這時還不印——被中止或失敗的段
+    不算改用成功（N-3，meeting-speed spec §4.4.10）。"""
+    _X264_FALLBACK.set()
+
+
+def note_x264_success():
+    """N-3（meeting-speed spec §4.4.10）：第一次有段以 libx264 重編成功後才印「改用 libx264」一行
+    （平行度原本大於 1 時，spec §3.25）；整次收尾只印一次。"""
+    global _X264_NOTED
     with _FALLBACK_LOCK:
-        if _X264_FALLBACK.is_set():
+        if _X264_NOTED:
             return
-        _X264_FALLBACK.set()
+        _X264_NOTED = True
         if _JOBS_LAST > 1:
             say("改用 libx264，收尾平行度降為 1")
-
-
-def audio_graph(inputs, seg_input, dur):
-    """混音（D20）：兩條音軌各自轉成 48 kHz 雙聲道、對齊到同一原點後等權相加（不做 1/2 衰減）再限幅；
-    單軌直接用；沒有音軌回 None（呼叫端補靜音）。單聲道以 pan 複製到左右聲道（不走預設 upmix 的 -3 dB）。
-    結尾補靜音到段落長 dur（影片比音訊長時，各軌長仍與段落長一致）。
-    seg_input 是段落在 ffmpeg 輸入中的序號；回傳 filter 片段（輸出標籤 [a]）。"""
-    parts, labels = [], []
-    for k, t in enumerate(inputs):
-        ch = int(t["stream"].get("channels") or 2)
-        up = "pan=stereo|c0=c0|c1=c0" if ch == 1 else "aformat=channel_layouts=stereo"
-        lab = f"a{k}"
-        parts.append(f"[{seg_input}:{t['stream']['index']}]aresample=48000,{up},"
-                     f"aresample=48000:async=1:first_pts=0[{lab}]")
-        labels.append(lab)
-    tail = f"apad=whole_dur={dur:.6f}[a]"
-    if len(labels) >= 2:
-        parts.append("".join(f"[{x}]" for x in labels) +
-                     f"amix=inputs={len(labels)}:duration=longest:normalize=0,"
-                     f"alimiter=limit={LIMIT}:level=0:latency=1,{tail}")
-        return ";".join(parts)
-    if len(labels) == 1:
-        return ";".join(parts).replace(f"[{labels[0]}]", f",{tail}")
-    return None
-
-
-SYNC_MODES = ("off", "reported", "calibrated")
-SYNC_MAX_DELAY = 0.5      # 補償延遲上限（秒；R3-D9）
-SYNC_RATE = 48000         # 補償路徑的 PCM 取樣率；兩軌一律 48 kHz 雙聲道 s16le
-SYNC_FRAME_BYTES = 4      # 一個取樣框（雙聲道 × 16 位元）
-COPY_CHUNK = 1 << 20
 
 
 def sync_mode():
@@ -940,118 +675,6 @@ def sync_mode():
     return "off"
 
 
-def reported_seconds(e):
-    """outputLatencies 一筆的回報延遲：(Latency＋SafetyOffset＋stream Latency＋BufferFrameSize) ÷ NominalSampleRate；
-    讀不到（任一為 null）時用 reportedSeconds，仍讀不到回 None（spec §3.17、ADR adr-r3-sync-compensation.md）。"""
-    rate = num(e.get("sampleRate"))
-    parts = [num(e.get(k)) for k in ("latencyFrames", "safetyOffsetFrames", "streamLatencyFrames", "bufferFrameSize")]
-    if rate and rate > 0 and all(p is not None for p in parts):
-        return sum(parts) / rate
-    return num(e.get("reportedSeconds"))
-
-
-def calibration_table():
-    """<record home>/sync-calibration.json：{"devices": {uid: 秒數}}，或扁平的 {uid: 秒數}；讀不到＝{}。"""
-    d = load_json(os.path.join(record_home(), "sync-calibration.json"), {})
-    if not isinstance(d, dict):
-        return {}
-    table = d.get("devices") if isinstance(d.get("devices"), dict) else d
-    return {k: v for k, v in table.items() if isinstance(k, str)}
-
-
-def latency_entry(entries, start, length):
-    """段落生效的那筆 outputLatencies：t ≤ 段落起點＋min(0.5, 段長／2) 的最後一筆。
-    輸出裝置變更提前換段時，新段起點與該筆 t 相差 < 0.5 秒（spec §4.37.6），起點可能略早於 t；
-    容差不超過段長的一半，避免把緊接在裝置變更前的短段算成新裝置。"""
-    lim = start + min(0.5, max(length, 0.0) / 2)
-    best = None
-    for e in entries:
-        t = num(e.get("t"))
-        if t is not None and t <= lim and (best is None or t >= num(best.get("t"))):
-            best = e
-    return best
-
-
-def sync_plan(mode, good, tracks, seg_meta):
-    """每段套用的延遲（spec §3.17 finalize.json.syncCompensation.segments；R3-D9）。
-    reported：該段生效那筆 outputLatencies 的回報值（讀不到 → 0、source missing；場次沒有 outputLatencies → 0、source none）；
-    calibrated：sync-calibration.json 依輸出 uid 查表（查不到 → 0、source missing）；一律夾在 [0, 0.5] 秒。"""
-    if mode == "off":
-        return []
-    meta = load_json(os.path.join(tracks, "record.meta.json"), {})
-    meta = meta if isinstance(meta, dict) else {}
-    raw = meta.get("outputLatencies")
-    entries = [e for e in raw if isinstance(e, dict)] if isinstance(raw, list) else []
-    dev = (meta.get("devices") or {}).get("output") if isinstance(meta.get("devices"), dict) else None
-    fallback_uid = dev.get("uid") if isinstance(dev, dict) and isinstance(dev.get("uid"), str) else None
-    table = calibration_table() if mode == "calibrated" else {}
-    first = num((seg_meta.get(os.path.basename(good[0][0])) or {}).get("startedAt")) if good else None
-    plan, clock = [], first or 0.0
-    for p, a in good:
-        f = os.path.basename(p)
-        st = num((seg_meta.get(f) or {}).get("startedAt"))
-        st = clock if st is None else st
-        clock = st + a["length"]
-        e = latency_entry(entries, st, a["length"])
-        uid = e.get("uid") if e and isinstance(e.get("uid"), str) else fallback_uid
-        if mode == "reported":
-            v = reported_seconds(e) if e else None
-            source = "reported" if v is not None else ("missing" if entries else "none")
-        else:
-            v = num(table.get(uid)) if uid is not None else None
-            source = "calibrated" if v is not None else "missing"
-        v = 0.0 if v is None else v
-        clamped = v < 0.0 or v > SYNC_MAX_DELAY
-        v = min(max(v, 0.0), SYNC_MAX_DELAY)
-        plan.append({"file": f, "outputUid": uid, "delaySeconds": round(v, 4), "source": source, "clamped": clamped})
-    return plan
-
-
-def delay_ops(frames, delays):
-    """系統聲音整條連續延後（ADR adr-r3-concat-then-mix.md 落實第 2 點；修正輪 C）。
-    frames：各段在串接時間軸上的取樣框數；delays：各段的延遲（取樣框）。相鄰且延遲相同的段併成一個區間；
-    開頭補 L_1；L 變大時在兩區間之間補 (L_{k+1} − L_k)，L 變小時截掉前一區間的尾 (L_k − L_{k+1})；
-    最後截到原總長。回傳 [("zero", n) | ("copy", 起點, 長度)]（以取樣框計）與區間清單 [(起, 迄, L)]。"""
-    intervals = []
-    pos = 0
-    for n, d in zip(frames, delays):
-        if intervals and intervals[-1][2] == d:
-            intervals[-1][1] = pos + n
-        else:
-            intervals.append([pos, pos + n, d])
-        pos += n
-    total = pos
-    ops = []
-
-    def length():
-        return sum(o[1] if o[0] == "zero" else o[2] for o in ops)
-
-    def truncate_to(p):
-        # 截掉已排輸出在 p 之後的部分（延遲變小：前一區間的尾與下一區間重疊；前一區間比重疊短時連更前面的也截）
-        while ops and length() > p:
-            over = length() - p
-            o = ops.pop()
-            n = o[1] if o[0] == "zero" else o[2]
-            if n > over:
-                ops.append(("zero", n - over) if o[0] == "zero" else ("copy", o[1], n - over))
-
-    for s, e, d in intervals:
-        target = s + d             # 區間 k 的內容在成品裡從 s_k＋L_k 開始
-        cur = length()
-        if cur < target:
-            ops.append(("zero", target - cur))
-        elif cur > target:
-            truncate_to(target)
-        if e > s:
-            ops.append(("copy", s, e - s))
-    cur = length()
-    if cur > total:
-        truncate_to(total)         # 最後截到與 off 相同的總長
-    elif cur < total:
-        ops.append(("zero", total - cur))
-    return ops, [tuple(x) for x in intervals]
-
-
 def extract_track(i, seg, a, role_stream, work, kind):
     """補償路徑：一段的一條音軌解成 48 kHz 雙聲道 s16le raw，原點與 D20 正規化相同（輸入檔最早的 start_time），
     開頭與結尾補靜音到段落長；這段沒有這條音軌時整段靜音。回傳 raw 檔路徑。"""
@@ -1070,29 +693,6 @@ def extract_track(i, seg, a, role_stream, work, kind):
            "-c:a", "pcm_s16le", "-f", "s16le", out, what=f"解出 {kind} {os.path.basename(seg)}", step="normalize",
            target=step_target(seg), seconds=dur)
     return out
-
-
-def track_roles(a):
-    """段落的音軌角色：錄製器寫入順序是系統聲音在前、麥克風在後（SegmentWriter）。
-    以 ffprobe 的音軌順序判斷（不以有沒有封包判斷，避免某一軌沒有封包時角色錯位）。"""
-    order = [s.get("index") for s in a["info"].get("streams", []) if s.get("codec_type") == "audio"]
-    by_index = {t["stream"].get("index"): t for t in a["audios"]}
-    sys_t = by_index.get(order[0]) if len(order) >= 1 else None
-    mic_t = by_index.get(order[1]) if len(order) >= 2 else None
-    return sys_t, mic_t
-
-
-def append_file(dst, src):
-    with open(src, "rb") as fi:
-        shutil.copyfileobj(fi, dst, COPY_CHUNK)
-
-
-def write_zeros(dst, nbytes):
-    block = bytes(min(nbytes, COPY_CHUNK))
-    while nbytes > 0:
-        n = min(nbytes, len(block))
-        dst.write(block[:n])
-        nbytes -= n
 
 
 def copy_range(dst, src, start, nbytes):
@@ -1158,8 +758,9 @@ def check_norm(path, seg, a, tail_padded, tail_at=None):
     info = probe(path)
     if not info:
         raise FinalizeError(f"正規化結果讀不到（{name}）")
-    pk = packets_by_stream(path)
-    all_rows = packets_by_stream(path, keep_discard=True)
+    raw = probe_packets(path)
+    pk = packets_by_stream(path, pkts=raw)
+    all_rows = packets_by_stream(path, keep_discard=True, pkts=raw)
     v0 = first_stream(info, "video")
     if tail_at is not None and v0 is not None:
         vp = [p for p, _ in pk.get(v0.get("index")) or []]
@@ -1185,7 +786,7 @@ def check_norm(path, seg, a, tail_padded, tail_at=None):
     v = first_stream(info, "video")
     if v is None:
         raise FinalizeError(f"正規化結果沒有影片軌（{name}）")
-    dts = packet_dts(path, "v:0")
+    dts = stream_dts(raw, v.get("index"))
     if any(y <= x for x, y in zip(dts, dts[1:])):
         raise FinalizeError(f"正規化後影片 dts 不是嚴格遞增（{name}）")
     if a["video"] is not None:
@@ -1194,17 +795,6 @@ def check_norm(path, seg, a, tail_padded, tail_at=None):
         got = len(dts)
         if got < want or (not tail_padded and got > a["video"]["frames"]):
             raise FinalizeError(f"正規化後影格數 {got} 與預期 {want} 不符（{name}）")
-
-
-def packet_dts(path, sel):
-    r = run_step([FFPROBE, "-v", "quiet", "-select_streams", sel, "-show_entries", "packet=dts_time",
-                  "-of", "csv=p=0", str(path)], "probe", step_target(path))
-    out = []
-    for x in r.stdout.split():
-        x = x.split(",")[0].strip()
-        if x and x != "N/A":
-            out.append(float(x))
-    return out
 
 
 def normalize(i, seg, a, prev_norm, work, W, H, bitrate):
@@ -1244,7 +834,9 @@ def normalize(i, seg, a, prev_norm, work, W, H, bitrate):
         # 補到 cap 的那一幀本身就是過近間隔，再加上 cap 與下一段首幀之間的 5 ms，同一個邊界就有 2 個。
         # 這時最後一幀距段落結束 < CLOSE_GAP＋5 ms，遠在正規化容差（50 ms）內。
         if cap - last >= max(TAIL_PAD_MIN, CLOSE_GAP) and not grid_reaches_end:
-            n = int(math.ceil((cap - last) * fps)) + 1
+            # 補幀數不只依 link_fps（r_frame_rate 可能低報，例 58 對實際 60，incident 2018）：以
+            # max(link_fps, TAIL_PAD_FPS_FLOOR) 推算，多補的複製幀由下面的夾 cap＋select 去重（spec §4.4.12）
+            n = int(math.ceil((cap - last) * max(fps, TAIL_PAD_FPS_FLOOR))) + 1
             vf += f"tpad=stop_mode=clone:stop={n},"
             # 只動複製幀（PTS 晚於最後一幀；原始影格一律不動）：tpad 第一個複製幀落在「最後一幀 PTS＋
             # 最後一幀長度」，之後依連結影格率；落在 cap 前 CLONE_SNAP 秒內或之後的一律夾成 cap，
@@ -1292,6 +884,81 @@ def normalize(i, seg, a, prev_norm, work, W, H, bitrate):
     return out
 
 
+def segment_audio_pcm(seg_path, plan_row, work_dir):
+    """音訊先出（meeting-speed spec §3.2、§3.11）：一段解成 48 kHz 雙聲道 pcm_s16le 的 wav，回傳路徑。
+    原點、混音、限幅、結尾補靜音都與逐段正規化相同（audio_graph；ffmpeg 以輸入檔最早的 start_time 為原點），
+    -t 截在段落長。plan_row 是 analyze() 對這一段的結果（None 時這裡自己分析；增量轉錄的 worker 也呼叫這個函式）。
+    步驟記為 mix（seg-NNNN）。"""
+    a = plan_row if plan_row is not None else analyze(seg_path)
+    if a is None:
+        raise FinalizeError(f"段落讀不到可解碼的封包（{os.path.basename(seg_path)}）")
+    dur = a["length"]
+    stem = os.path.splitext(os.path.basename(seg_path))[0]
+    out = os.path.join(work_dir, f"{stem}.pcm.wav")
+    ag = audio_graph(a["audios"], 0, dur)
+    if ag is None:
+        src = ["-f", "lavfi", "-t", f"{dur:.6f}", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:a"]
+    else:
+        src = ["-i", seg_path, "-filter_complex", ag, "-map", "[a]"]
+    ffmpeg(*src, "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-t", f"{dur:.6f}", "-bitexact", "-f", "wav", out,
+           what=f"抽音訊 {os.path.basename(seg_path)}", step="mix", target=step_target(seg_path), seconds=dur)
+    return out
+
+
+def join_pcm(paths, out):
+    """各段 48 kHz 雙聲道 PCM wav 依序接成一個 wav（純位元組串接，不經 ffmpeg 的 concat demuxer）。"""
+    with wave.open(out, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SYNC_RATE)
+        for p in paths:
+            with wave.open(p, "rb") as r:
+                if (r.getnchannels(), r.getsampwidth(), r.getframerate()) != (2, 2, SYNC_RATE):
+                    raise FinalizeError(f"段落 PCM 格式不符（{os.path.basename(p)}）")
+                while True:
+                    b = r.readframes(1 << 18)
+                    if not b:
+                        break
+                    w.writeframes(b)
+    return out
+
+
+def remux_copy(i, seg, a, pcm, work):
+    """copy 路徑（design §4.2、evidence/video-spike.md §2.2）：影片 -c:v copy，第一個封包拉到 0（影片晚於原點時），
+    最後一個封包的長度補到段落長（以 floor(L/TB) 換算，不累積偏移）；音訊取 segment_audio_pcm 那一段 PCM（-c:a copy）。
+    步驟記為 normalize（seg-NNNN）。"""
+    dur = a["length"]
+    out = os.path.join(work, f"norm-{i:04d}.mov")
+    vi = a["video"]["stream"]["index"]
+    bsf = (f"setts=duration=if(eq(NEXT_PTS\\,NOPTS)\\,max(1\\,floor({dur:.6f}/TB)-PTS)\\,DURATION)"
+           f":pts=if(eq(N\\,0)\\,0\\,PTS):dts=if(eq(N\\,0)\\,0\\,DTS)")
+    ffmpeg("-i", seg, "-i", pcm, "-map", f"0:{vi}", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy",
+           "-bsf:v", bsf, "-t", f"{dur:.6f}", "-f", "mov", out, what=f"copy remux {os.path.basename(seg)}",
+           step="normalize", target=step_target(seg), seconds=dur)
+    return out
+
+
+def verify_video(path, total):
+    """發佈後的驗證（spec §4.5；design §4.3）：整支解碼無錯（-enc_time_base demux）＋一次 ffprobe 看每條軌 dts 嚴格遞增。
+    兩步都記為 concat（verify:<影片檔名>）。通過回 None；不通過回原因。逾時丟 StepTimeout。"""
+    target = "verify:" + os.path.basename(path)
+    chk = run_step([FFMPEG, "-v", "error", "-nostdin", "-i", path, "-enc_time_base", "demux", "-f", "null", "-"],
+                   "concat", target, total)
+    if chk.returncode != 0 or chk.stderr.strip():
+        return f"成品無法完整解碼：{chk.stderr.strip()[-800:]}"
+    r = run_step([FFPROBE, "-v", "quiet", "-show_entries", "packet=stream_index,dts_time", "-of", "json", path],
+                 "concat", target, total)
+    try:
+        pkts = json.loads(r.stdout or "{}").get("packets") or []
+    except ValueError:
+        pkts = []
+    for idx, kind in ((0, "影片"), (1, "音訊")):
+        dts = stream_dts(pkts, idx)
+        if not dts or any(y <= x for x, y in zip(dts, dts[1:])):
+            return f"成品{kind}軌的封包 dts 不是嚴格遞增"
+    return None
+
+
 def concat_list(norms, path):
     with open(path, "w", encoding="utf-8") as f:
         for p in norms:
@@ -1299,12 +966,9 @@ def concat_list(norms, path):
 
 
 def set_state_done(sess):
-    sf = os.path.join(sess, ".pipeline-state.json")
-    d = load_json(sf, {})
-    if not isinstance(d, dict):
-        d = {}
-    d.setdefault("stages", {})["record"] = {"status": "done"}
-    write_json_atomic(sf, d)
+    """.pipeline-state.json 記 record: done（不帶 runId）：經 _record_lib.update_pipeline_state 取
+    <場次>/.pipeline-state.lock 後讀後合併（meeting-speed spec §4.9）；等鎖逾時只印警告、不擋收尾。"""
+    update_pipeline_state(sess, {"stages": {"record": {"status": "done"}}})
 
 
 def finalize(sess):
@@ -1428,7 +1092,7 @@ def finalize_locked(sess, name, rec, tracks):
         manifest = {}
     seg_meta = {s.get("file"): s for s in manifest.get("segments") or [] if isinstance(s, dict)}
 
-    # 2. 輸出參數
+    # 2. 輸出參數（重編路徑用；copy 路徑的畫布＝canvasLock、位元率＝來源）
     sizes = []
     rates = []
     for p, a in good:
@@ -1454,54 +1118,90 @@ def finalize_locked(sess, name, rec, tracks):
     say(f"影音延遲補償：{mode}" + ("" if mode == "off" else "（" + "、".join(
         f"{step_target(x['file'])} {x['delaySeconds']:.3f} 秒 {x['source']}" + ("、clamped" if x["clamped"] else "")
         for x in plan) + "）"))
+
+    fin_path = os.path.join(tracks, "finalize.json")
+    fin_old = load_json(fin_path, None)
+    stamp = session_stamp([p for p, _ in good], fin_old)
+    base = f"{name} {stamp}"
+    vid_dir = os.path.join(sess, "影片")
+    video_out = os.path.join(vid_dir, base + ".mov")
+    wav_out = os.path.join(rec, base + ".wav")
+    use_copy, why = copy_plan(tracks, good)
+    if use_copy and copy_verify_failed(fin_old):
+        use_copy, why = False, "上次 copy 路徑驗證失敗，這次強制重編"
+    video_path = "copy" if use_copy else "reencode"
+    say("影片：copy 串接（不重新編碼）" if use_copy else f"影片：重新編碼（{why}）")
+    n_good, progress, progress_lock = len(good), [0], threading.Lock()
+
+    def progressed(out):
+        with progress_lock:
+            progress[0] += 1
+            say(f"正規化 已完成 {progress[0]}/{n_good}")
+        return out
+
     try:
-        # 3. 逐段正規化（可平行，spec §3.25）：沒有影片的段要等前一段的 norm 完成（normalize_deps）；
-        #    每完成一段印一行「正規化 已完成 k/N」（k 嚴格遞增，§6 第 152 條）
-        n_good, progress, progress_lock = len(good), [0], threading.Lock()
-
-        def normalize_one(k):
-            p, a = good[k]
-            prev = os.path.join(work, f"norm-{k:04d}.mov") if k > 0 else None  # 前一段（第 k 段，1 起算）的輸出
-            out = normalize(k + 1, p, a, prev, work, W, H, bitrate)
-            with progress_lock:
-                progress[0] += 1
-                say(f"正規化 已完成 {progress[0]}/{n_good}")
-            return out
-
-        norms = run_ordered(n_good, normalize_one, jobs=jobs,
-                            deps=normalize_deps([a["video"] is not None for _, a in good]))
-        ads = {os.path.basename(p): a["audioDuration"] for p, a in good}
-
+        # 3. 音訊先出（meeting-speed spec §3.2、§4.2）：各段 PCM → 正式 wav，在任何影片步驟之前發佈。
+        #    順序：audio-ready.json → finalize.json 第一階段 → os.replace 成 錄音/<同名>.wav → 印「音訊就緒：」
+        comp = compensation_kind(mode, plan)
+        rsegs = ready_segments(good)
+        reuse = not skipped and audio_reusable(tracks, fin_old, rsegs, comp, wav_out, mode, plan)
+        pcms = None
+        if use_copy or (not reuse and mode == "off"):
+            pcms = run_ordered(n_good, lambda k: segment_audio_pcm(good[k][0], good[k][1], work), jobs=jobs)
         # 3b. 影音延遲補償（mode≠off，ADR adr-r3-concat-then-mix.md）：兩軌各自串接、系統聲音整條連續延後、
-        #     再混音成一條 PCM；串接時以它取代各段正規化結果裡的混音。off 時不走這一步（D20 原樣）
+        #     再混音成一條 PCM；正式 wav 與串接的音訊都用它。off 時不走這一步（D20 原樣）
         mixed = compensated_audio(good, plan, work, total) if mode != "off" else None
+        if reuse:
+            say(f"  正式 wav 與 audio-ready.json 相同，不重寫：{wav_out}")
+        else:
+            full = mixed or join_pcm(pcms, os.path.join(work, "audio48.wav"))
+            wav_tmp = os.path.join(work, "audio.wav.part")
+            ffmpeg("-i", full, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "wav", wav_tmp,
+                   what="抽 wav", step="mix", target="audio.wav", seconds=total)
+            # 讀不到的段落搬到 tracks/unreadable/（spec §4.28.7；inputs 照原本記搬移前的段落清單）
+            inputs = input_list(segs)
+            skipped_out = [{"file": os.path.basename(p), "movedTo": move_unreadable(tracks, p, say)} for p in skipped]
+            for e in skipped_out:
+                if e["movedTo"]:
+                    say(f"  讀不到的段落已搬到 {e['movedTo']}")
+            write_json_atomic(os.path.join(tracks, "audio-ready.json"), {
+                "schemaVersion": 1, "wav": os.path.basename(wav_out), "stamp": stamp, "compensation": comp,
+                "segments": rsegs, "createdAt": now_iso()})
+            write_json_atomic(fin_path, {
+                "schemaVersion": 1, "stamp": stamp, "inputs": inputs, "skipped": skipped_out,
+                "outputs": {"video": os.path.relpath(video_out, sess), "audio": os.path.relpath(wav_out, sess)},
+                "syncCompensation": {"mode": mode, "segments": plan},
+                "finishedAt": now_iso(), "videoPublishedAt": None, "verify": {"status": "pending"}})
+            os.replace(wav_tmp, wav_out)
+        say(f"音訊就緒：錄音/{os.path.basename(wav_out)}")
 
-        # 4. 串接：影片同編碼器、同參數、同尺寸 → -c:v copy；音訊（各段 PCM）在這裡一次編成 AAC
-        #    （缺陷 J：-c copy 串接 AAC 會丟掉每段的 edit list，priming 與補零變成真的音訊）。確認可完整解碼
+        # 4. 逐段處理影片（可平行，spec §3.25）：copy 路徑 remux（design §4.2）；重編路徑正規化——沒有影片的段
+        #    要等前一段的 norm 完成（normalize_deps）。每完成一段印一行「正規化 已完成 k/N」（§6 第 152 條）
+        if use_copy:
+            norms = run_ordered(n_good, lambda k: progressed(remux_copy(k + 1, good[k][0], good[k][1], pcms[k], work)),
+                                jobs=jobs)
+        else:
+            def normalize_one(k):
+                p, a = good[k]
+                prev = os.path.join(work, f"norm-{k:04d}.mov") if k > 0 else None  # 前一段（第 k 段，1 起算）的輸出
+                return progressed(normalize(k + 1, p, a, prev, work, W, H, bitrate))
+
+            norms = run_ordered(n_good, normalize_one, jobs=jobs,
+                                deps=normalize_deps([a["video"] is not None for _, a in good]))
+
+        # 5. 串接：影片 -c:v copy；音訊（各段 PCM）在這裡一次編成 AAC（缺陷 J）。不把 moov 移到檔頭（不用 faststart，spec §4.4.6）。
+        #    copy 路徑加 -auto_convert 0（不在關鍵幀前插 SPS/PPS，封包與來源逐段相同），且不設最後封包 1 tick
+        #    （沒有 tpad 補尾，設了影片會在最後一幀結束，evidence/video-spike.md §2.2）；重編路徑照舊把最後一個封包
+        #    的長度設成 1 tick，影片軌在最後一幀的 PTS 結束（design.md §7.4 第 4 步，缺陷 F）
         lst = os.path.join(work, "concat.txt")
         concat_list(norms, lst)
         video_tmp = os.path.join(work, "video.mov")
         audio_src = [] if mixed is None else ["-i", mixed, "-map", "0:v:0", "-map", "1:a:0"]
-        # 影片最後一個封包的長度設成 1 tick，影片軌在最後一幀的 PTS 結束（其他封包不動；
-        # setts=duration=0 無效，mov muxer 會自行估長度）——design.md §7.4 第 4 步，缺陷 F
-        ffmpeg("-f", "concat", "-safe", "0", "-i", lst, *audio_src, "-c:v", "copy",
-               "-c:a", "aac", "-b:a", AAC_RATE,
-               "-bsf:v", "setts=duration=if(eq(NEXT_PTS\\,NOPTS)\\,1\\,DURATION)",
-               "-movflags", "+faststart", video_tmp, what="串接", step="concat", target="video.mov", seconds=total)
-        # -enc_time_base demux：不加的話 null muxer 對任何 VFR 輸入都誤報 non monotonically increasing dts
-        chk = run_step([FFMPEG, "-v", "error", "-nostdin", "-i", video_tmp, "-enc_time_base", "demux",
-                        "-f", "null", "-"], "concat", "video.mov", total)
-        if chk.returncode != 0 or chk.stderr.strip():
-            raise FinalizeError(f"串接結果無法完整解碼：{chk.stderr.strip()[-800:]}")
-        for sel in ("v:0", "a:0"):
-            dts = packet_dts(video_tmp, sel)
-            if not dts or any(y <= x for x, y in zip(dts, dts[1:])):
-                raise FinalizeError(f"串接結果 {sel} 的封包 dts 不是嚴格遞增")
-
-        # 5. 抽 wav
-        wav_tmp = os.path.join(work, "audio.wav.part")
-        ffmpeg("-i", video_tmp, "-map", "0:a:0", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "wav",
-               wav_tmp, what="抽 wav", step="mix", target="audio.wav", seconds=total)
+        auto = ["-auto_convert", "0"] if use_copy else []
+        last_tick = [] if use_copy else ["-bsf:v", "setts=duration=if(eq(NEXT_PTS\\,NOPTS)\\,1\\,DURATION)"]
+        ffmpeg(*auto, "-f", "concat", "-safe", "0", "-i", lst, *audio_src, "-c:v", "copy",
+               "-c:a", "aac", "-b:a", AAC_RATE, *last_tick, video_tmp,
+               what="串接", step="concat", target="video.mov", seconds=total)
     except StepTimeout:
         raise
     except FinalizeError as e:
@@ -1509,52 +1209,45 @@ def finalize_locked(sess, name, rec, tracks):
         print("  段落都還在（錄音/tracks/），修好後可以再跑一次 meeting record finish。", file=sys.stderr)
         return 5
 
-    # 6. 影片就位、manifest、finalize.json
-    fin_old = load_json(os.path.join(tracks, "finalize.json"), None)
-    stamp = session_stamp([p for p, _ in good], fin_old)
-    base = f"{name} {stamp}"
-    vid_dir = os.path.join(sess, "影片")
+    # 6. 影片發佈（spec §4.5.1）：rename 進 影片/ → manifest → finalize.json 第二階段 → 印「成品就緒：」→ 驗證
     os.makedirs(vid_dir, exist_ok=True)
-    video_out = os.path.join(vid_dir, base + ".mov")
-    wav_out = os.path.join(rec, base + ".wav")
     os.replace(video_tmp, video_out)
-
-    segments = manifest.get("segments") if isinstance(manifest.get("segments"), list) else []
-    for s in segments:
-        if isinstance(s, dict) and s.get("file") in ads:
-            s["audioDuration"] = round(ads[s["file"]], 3) if ads[s["file"]] is not None else None
-    used = [s for s in segments if isinstance(s, dict) and s.get("file") in ads
-            and num(s.get("startedAt")) is not None and s.get("audioDuration") is not None]
-    pevents = pause_events_of(tracks)
-    gaps = boundary_gaps(used, pevents)
-    wall = num(segments[-1].get("finishedAt")) if segments and isinstance(segments[-1], dict) else None
-    if wall is None:
-        wall = round(sum(a for a in ads.values() if a), 3)
-    manifest["gapStats"] = {"boundaries": gaps, "max": max(gaps) if gaps else 0.0,
-                            "total": round(sum(gaps), 3), "wallClock": wall}
-    # pausedTotal 只寫給 R2 錄製器的場次（meta 有 pauseEvents 鍵）；第一輪場次維持 4 個鍵（spec §6 第 100 條）
-    if has_pause_events_key(tracks):
-        manifest["gapStats"]["pausedTotal"] = paused_total(pevents)
-    manifest["outputCanvas"] = {"width": W, "height": H}
-    manifest["outputVideoBitrate"] = bitrate
-    write_json_atomic(manifest_path, manifest)
-    # 讀不到的段落搬到 tracks/unreadable/（spec §4.28.7；inputs 照原本記搬移前的段落清單）
-    inputs = input_list(segs)
-    skipped_out = [{"file": os.path.basename(p), "movedTo": move_unreadable(tracks, p)} for p in skipped]
-    for e in skipped_out:
-        if e["movedTo"]:
-            say(f"  讀不到的段落已搬到 {e['movedTo']}")
-    write_json_atomic(os.path.join(tracks, "finalize.json"), {
-        "schemaVersion": 1, "stamp": stamp, "inputs": inputs, "skipped": skipped_out,
-        "outputs": {"video": os.path.relpath(video_out, sess), "audio": os.path.relpath(wav_out, sess)},
-        "syncCompensation": {"mode": mode, "segments": plan},
-        "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
-
-    # 7. 最後一步：wav 原子出現在 錄音/ 第一層
-    os.replace(wav_tmp, wav_out)
-
-    # 8. 清暫存、記狀態
     shutil.rmtree(work, ignore_errors=True)
+    ads = {os.path.basename(p): a["audioDuration"] for p, a in good}
+    gaps = write_manifest(manifest_path, manifest, tracks, ads,
+                          (W, H) if not use_copy else (int(good[0][1]["video"]["stream"]["width"]),
+                                                       int(good[0][1]["video"]["stream"]["height"])),
+                          bitrate if not use_copy else int(max(rates) if rates else 0))
+    fin = load_json(fin_path, None)
+    fin = fin if isinstance(fin, dict) else {"schemaVersion": 1}
+    fin.pop("timedOut", None)
+    fin.update({"videoPublishedAt": now_iso(), "videoPath": video_path,
+                "verify": {"status": "pending", "path": video_path}})
+    write_json_atomic(fin_path, fin)
+    say(f"成品就緒：影片/{os.path.basename(video_out)}")
+
+    # 7. 驗證（不在關鍵路徑上）：通過才記 record: done、刪段落；失敗或逾時改名 .verify-failed.mov、段落全部保留、回 5
+    try:
+        reason = verify_video(video_out, total)
+    except StepTimeout as e:
+        record_timeout(tracks, e)
+        reason = str(e)
+    except FinalizeError as e:
+        reason = str(e)
+    fin = load_json(fin_path, None)
+    fin = fin if isinstance(fin, dict) else {"schemaVersion": 1}
+    if reason:
+        failed = os.path.join(vid_dir, base + ".verify-failed.mov")
+        os.replace(video_out, failed)
+        fin["verify"] = {"status": "failed", "reason": reason, "path": video_path}
+        write_json_atomic(fin_path, fin)
+        print(f"✗ 成品驗證沒有通過：{reason}", file=sys.stderr)
+        print(f"  影片已改名為 {failed}（不刪）；正式 wav 不受影響：{wav_out}", file=sys.stderr)
+        print(f"  段落都還在（錄音/tracks/），可以再跑一次 meeting record finish \"{sess}\"（上次是 copy 時改走重新編碼）。",
+              file=sys.stderr)
+        return 5
+    fin["verify"] = {"status": "ok", "path": video_path}
+    write_json_atomic(fin_path, fin)
     set_state_done(sess)
     cleanup_segments([p for p, _ in good])  # 只刪已併入成品的段落（讀不到的已搬走或留在原處，spec §6 第 126 條）
     say(f"✓ 影片：{video_out}")

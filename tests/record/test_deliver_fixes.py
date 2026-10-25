@@ -44,7 +44,9 @@ class TestSearchNestedOrder(unittest.TestCase):
 
 
 class TestDiarizeQualityFile(unittest.TestCase):
-    # 鐵則 4：沒有段落檔的場次跑 diarize 後，品質檔存在且和新段落檔對得上；舊品質檔不得沿用；raw 不動
+    # meeting-speed spec §4.8.4、§6 第 25 條（使用者 2026-10-22 核准）：缺段落檔、已有 diarization.json 時
+    # diarize 不重轉——raw（內容與 mtime）不動、不呼叫轉錄替身、回 1、輸出含「缺 transcript.segments.json」、
+    # 舊品質檔不被改動或刪除、不產生 transcript.speakers.md
     def test_quality_replaced_with_segments(self):
         sb = Sandbox(self)
         sess = m.make_audio_session(sb.root)
@@ -55,27 +57,21 @@ class TestDiarizeQualityFile(unittest.TestCase):
         os.utime(raw, (1_700_000_000, 1_700_000_000))
         raw_before = (raw.read_bytes(), raw.stat().st_mtime_ns)
         stale = [{"start": 99.0, "end": 100.0, "reason": "compression_ratio"}]
-        (rec / "transcript.quality.json").write_text(json.dumps(stale), encoding="utf-8")
-        (rec / "diarization.json").write_text(json.dumps(DIAR, ensure_ascii=False), encoding="utf-8")
-        env, _log = m.fake_asr_env(sb.base, QSEGS)
-        r = sb.meeting("diarize", sess, timeout=180, **env)
-        self.assertEqual(r.returncode, 0, f"stdout:{r.stdout}\nstderr:{r.stderr}")
-        self.assertEqual((raw.read_bytes(), raw.stat().st_mtime_ns), raw_before, "raw 不得被改")
-
-        segp = rec / "transcript.segments.json"
         qp = rec / "transcript.quality.json"
-        self.assertTrue(segp.is_file(), "diarize 之後段落檔應存在")
-        self.assertTrue(qp.is_file(), "段落檔換掉時品質檔也要在（同一次重轉的版本）")
-        segs = json.loads(segp.read_text(encoding="utf-8"))["segments"]
-        quality = json.loads(qp.read_text(encoding="utf-8"))
-        self.assertNotEqual(quality, stale, "不得沿用舊的品質檔")
-        spans = {(s["start"], s["end"]) for s in segs}
-        for q in quality:
-            self.assertIn((q["start"], q["end"]), spans, f"品質檔的段落要對得上新段落檔：{q}")
-        flagged = sorted((q["start"], q["end"]) for q in quality if q["reason"] == "repeat_run")
-        self.assertEqual(flagged, [(3.0, 5.0), (5.0, 7.0), (7.0, 9.0), (9.0, 11.0)])
-        md = (rec / "transcript.speakers.md").read_text(encoding="utf-8")
-        self.assertIn("（聽不清）", md, "speakers.md 應依品質檔標「（聽不清）」")
+        qp.write_text(json.dumps(stale), encoding="utf-8")
+        q_before = qp.read_bytes()
+        (rec / "diarization.json").write_text(json.dumps(DIAR, ensure_ascii=False), encoding="utf-8")
+        env, log = m.fake_asr_env(sb.base, QSEGS)
+        r = sb.meeting("diarize", sess, timeout=180, **env)
+        out = f"stdout:{r.stdout}\nstderr:{r.stderr}"
+        self.assertEqual((raw.read_bytes(), raw.stat().st_mtime_ns), raw_before,
+                         f"transcript.raw.md 的內容與 mtime 應不變\n{out}")
+        self.assertEqual(m.read_asr_calls(log), [], f"缺 transcript.segments.json 時不得呼叫轉錄替身\n{out}")
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("缺 transcript.segments.json", r.stdout + r.stderr)
+        self.assertTrue(qp.is_file(), "舊的 transcript.quality.json 不得被刪除")
+        self.assertEqual(qp.read_bytes(), q_before, "舊的 transcript.quality.json 內容不得被改動")
+        self.assertFalse((rec / "transcript.speakers.md").exists(), "缺段落檔時不得產生 transcript.speakers.md")
 
 
 class TestTranscribeMultiAudioNoVad(unittest.TestCase):

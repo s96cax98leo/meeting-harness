@@ -1,0 +1,17 @@
+{
+  "_note": "meeting-speed spec §4.13.2（E4(3)）：鎖定 bin/_record_finalize.py 的 paused_total 現行輸出；_record_lib.paused_total 改算法後應與此相同。",
+  "cases": [
+    {"name": "連續兩個 pause 取後一個", "events": [{"t": 10, "kind": "pause"}, {"t": 20, "kind": "pause"}, {"t": 50, "kind": "resume"}], "expect": 30.0},
+    {"name": "最後沒配對的 pause 不計", "events": [{"t": 70, "kind": "pause"}, {"t": 100, "kind": "resume"}, {"t": 150, "kind": "pause"}], "expect": 30.0},
+    {"name": "沒有前導 pause 的 resume 不計", "events": [{"t": 5, "kind": "resume"}], "expect": 0.0},
+    {"name": "空陣列", "events": [], "expect": 0.0},
+    {"name": "t 是數字字串", "events": [{"t": "10", "kind": "pause"}, {"t": "40", "kind": "resume"}], "expect": 30.0},
+    {"name": "兩組配對相加", "events": [{"t": 1, "kind": "pause"}, {"t": 3.25, "kind": "resume"}, {"t": 10, "kind": "pause"}, {"t": 10.5, "kind": "resume"}], "expect": 2.75},
+    {"name": "resume 之後再一個 resume 不計", "events": [{"t": 10, "kind": "pause"}, {"t": 20, "kind": "resume"}, {"t": 30, "kind": "resume"}], "expect": 10.0},
+    {"name": "非有限值略過（nan 的 pause）", "events": [{"t": "nan", "kind": "pause"}, {"t": 5, "kind": "resume"}], "expect": 0.0},
+    {"name": "非有限值略過（inf 的 resume，pause 保留到下一個 resume）", "events": [{"t": 5, "kind": "pause"}, {"t": "inf", "kind": "resume"}, {"t": 8, "kind": "resume"}], "expect": 3.0},
+    {"name": "解析失敗略過", "events": [{"t": "範例", "kind": "pause"}, {"t": 4, "kind": "resume"}], "expect": 0.0},
+    {"name": "缺 t 略過", "events": [{"kind": "pause"}, {"t": 2, "kind": "pause"}, {"t": 6, "kind": "resume"}], "expect": 4.0},
+    {"name": "小數 3 位", "events": [{"t": 0.1, "kind": "pause"}, {"t": 0.4, "kind": "resume"}], "expect": 0.3}
+  ]
+}

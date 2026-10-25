@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """_diarize_pyannote.py <wav_path> <out_json> — 在 diarize venv 內執行。
+   _diarize_pyannote.py --embed-speaker <音檔> <diarization.json> <SPEAKER_xx> <out.json>
+       只算一位講者的語者向量（聲紋建檔用；_voiceprint.py add 在沒有現成向量時呼叫，輸出到暫存檔）。
 
 用 pyannote.audio 4 的 speaker-diarization-community-1 做講者分離，跑 Apple Silicon GPU（MPS）。
 輸出格式與舊版（senko）相同，下游 _merge_speakers.py 不用改：
@@ -12,13 +14,14 @@
 裝置：
   MH_DIARIZE_DEVICE=auto|mps|cpu（預設 auto＝有 MPS 就用）
 聲紋：
-  MH_EMBEDDINGS_OUT=<path>  另存每位講者的語者向量（給聲紋庫比對／建檔用）
+  MH_EMBEDDINGS_OUT=<path>  另存每位講者的語者向量（給聲紋庫比對用）。diarize.sh 一律指到 mktemp 的暫存檔，
+                            比對完就刪，不落場次資料夾（meeting-speed spec §4.6.1）。
 
 為什麼用 exclusive_speaker_diarization 當主體：它已經把重疊講話解開，
 一個時間點只會屬於一位講者，跟逐字稿段落對齊時不會一段話被兩個人搶。
 原始（含重疊）的結果仍會統計進 meta，供品質判讀。
 """
-import os, sys, json, time
+import os, sys, json, time, subprocess, tempfile, wave
 
 
 def harness_config(section):
@@ -83,16 +86,14 @@ def load_wav(path):
         x = x.reshape(-1, ch).mean(axis=1)
     return {"waveform": torch.from_numpy(x).unsqueeze(0), "sample_rate": sr}
 
-def main():
-    if len(sys.argv) < 3:
-        print("usage: _diarize_pyannote.py <wav> <out.json>", file=sys.stderr); sys.exit(2)
-    wav, out = sys.argv[1], sys.argv[2]
-
+def load_pipeline():
+    """載入 pyannote pipeline 並搬到裝置；失敗時印錯誤並以 3（venv）／4（token）／5（授權、載入）結束。
+    回 (pipeline, model, device, 載入秒數)。"""
     # MPS 有少數 op 未實作，沒有這個 fallback 會直接崩
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
     try:
-        import torch
+        import torch  # noqa: F401  （pick_device 用；先 import 才能把缺套件歸到 exit 3）
         from pyannote.audio import Pipeline
     except ImportError as e:
         print(json.dumps({"error": f"diarize venv 未就緒：{e}",
@@ -123,7 +124,109 @@ def main():
 
     device = pick_device()
     pipeline.to(device)
-    load_s = time.time() - t0
+    return pipeline, model, device, time.time() - t0
+
+
+def is_16k_mono_wav(path):
+    try:
+        with wave.open(path, "rb") as w:
+            return w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2
+    except Exception:
+        return False
+
+
+# --embed-speaker：每段最短 0.5 秒（太短的向量不穩）、長段切成 10 秒窗、總長最多取 300 秒（最長的段優先）
+EMBED_MIN_SEC, EMBED_WINDOW_SEC, EMBED_MAX_TOTAL_SEC = 0.5, 10.0, 300.0
+
+
+def embed_speaker(args):
+    """--embed-speaker <音檔> <diarization.json> <SPEAKER_xx> <out.json>：
+    取該講者在 diarization.json 的段落，逐窗算語者向量後依時長加權平均，寫 <out.json>：
+    {"model", "dim", "speaker", "vector", "speakers": {SPEAKER_xx: vector}}。
+    與分離當下 pipeline 的 centroid 不會位元相同（同模型、同時段，差異應很小；spec §7 疑慮 6）。
+    結束碼：0 完成、2 參數錯、3／4／5 同分離、6 該講者沒有可用段落。"""
+    if len(args) < 4:
+        print("usage: _diarize_pyannote.py --embed-speaker <音檔> <diarization.json> <SPEAKER_xx> <out.json>",
+              file=sys.stderr)
+        return 2
+    src, diar_path, tag, out = args[:4]
+    try:
+        with open(diar_path, encoding="utf-8") as f:
+            segs = [s for s in (json.load(f) or {}).get("segments", []) if s.get("speaker") == tag]
+    except (OSError, ValueError) as e:
+        print(json.dumps({"error": f"讀不到 {diar_path}：{e}"}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    spans = sorted(((float(s["start"]), float(s["end"])) for s in segs
+                    if float(s["end"]) - float(s["start"]) >= EMBED_MIN_SEC), key=lambda x: x[0] - x[1])
+    if not spans:
+        print(json.dumps({"error": f"{tag} 在 diarization.json 沒有 ≥ {EMBED_MIN_SEC} 秒的段落"},
+                         ensure_ascii=False), file=sys.stderr)
+        return 6
+
+    pipeline, model, device, _ = load_pipeline()
+    embed = getattr(pipeline, "_embedding", None)
+    if embed is None:
+        print(json.dumps({"error": f"{model} 沒有可用的語者向量模型（pipeline._embedding）"}, ensure_ascii=False),
+              file=sys.stderr)
+        return 5
+
+    tmp = None
+    try:
+        wav_path = src
+        if not is_16k_mono_wav(src):
+            fd, tmp = tempfile.mkstemp(prefix="mh-embed-", suffix=".wav")
+            os.close(fd)
+            r = subprocess.run(["ffmpeg", "-y", "-i", src, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", tmp],
+                               capture_output=True)
+            if r.returncode != 0:
+                print(json.dumps({"error": "ffmpeg 轉 16k mono wav 失敗"}, ensure_ascii=False), file=sys.stderr)
+                return 5
+            wav_path = tmp
+        audio = load_wav(wav_path)
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    import numpy as np
+    x, sr = audio["waveform"], audio["sample_rate"]
+    total, acc, weight = 0.0, None, 0.0
+    for st, en in spans:
+        t = st
+        while t < en and total < EMBED_MAX_TOTAL_SEC:
+            e = min(en, t + EMBED_WINDOW_SEC)
+            if e - t >= EMBED_MIN_SEC:
+                chunk = x[:, int(t * sr):int(e * sr)]
+                v = np.asarray(embed(chunk.unsqueeze(0).to(device)))[0]
+                if np.all(np.isfinite(v)):
+                    acc = v * (e - t) if acc is None else acc + v * (e - t)
+                    weight += e - t
+                    total += e - t
+            t = e
+        if total >= EMBED_MAX_TOTAL_SEC:
+            break
+    if acc is None or weight <= 0:
+        print(json.dumps({"error": f"{tag} 算不出有效的語者向量"}, ensure_ascii=False), file=sys.stderr)
+        return 6
+    vec = [float(v) for v in acc / weight]
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"model": model, "dim": len(vec), "speaker": tag, "vector": vec, "speakers": {tag: vec}},
+                  f, ensure_ascii=False)
+    print(json.dumps({"status": "ok", "speaker": tag, "dim": len(vec), "seconds": round(weight, 1)},
+                     ensure_ascii=False))
+    return 0
+
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--embed-speaker":
+        sys.exit(embed_speaker(sys.argv[2:]))
+    if len(sys.argv) < 3:
+        print("usage: _diarize_pyannote.py <wav> <out.json>", file=sys.stderr); sys.exit(2)
+    wav, out = sys.argv[1], sys.argv[2]
+
+    pipeline, model, device, load_s = load_pipeline()
 
     kwargs = {}
     n = _env_int("MH_NUM_SPEAKERS")
@@ -214,12 +317,9 @@ def main():
         "overlapRegions": n_overlap,
         "params": {k: v for k, v in kwargs.items()},
     }
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump({"segments": segs, "segmentsOverlapped": segs_all,
-                   "numSpeakers": len(mapping), "meta": meta},
-                  f, ensure_ascii=False, indent=2)
 
-    # 語者向量（聲紋庫用）：pyannote 回的是 (n_speakers, dim)，列順序＝原始標籤順序
+    # 語者向量（聲紋庫用）：pyannote 回的是 (n_speakers, dim)，列順序＝原始標籤順序。
+    # 先寫向量、設好 meta["embeddings"]，再寫 diarization.json（spec §4.6.9；原本寫完才設，meta 永遠沒這個鍵）
     emb_path = os.environ.get("MH_EMBEDDINGS_OUT")
     if emb_path and embeddings is not None:
         try:
@@ -238,6 +338,11 @@ def main():
             meta["embeddings"] = emb_path
         except Exception as e:
             print(f"[diarize] 語者向量輸出失敗（不影響分離結果）：{e}", file=sys.stderr)
+
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"segments": segs, "segmentsOverlapped": segs_all,
+                   "numSpeakers": len(mapping), "meta": meta},
+                  f, ensure_ascii=False, indent=2)
 
     print(json.dumps({"status": "ok", "segments": len(segs), "numSpeakers": len(mapping),
                       "meta": meta}, ensure_ascii=False))

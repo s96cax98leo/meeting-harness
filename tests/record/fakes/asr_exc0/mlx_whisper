@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""mlx_whisper CLI 的替身：模擬「引擎內部丟例外、但 CLI 仍回 0、只留下 .txt」（meeting-speed spec §4.7.1）。
+
+- 每次呼叫把 argv 以一行 JSON 附加到 FAKE_ASR_LOG（未設就不記）。
+- FAKE_EXC0_LINES＝n（預設 0）：先在 stderr 印 n 行「[<模型>] 範例輸出行 NN」（spec §4.7.2 的 30 行測試用）。
+- FAKE_EXC0_EXIT 非 0：印完上面的行後以該值結束、不寫任何檔。
+- --model 含 FAKE_EXC0_OK_MODEL（非空字串）時表現正常：寫 <主檔名>.txt 與 .json（同 fakes/asr/mlx_whisper 的 schema）。
+- 其他情況（預設）：只寫 <主檔名>.txt（內容「範例內容（例外前的殘稿）」）、不寫 .json、回 0。
+"""
+import json
+import os
+import sys
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_ASR_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"argv": argv, "engine": "mlx_whisper"}, ensure_ascii=False) + "\n")
+
+
+def opt(name, default=None):
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return default
+
+
+model = opt("--model", "")
+for i in range(1, int(os.environ.get("FAKE_EXC0_LINES", "0") or 0) + 1):
+    print(f"[{model}] 範例輸出行 {i:02d}", file=sys.stderr)
+code = int(os.environ.get("FAKE_EXC0_EXIT", "0") or 0)
+if code:
+    sys.exit(code)
+
+audio = next((a for i, a in enumerate(argv) if not a.startswith("-") and (i == 0 or not argv[i - 1].startswith("-"))),
+             "audio.wav")
+outdir = opt("--output-dir", ".")
+os.makedirs(outdir, exist_ok=True)
+stem = os.path.splitext(os.path.basename(audio))[0]
+ok_model = os.environ.get("FAKE_EXC0_OK_MODEL", "")
+if ok_model and ok_model in model:
+    segs = [{"start": 0.0, "end": 2.0, "text": "範例內容（退回引擎）"}]
+    with open(os.path.join(outdir, stem + ".txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(s["text"] for s in segs) + "\n")
+    with open(os.path.join(outdir, stem + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"text": "".join(s["text"] for s in segs), "language": opt("--language", "zh"),
+                   "segments": [dict(id=i, **s) for i, s in enumerate(segs)]}, f, ensure_ascii=False)
+    print("fake mlx_whisper (exc0) ok")
+    sys.exit(0)
+with open(os.path.join(outdir, stem + ".txt"), "w", encoding="utf-8") as f:
+    f.write("範例內容（例外前的殘稿）\n")
+print("Traceback (most recent call last):\n  RuntimeError: 範例例外（替身）", file=sys.stderr)
+sys.exit(0)

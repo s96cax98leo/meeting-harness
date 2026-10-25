@@ -187,9 +187,16 @@ func autoPrepCandidates(autoPrep: Bool, statuses: [RecordStatus], seenInProgress
 // MARK: - 場次代號與取消確認（§3.26，修正輪 I8）
 
 /// startedAt 可解析 → `M/d HH:mm 開始的場次`；不可解析 → `場次 <runId 前 8 個字元>`。不讀 session。
+/// meeting-speed spec §3.10：改呼叫 sessionCodeLabel，輸出逐字不變。
 func backgroundJobLabel(_ job: BackgroundFinalizeJob, timeZone: TimeZone = .current) -> String {
-    guard let start = ISO8601DateFormatter().date(from: job.status.startedAt) else {
-        return "場次 \(job.status.runId.prefix(8))"
+    sessionCodeLabel(startedAt: job.status.startedAt, runId: job.status.runId, timeZone: timeZone)
+}
+
+/// meeting-speed spec §3.10、§4.12.1：場次代號（通知與 HUD 共用，不含場次名或路徑）。
+/// startedAt 可解析 → `M/d HH:mm 開始的場次`（依 timeZone）；不可解析 → `場次 <runId 前 8 個字元>`。
+func sessionCodeLabel(startedAt: String, runId: String, timeZone: TimeZone = .current) -> String {
+    guard let start = ISO8601DateFormatter().date(from: startedAt) else {
+        return "場次 \(runId.prefix(8))"
     }
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX")

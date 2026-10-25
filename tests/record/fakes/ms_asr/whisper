@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# ms_asr/whisper —— openai-whisper CLI 的替身：一律失敗（不寫任何檔、回 FAKE_WHISPER_EXIT，預設 1）。
+# 放在 PATH 上擋住機器上真的 whisper，避免測試在 mlx 替身失敗時退回去載入真的模型（meeting-speed spec §4.8.5）。
+# 每次呼叫在 FAKE_ASR_LOG（有設時）附加一行 {"argv": […], "engine": "whisper"}。
+set -uo pipefail
+if [[ -n "${FAKE_ASR_LOG:-}" ]]; then
+  printf '{"argv": [], "engine": "whisper", "argc": %d}\n' "$#" >> "${FAKE_ASR_LOG}"
+fi
+echo "ms_asr/whisper：模擬 openai-whisper 失敗" >&2
+exit "${FAKE_WHISPER_EXIT:-1}"

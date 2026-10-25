@@ -42,7 +42,8 @@ bash "$MH/bin/meeting.sh" <型態> "<會議根目錄>"
 | `client` | 客戶會議（對外） | `interview` | 訪談／面談 |
 
 產物（每場）：`錄音/transcript.raw.md`（原始逐字稿，**不要改它**）、`transcript.segments.json`、
-`diarization.json`、`embeddings.json`、`transcript.speakers.md`（帶講者名）、`照片/.ocr/*.txt`。
+`diarization.json`、`transcript.speakers.md`（帶講者名）、`照片/.ocr/*.txt`。
+語者向量不落場次資料夾（只在分離時的暫存檔，比對完即刪）；舊場次留下的 `錄音/embeddings.json` 可手動清掉（見 meeting-speakers）。
 
 ## 2. 寫會議紀錄（這步是你要做的事）
 

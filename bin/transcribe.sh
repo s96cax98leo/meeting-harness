@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # transcribe.sh <audio_file> <out_markdown> [language]
-# 本機轉錄：優先 mlx-whisper large-v3（Apple Silicon），fallback openai-whisper medium。
-# 冪等：若 out_markdown 已存在且非空則跳過。
+# 本機轉錄（Apple Silicon）：zh 預設 Breeze-ASR-25（mlx-whisper），失敗退回 whisper-large-v3，再退回 openai-whisper medium。
+# 冪等：若 out_markdown 已存在且非空則跳過。raw 不轉字形；正體版另存 transcript.md（spec §4.6.6）。
 set -euo pipefail
 
 AUDIO="${1:?usage: transcribe.sh <audio> <out.md> [lang]}"
@@ -115,9 +115,31 @@ if [[ -n "$CLIP_TS" ]]; then
 fi
 echo "[transcribe] ${VAD_LINE#> }"
 
-USED_MODEL="$MODEL"
-echo "[transcribe] engine=mlx-whisper model=$MODEL audio=$AUDIO (output=$OUTFMT)"
-run_mlx() { # <model>
+# ── ASR 引擎與退回鏈（spec §4.7）──────────────────────────────────────
+# 引擎輸出寫到 $WORKDIR/out/；每次嘗試的完整 stdout／stderr 附加到 $WORKDIR/asr.log。
+# 成功判準：引擎回 0 而且 out/ 有非空的 .json（引擎內部丟例外但 CLI 仍回 0、只留 .txt 的情況算失敗）。
+# 失敗時清掉這次輸出、stderr 印該引擎輸出的最後 30 行，再走下一個引擎；全部失敗 → 下方回 3。
+OUTDIR="$WORKDIR/out"
+ASR_LOG="$WORKDIR/asr.log"
+mkdir -p "$OUTDIR"
+: > "$ASR_LOG"
+run_engine() { # <名稱> <指令…>
+  local label="$1"; shift
+  local att="$WORKDIR/asr.attempt.log" rc=0 why
+  rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
+  "$@" > "$att" 2>&1 || rc=$?
+  { echo "── [transcribe] ${label}（結束碼 ${rc}）"; cat "$att"; } >> "$ASR_LOG"
+  if [[ "$rc" -eq 0 ]] && [[ -n "$(find "$OUTDIR" -name '*.json' -size +0c | head -1)" ]]; then
+    tail -8 "$att"
+    return 0
+  fi
+  if [[ "$rc" -eq 0 ]]; then why="結束碼 0 但沒有非空的 .json"; else why="結束碼 $rc"; fi
+  echo "[transcribe] $label 失敗（${why}）；引擎輸出最後 30 行：" >&2
+  tail -30 "$att" >&2
+  rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
+  return 1
+}
+mlx_cmd() { # <model>
   # --condition-on-previous-text False：關鍵防迴圈（講座有停頓/掌聲易觸發 whisper 重複迴圈）
   # 壓縮比門檻參數已移除（spec §4.29.4）：mlx_whisper CLI 只用單一溫度解碼、不做溫度回退，
   # 那個門檻不會觸發重解碼，帶了也沒有作用；疑似迴圈的段落由下方的重複偵測標記。
@@ -126,44 +148,75 @@ run_mlx() { # <model>
     --language "$LANG_CODE" \
     --initial-prompt "$HINT" \
     --condition-on-previous-text False \
-    --output-dir "$WORKDIR" \
+    --output-dir "$OUTDIR" \
     --output-format "$OUTFMT" \
     ${MLX_CLIP[@]+"${MLX_CLIP[@]}"} \
-    --verbose False 2>&1 | tail -8
+    --verbose False
 }
-if command -v mlx_whisper >/dev/null 2>&1; then
-  if ! run_mlx "$MODEL"; then
-    if [[ "$MODEL" != "$MODEL_FALLBACK" ]]; then
-      echo "[transcribe] $MODEL 失敗 → 退回 $MODEL_FALLBACK" >&2
-      USED_MODEL="$MODEL_FALLBACK"
-      run_mlx "$MODEL_FALLBACK" || {
-        echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
-        USED_MODEL="openai-whisper medium"
-        whisper "$AUDIO" --model medium --language "$LANG_CODE" \
-          --initial_prompt "$HINT" --condition_on_previous_text False \
-          --output_dir "$WORKDIR" --output_format "$OUTFMT" \
-          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
-      }
-    else
-      echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
-      USED_MODEL="openai-whisper medium"
-      whisper "$AUDIO" --model medium --language "$LANG_CODE" \
-        --initial_prompt "$HINT" --condition_on_previous_text False \
-        --output_dir "$WORKDIR" --output_format "$OUTFMT" \
-          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
-    fi
-  fi
-else
-  echo "[transcribe] mlx-whisper 未安裝，使用 openai-whisper medium"
-  USED_MODEL="openai-whisper medium"
+oai_cmd() {
   whisper "$AUDIO" --model medium --language "$LANG_CODE" \
     --initial_prompt "$HINT" --condition_on_previous_text False \
-    --output_dir "$WORKDIR" --output_format "$OUTFMT" \
-          ${OAI_CLIP[@]+"${OAI_CLIP[@]}"} 2>&1 | tail -5
+    --output_dir "$OUTDIR" --output_format "$OUTFMT" \
+    ${OAI_CLIP[@]+"${OAI_CLIP[@]}"}
+}
+run_oai() {
+  USED_MODEL="openai-whisper medium"
+  run_engine "openai-whisper medium" oai_cmd || true
+}
+
+# 現成段落 JSON（spec §3.7、§4.7.4；meeting.sh prep 在增量轉錄 stitch 成功時給）：
+# 不呼叫任何 ASR 引擎，把它當成引擎輸出放進 out/，之後的 raw、段落檔、正體保險栓、品質檔走同一套程式。
+SEG_INPUT=0
+if [[ -n "${MH_ASR_SEGMENTS_JSON:-}" ]]; then
+  STEM="$(basename "${AUDIO%.*}")"
+  if [[ -s "$MH_ASR_SEGMENTS_JSON" ]] && python3 - "$MH_ASR_SEGMENTS_JSON" "$OUTDIR/$STEM.json" "$OUTDIR/$STEM.txt" <<'PYSEG' 2>"$WORKDIR/seg.err"
+import json, shutil, sys
+src, js, txt = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+segs = d.get("segments") if isinstance(d, dict) else None
+if not isinstance(segs, list):
+    sys.exit("沒有 segments 陣列")
+shutil.copyfile(src, js)
+with open(txt, "w", encoding="utf-8") as f:
+    for s in segs:
+        if isinstance(s, dict):
+            f.write(str(s.get("text") or "").strip() + "\n")
+PYSEG
+  then
+    SEG_INPUT=1
+    USED_MODEL="${MODEL}（增量轉錄）"
+    echo "[transcribe] 使用現成段落 JSON（MH_ASR_SEGMENTS_JSON），不呼叫 ASR 引擎；model=$MODEL audio=$AUDIO"
+  else
+    echo "[transcribe] WARN: MH_ASR_SEGMENTS_JSON 讀不了（$(tail -1 "$WORKDIR/seg.err" 2>/dev/null)），改為整檔轉錄" >&2
+    rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
+  fi
+fi
+
+if [[ "$SEG_INPUT" -eq 0 ]]; then
+  USED_MODEL="$MODEL"
+  echo "[transcribe] engine=mlx-whisper model=$MODEL audio=$AUDIO (output=$OUTFMT)"
+  if command -v mlx_whisper >/dev/null 2>&1; then
+    if ! run_engine "$MODEL" mlx_cmd "$MODEL"; then
+      if [[ "$MODEL" != "$MODEL_FALLBACK" ]]; then
+        echo "[transcribe] $MODEL 失敗 → 退回 $MODEL_FALLBACK" >&2
+        USED_MODEL="$MODEL_FALLBACK"
+        if ! run_engine "$MODEL_FALLBACK" mlx_cmd "$MODEL_FALLBACK"; then
+          echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
+          run_oai
+        fi
+      else
+        echo "[transcribe] mlx-whisper failed, falling back to openai-whisper" >&2
+        run_oai
+      fi
+    fi
+  else
+    echo "[transcribe] mlx-whisper 未安裝，使用 openai-whisper medium"
+    run_oai
+  fi
 fi
 
 # 取第一個 .txt，包成 markdown（僅原始逐字稿，標點/校對交由 agent 精修）
-RAW="$(find "$WORKDIR" -name '*.txt' | head -1)"
+RAW="$(find "$OUTDIR" -name '*.txt' | head -1)"
 if [[ -z "$RAW" || ! -s "$RAW" ]]; then
   echo "[transcribe] ERROR: no transcript produced" >&2
   exit 3
@@ -181,7 +234,7 @@ mkdir -p "$(dirname "$OUT")"
 
 # 段落時間戳 JSON：一律保留（spec §4.30.4；講者分離、品質檔、VTT 用）
 SEGOUT="$(dirname "$OUT")/transcript.segments.json"
-SEGJSON="$(find "$WORKDIR" -name '*.json' | head -1)"
+SEGJSON="$(find "$OUTDIR" -name '*.json' | head -1)"
 if [[ -n "$SEGJSON" && -s "$SEGJSON" ]]; then
   cp "$SEGJSON" "$SEGOUT"
   echo "[transcribe] segments -> $SEGOUT"
@@ -189,66 +242,29 @@ else
   echo "[transcribe] WARN: 未取得 segments JSON（講者分離將無法對齊、品質檔無從判斷）" >&2
 fi
 
-# 正體保險栓：Breeze-ASR-25 原生輸出繁體 → 不動；其他引擎（large-v3 / openai-whisper）才轉。
-# 只轉字形，不動內容；raw 逐字稿仍是「該引擎的完整輸出」。
-case "$USED_MODEL" in
-  *Breeze*|*breeze*) : ;;
-  *)
-    python3 "$(dirname "$0")/_to_tw.py" "$OUT" 2>/dev/null || true
-    [[ -s "$(dirname "$OUT")/transcript.segments.json" ]] && \
-      python3 "$(dirname "$0")/_to_tw.py" "$(dirname "$OUT")/transcript.segments.json" 2>/dev/null || true
-    ;;
-esac
+# 正體保險栓（spec §4.6.6，鐵則 1）：transcript.raw.md 是引擎的完整輸出，一律不轉字形、不改寫。
+# 正體版另存 transcript.md（只在它不存在時寫，不覆寫人工精修過的版本）：
+# Breeze-ASR-25 原生輸出繁體 → 照抄；其他引擎（large-v3 / openai-whisper）才轉字形。
+# transcript.segments.json 照舊轉字形（講者分離、VTT 用）。
+TWOUT="$(dirname "$OUT")/transcript.md"
+NEED_TW=1
+case "$USED_MODEL" in *Breeze*|*breeze*) NEED_TW=0 ;; esac
+if [[ "$TWOUT" != "$OUT" && ! -e "$TWOUT" ]]; then
+  cp "$OUT" "$TWOUT"
+  if [[ "$NEED_TW" -eq 1 ]]; then
+    python3 "$(dirname "$0")/_to_tw.py" "$TWOUT" 2>/dev/null || \
+      echo "[transcribe] WARN: transcript.md 轉正體失敗（內容與 raw 相同）" >&2
+  fi
+  echo "[transcribe] 正體版 -> $TWOUT"
+fi
+if [[ "$NEED_TW" -eq 1 && -s "$SEGOUT" ]]; then
+  python3 "$(dirname "$0")/_to_tw.py" "$SEGOUT" 2>/dev/null || true
+fi
 
 # 品質檔（spec §3.18、§4.30.5）：逐段標出可疑段落，只標記、不動 raw（鐵則 1）。
-# 衍生檔（speakers.md、VTT）會在這些段落前加「（聽不清）」（鐵則 4）。
-#   compression_ratio：該段文字 zlib 壓縮比 > 2.4
-#   no_speech_loop   ：同一句（≥ 2 字）在該段內連續重複 ≥ 3 次
-#   repeat_run       ：相鄰 ≥ 4 段文字完全相同，每段各一筆
-# 讀不到段落檔時寫 []（無從判斷），並已在上方警告。
-python3 - "$SEGOUT" "$(dirname "$OUT")/transcript.quality.json" <<'PYQ' || echo "[transcribe] WARN: transcript.quality.json 產生失敗" >&2
-import json, os, re, sys, zlib
-segp, outp = sys.argv[1], sys.argv[2]
-segs = []
-if os.path.isfile(segp):
-    try:
-        d = json.load(open(segp, encoding="utf-8"))
-        segs = [s for s in (d.get("segments") or []) if isinstance(s, dict)] if isinstance(d, dict) else []
-    except (OSError, ValueError):
-        segs = []
-LOOP = re.compile(r"(.{2,}?)\1{2,}", re.S)
-def ratio(t):
-    b = t.encode("utf-8")
-    return len(b) / len(zlib.compress(b)) if b else 0.0
-texts = [str(s.get("text") or "").strip() for s in segs]
-flags = [[] for _ in segs]
-for i, t in enumerate(texts):
-    if not t:
-        continue
-    if ratio(t) > 2.4:
-        flags[i].append("compression_ratio")
-    if LOOP.search(re.sub(r"\s+", "", t)):
-        flags[i].append("no_speech_loop")
-i = 0
-while i < len(texts):
-    j = i
-    while j + 1 < len(texts) and texts[j + 1] == texts[i]:
-        j += 1
-    if texts[i] and j - i + 1 >= 4:
-        for k in range(i, j + 1):
-            flags[k].append("repeat_run")
-    i = j + 1
-out = []
-for s, fl in zip(segs, flags):
-    for r in fl:
-        out.append({"start": s.get("start"), "end": s.get("end"), "reason": r})
-out.sort(key=lambda e: (e["start"] if isinstance(e["start"], (int, float)) else 0.0))
-with open(outp, "w", encoding="utf-8") as f:
-    json.dump(out, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-n = len(out)
-print(f"[transcribe] quality -> {outp}（{n} 筆）" if n else f"[transcribe] quality -> {outp}（沒有可疑段落）")
-PYQ
+# 判準在 bin/lib/_transcript_quality.py；讀不到段落檔時寫 []（無從判斷），並已在上方警告。
+python3 "$HARNESS_ROOT/bin/lib/_transcript_quality.py" "$SEGOUT" "$(dirname "$OUT")/transcript.quality.json" || \
+  echo "[transcribe] WARN: transcript.quality.json 產生失敗" >&2
 
 # 自我驗證：偵測 whisper 重複迴圈（同一行連續重複過多 = 轉錄失敗）
 # 注意要算「連續」重複，不是整份檔案的出現次數——會議裡「好」「對」「是」本來就會出現幾十次，

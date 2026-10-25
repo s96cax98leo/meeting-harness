@@ -19,10 +19,12 @@ def main():
         print(json.dumps({"error": f"ocrmac import failed: {e}"}))
         sys.exit(3)
 
+    # 目錄部分先 glob.escape（場次名可能含 [ ] * ?，spec §4.8.9），只有副檔名樣式保留萬用字元
+    esc = glob.escape(images_dir)
     imgs = sorted(
-        glob.glob(os.path.join(images_dir, "*.jpg")) +
-        glob.glob(os.path.join(images_dir, "*.jpeg")) +
-        glob.glob(os.path.join(images_dir, "*.png"))
+        glob.glob(os.path.join(esc, "*.jpg")) +
+        glob.glob(os.path.join(esc, "*.jpeg")) +
+        glob.glob(os.path.join(esc, "*.png"))
     )
     results = []
     for img in imgs:

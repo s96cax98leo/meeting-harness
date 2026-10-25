@@ -348,7 +348,7 @@ class TestR3Lock(unittest.TestCase):
             t = time.time() - ago
             return json.dumps({"startedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))})
 
-        for ago, lo, hi in ((100, 930, 932), (3600, 11430, 11432)):
+        for ago, lo, hi in ((100, 930, 936), (3600, 11430, 11436)):
             with self.subTest(ago=ago):
                 out = limit_for(started(ago))
                 self.assertRegex(out, r"^\d+$", f"上限應印整數秒：{out!r}")

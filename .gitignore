@@ -16,6 +16,11 @@ meeting.record.json
 actions.csv
 actions.ics
 .cleanup-report.json
+# 鐵則（meeting-speed spec §4.6.8）：語者向量、講者對應、轉錄品質檔、狀態檔鎖都不進版控
+embeddings.json
+speakers.map.json
+transcript.quality.json
+.pipeline-state.lock
 
 # 系統/暫存
 .DS_Store

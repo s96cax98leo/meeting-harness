@@ -18,6 +18,10 @@
 // R3 F2 捨棄（spec §3.15、§4.42.3、§4.42.4；design R3 §捨棄）：SIGTERM 時讀 record.discard.json（讀後刪），
 //   discardRequestValid 為 true → 照常停止擷取、收掉 writer，但跳過收尾，改以 trashItem 把 <場次>/錄音/ 移到垃圾桶；
 //   從不對場次路徑硬刪。無效或不存在 → 照一般停止收尾。開錄時刪掉殘留的 record.discard.json。
+//
+// 拆檔（meeting-speed spec §4.13.1）：段落 writer 操作在 RecordingSession+Segments.swift、停止收 writer 與捨棄在
+//   RecordingSession+Stop.swift、監看與落盤在 RecordingSession+Monitor.swift、增量轉錄 worker 在 RecordingSession+AsrWorker.swift；
+//   都是同一個 class 的 extension，跨檔用到的成員因此由 private 放寬為模組內可見。被既有靜態測試釘住的函式留在本檔。
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -38,10 +42,10 @@ func hostSeconds() -> Double { CMClockGetTime(CMClockGetHostTimeClock()).seconds
 
 // 可變狀態只在序列佇列 q 上讀寫（見檔頭），所以標 @unchecked Sendable。
 final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    private let ctx: RunContext
-    private let status: StatusWriter
-    private let defaults: RecordDefaults?
-    private let q = DispatchQueue(label: "mh.rec.state")
+    let ctx: RunContext
+    let status: StatusWriter
+    let defaults: RecordDefaults?
+    let q = DispatchQueue(label: "mh.rec.state")
     private let screenQ = DispatchQueue(label: "mh.rec.screen")
     private let audioQ = DispatchQueue(label: "mh.rec.audio")
     private let micQ = DispatchQueue(label: "mh.rec.mic")
@@ -51,65 +55,72 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     private let cfg = SCStreamConfiguration()
     private var scale: Double
     private var stream: SCStream!
-    private var t0 = hostSeconds()
+    var t0 = hostSeconds()
 
     // 段落（design §7.2；開段／寫入／收段的判斷在 Core 的 SegmentScheduler，spec §4.36.10）
-    private var scheduler = SegmentScheduler(segmentSeconds: Double(segmentSeconds))
-    private var writers: [Int: SegmentWriter] = [:]    // 排程器段號（＝段落 index）→ 目前段與 prev 的 writer
-    private var segEnd: [Int: CMTime] = [:]            // 已轉成 prev 的段落收尾點（新段起點或暫停停止點 E）
-    private var segRow: [Int: Int] = [:]             // 段落 index → manifest.segments 的位置
-    private var closing: [Int: SegmentWriter] = [:]    // 已呼叫 finish、等完成回呼的段落
+    var scheduler = SegmentScheduler(segmentSeconds: Double(segmentSeconds))
+    var writers: [Int: SegmentWriter] = [:]    // 排程器段號（＝段落 index）→ 目前段與 prev 的 writer
+    var segEnd: [Int: CMTime] = [:]            // 已轉成 prev 的段落收尾點（新段起點或暫停停止點 E）
+    var segRow: [Int: Int] = [:]             // 段落 index → manifest.segments 的位置
+    var closing: [Int: SegmentWriter] = [:]    // 已呼叫 finish、等完成回呼的段落
     // 排程器的邊界是 Double 秒；以下兩個 CMTime 只用來把邊界還原成精確的 PTS（不參與換段判斷）
-    private var nextBoundary: CMTime = .invalid         // 最近一段起點＋segmentSeconds
-    private var lastSegmentStart: CMTime = .invalid     // 最近一次開段的起點
-    private var curSize: PixelSize
+    var nextBoundary: CMTime = .invalid         // 最近一段起點＋segmentSeconds
+    var lastSegmentStart: CMTime = .invalid     // 最近一次開段的起點
+    /// 畫布尺寸：開錄當下會議視窗的偶數像素大小，整場不變（record.meta.json.canvasLock；meeting-speed spec §4.4.1）
+    let curSize: PixelSize
+    /// 最近一次換段時讀到的會議視窗像素大小（只用來判斷要不要寫「視窗尺寸改變」log）
+    private var windowSize: PixelSize
     /// 換段當下同步讀會議視窗大小（point）；可替換（design §7.1，spec §4.3.6）。只在 q 上呼叫。
     var windowPointSize: (UInt32) -> CGSize? = cgWindowPointSize
-    private var lastFrame: CMSampleBuffer?             // 最後一個 complete 幀（換段時重新打戳）
-    private var finishedSegments = 0
+    var lastFrame: CMSampleBuffer?             // 最後一個 complete 幀（換段時重新打戳）
+    var finishedSegments = 0
+    /// 本場累計丟幀數（各段收尾時加上該段影片「writer 未 ready」丟掉的幀；meeting-speed spec §3.1）
+    var droppedFramesTotal = 0
+    /// 增量轉錄 worker 已起過（每場只起一次；spec §4.11.1）
+    var asrWorkerStarted = false
     /// 三路已收到的 sample 最晚結束點（CMTime 版；與排程器同一規則更新：通過暫停閘門才更新、停止後不更新）
-    private var maxEnd: CMTime = .invalid
+    var maxEnd: CMTime = .invalid
     private var firstSampleLogged = false
     /// 繼續後的開段失敗時，resume 事件留到下一個成功開的段落再記（t＝該段 startedAt）
     private var pendingResumeEvent = false
 
     // 紀錄
-    private var manifest: Manifest
-    private var meta: RecordMeta
+    var manifest: Manifest
+    var meta: RecordMeta
 
     // 監看
-    private var sysPeak = PeakWindow(windowSeconds: 0.5)
-    private var micPeak = PeakWindow(windowSeconds: 0.5)
-    private var sysSilence = SilenceDetector(thresholdDBFS: -60, seconds: 15)
-    private var micSilence = SilenceDetector(thresholdDBFS: -60, seconds: 15)
-    private var black = BlackDetector(ratio: 0.01, seconds: 5)
+    var sysPeak = PeakWindow(windowSeconds: 0.5)
+    var micPeak = PeakWindow(windowSeconds: 0.5)
+    var sysSilence = SilenceDetector(thresholdDBFS: -60, seconds: 15)
+    var micSilence = SilenceDetector(thresholdDBFS: -60, seconds: 15)
+    var black = BlackDetector(ratio: 0.01, seconds: 5)
     private var suspended = SuspendedDetector(seconds: 5)
-    private var lastFormat: [AudioSource: AudioFormat] = [:]
+    var lastFormat: [AudioSource: AudioFormat] = [:]
     private var lastBlackSample = -10.0      // 只在 screenQ 上讀寫
 
     // 停止
-    private var stopping = false
-    private var stopPoint: CMTime?                     // 停止點 E；PTS ≥ E 的 sample 一律不寫
-    private var writersDrained = false                 // 已對目前與舊 writer 呼叫收尾
-    private var finalizeStarted = false
+    var stopping = false
+    var stopPoint: CMTime?                     // 停止點 E；PTS ≥ E 的 sample 一律不寫
+    var writersDrained = false                 // 已對目前與舊 writer 呼叫收尾
+    var finalizeStarted = false
     private var finalizeRunner: FinalizeRunner?         // 收尾執行器（spec §4.28.6）；beginFinalize 建立，只在 q 上讀寫
     private var queueLockFD: Int32?                    // 排隊鎖 <home>/finalize.queue.lock（spec R3x §3.22）；取得後持有到程序結束
-    private var discarding = false                     // 這次停止是 F2 捨棄（spec §4.42.3）：跳過收尾、移到垃圾桶
-    private var hadError = false
-    private var forced: (code: Int32, message: String)?
+    var discarding = false                     // 這次停止是 F2 捨棄（spec §4.42.3）：跳過收尾、移到垃圾桶
+    var hadError = false
+    var forced: (code: Int32, message: String)?
     private var timers: [DispatchSourceTimer] = []
-    private var levelsTimer: DispatchSourceTimer?
+    var levelsTimer: DispatchSourceTimer?
     private var signals: [DispatchSourceSignal] = []
-    private var deviceMonitor: AudioDeviceMonitor?
+    var deviceMonitor: AudioDeviceMonitor?
 
     // R2 控制（spec §3.9–§3.12）。除 micMutedForMicQ 外都只在 q 上讀寫。
-    private var controlEnabled = false                 // phase 轉 recording 後才接受控制
+    var controlEnabled = false                 // phase 轉 recording 後才接受控制
     private var applied: RecordControl                 // 已套用的控制狀態（與控制檔比差異）
     /// 暫停閘門（Core/Segments.swift）；由 SegmentScheduler 持有與更新，這裡唯讀
-    private var gate: PauseGate { scheduler.gate }
-    private var micMuted = false
+    var gate: PauseGate { scheduler.gate }
+    var micMuted = false
     private var markers: [Marker] = []
-    private var lastRecentLevelsWrite = -Double.infinity
+    var lastRecentLevelsWrite = -Double.infinity
     /// 麥克風靜音旗標給 micQ 的 sample 回呼讀（q 寫、micQ 讀，以鎖保護）。
     private let muteLock = NSLock()
     private var micMutedForMicQ = false
@@ -122,6 +133,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         self.filter = SCContentFilter(desktopIndependentWindow: window)
         self.scale = Double(filter.pointPixelScale)
         self.curSize = evenPixelSize(points: window.frame.size, scale: Double(filter.pointPixelScale))
+        self.windowSize = curSize
         manifest = Manifest(schemaVersion: 1, segmentSeconds: segmentSeconds, segments: [],
                             frameStatus: FrameStatusCounts(complete: 0, idle: 0, blank: 0, suspended: 0, started: 0, stopped: 0),
                             blackIntervals: [], levels: AudioLevels(windowSeconds: 0.5, system: [], mic: []),
@@ -143,13 +155,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         super.init()
     }
 
-    private var log: Logger { ctx.log }
-    private func now() -> Double { hostSeconds() - t0 }
-    private var manifestURL: URL { ctx.tracksDir.appendingPathComponent("manifest.json") }
-    private var metaURL: URL { ctx.tracksDir.appendingPathComponent("record.meta.json") }
+    var log: Logger { ctx.log }
+    func now() -> Double { hostSeconds() - t0 }
+    var manifestURL: URL { ctx.tracksDir.appendingPathComponent("manifest.json") }
+    var metaURL: URL { ctx.tracksDir.appendingPathComponent("record.meta.json") }
     private var markersURL: URL { ctx.tracksDir.appendingPathComponent("markers.json") }
     /// <home>/record.discard.json（spec §3.15）
-    private var discardURL: URL { ctx.home.appendingPathComponent("record.discard.json") }
+    var discardURL: URL { ctx.home.appendingPathComponent("record.discard.json") }
 
     // MARK: - 開始
 
@@ -170,10 +182,13 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         // 上一場殘留的捨棄請求不得帶進這一場（spec §4.42.4）
         try? FileManager.default.removeItem(at: discardURL)
 
-        // 畫布＝當下會議視窗的像素大小（D8）
+        // 畫布＝開錄當下會議視窗的偶數像素大小（D8），整場鎖定（meeting-speed spec §4.4.1）：之後每段都以這個尺寸開檔，
+        // 視窗縮放時內容等比縮放進同一張畫布（preservesAspectRatio，§4.4.2），finalize 才能走 copy 串接。
+        // 擷取幀率維持 1/60、不設尺寸上限（使用者 2026-10-22 對 §4.4.13 的決定）。
         cfg.width = curSize.width
         cfg.height = curSize.height
         cfg.scalesToFit = true
+        cfg.preservesAspectRatio = true
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         cfg.showsCursor = true
@@ -184,6 +199,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         cfg.captureMicrophone = true
         cfg.microphoneCaptureDeviceID = nil
         cfg.excludesCurrentProcessAudio = true
+        meta.canvasLock = CanvasLock(width: curSize.width, height: curSize.height)
         meta.config = StreamConfigSnapshot(
             filter: "desktopIndependentWindow", onScreenWindowsOnly: false, scalesToFit: cfg.scalesToFit,
             minimumFrameInterval: "\(cfg.minimumFrameInterval.value)/\(cfg.minimumFrameInterval.timescale)",
@@ -198,12 +214,21 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
 
         // writer 在第一個 sample 到達時才建（design §7.2），所以 startCapture 失敗不會留下任何 seg-*.mov。
         // 第一次失敗：記 log、丟掉這條 stream、等 startCaptureRetryDelaySeconds、以同一組 filter 與設定重建後重試一次（§7.6）。
+        // startCapture 失敗時記錯誤的 domain、code 與當下的輸入／輸出裝置（meeting-speed spec §4.10.2）
+        func logStartCaptureError(_ error: Error) {
+            let e = error as NSError
+            let d = currentDevices()
+            let input = d.input.map { "\($0.name)／\($0.transport)" } ?? "（無）"
+            let output = d.output.map { "\($0.name)／\($0.transport)" } ?? "（無）"
+            log.line("⚠ startCapture 錯誤：domain \(e.domain)、code \(e.code)；輸入：\(input)；輸出：\(output)")
+        }
         stream = makeStream()
         t0 = hostSeconds()
         do {
             try await stream.startCapture()
         } catch {
             log.line("⚠ startCapture 第一次失敗（\(error.localizedDescription)），\(Int(startCaptureRetryDelaySeconds)) 秒後重試")
+            logStartCaptureError(error)
             try? await stream.stopCapture()
             try? await Task.sleep(nanoseconds: UInt64(startCaptureRetryDelaySeconds * 1_000_000_000))
             stream = makeStream()
@@ -212,6 +237,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
                 try await stream.startCapture()
                 log.line("● startCapture 重試成功")
             } catch {
+                logStartCaptureError(error)
                 try? FileManager.default.removeItem(at: ctx.pidURL)
                 fail(code: 5, "startCapture 失敗：\(error.localizedDescription)")
             }
@@ -358,17 +384,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
     }
 
-    /// 音訊緩衝的結束點＝PTS＋duration（duration 無效時以 frame 數／取樣率算）。
-    private func audioEnd(_ sb: CMSampleBuffer, pts: CMTime, format: AudioFormat?) -> CMTime {
-        let d = CMSampleBufferGetDuration(sb)
-        if d.isValid, d.seconds > 0 { return CMTimeAdd(pts, d) }
-        let n = CMSampleBufferGetNumSamples(sb)
-        if let rate = format?.sampleRate, rate > 0, n > 0 {
-            return CMTimeAdd(pts, CMTime(value: CMTimeValue(n), timescale: CMTimeScale(rate)))
-        }
-        return pts
-    }
-
     private func onScreen(t: Double, status st: FrameStatusKind?, ratio: Double?) {
         if let st {
             switch st {
@@ -386,27 +401,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         if let ratio, detectorFeed(paused: gate.paused, micMuted: micMuted).black, black.feed(t: t, nonBlackRatio: ratio) {
             warn(.black, "會議視窗畫面已連續 5 秒全黑：確認會議畫面是否正常（錄製照常進行）")
         }
-    }
-
-    /// 回傳本緩衝的格式是否與該路上一個緩衝不同（design §7.5）。
-    @discardableResult
-    private func onAudio(_ src: AudioSource, t: Double, format: AudioFormat?, dbfs: Double?) -> Bool {
-        var changed = false
-        if let format {
-            if let last = lastFormat[src], last != format {
-                changed = true
-                meta.audioFormatEvents.append(AudioFormatEvent(t: round3(t), source: src, from: last, to: format))
-                writeMeta()
-                let who = src == .system ? "系統聲音" : "麥克風"
-                warn(.audioFormatChange,
-                     "\(who)的音訊格式改為 \(Int(format.sampleRate / 1000)) kHz \(format.channels) 聲道（常見於藍牙耳機切換）")
-            }
-            lastFormat[src] = format
-        }
-        if let dbfs {      // 讀不懂的格式不當成 -∞
-            if src == .system { sysPeak.feed(t: t, dbfs: dbfs) } else { micPeak.feed(t: t, dbfs: dbfs) }
-        }
-        return changed
     }
 
     // MARK: - 段落（只在 q 上呼叫；design §7.2、R3-D10）
@@ -468,25 +462,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         if track == .video, updatesLastFrame { lastFrame = sb }
     }
 
-    /// 非 sample 事件（prev 逾時、writer 失敗、繼續、輸出裝置變更）：交給排程器，執行回傳的收段動作。
-    private func dispatch(_ e: SchedulerEvent) {
-        let prevBefore = scheduler.prev
-        for action in scheduler.handle(e) {
-            switch action {
-            case let .finish(n): finishScheduled(n)
-            case let .cancel(n): closeAtCut(n, at: maxEnd.isValid ? maxEnd : nil, keepAsPrev: false)
-            case .open, .write, .drop: break       // 非 sample 事件不開段、不寫入（spec §3.20）
-            }
-        }
-        armPrevTimeout(since: prevBefore)
-    }
-
-    /// 排程器換上新的 prev 時，1 秒後送 prevTimeout（R2 的 1 秒收尾；prev 已被收掉時排程器回 []）。
-    private func armPrevTimeout(since before: Int?) {
-        guard let p = scheduler.prev, p != before else { return }
-        q.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.dispatch(.prevTimeout(segment: p)) }
-    }
-
     /// 目前段的 writer（心跳用）；writer 失敗、暫停、停止後為 nil。
     private var cur: SegmentWriter? { scheduler.current.flatMap { writers[$0] } }
 
@@ -502,10 +477,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         ingest(copy, track: .video, start: pts, end: pts, formatChangedOn: nil, updatesLastFrame: false)
     }
 
-    private func write(_ sb: CMSampleBuffer, track: SegmentTrack, to seg: SegmentWriter) {
-        if seg.append(sb, to: track) == .failed { writerFailed(seg, seg.error) }
-    }
-
     /// 執行排程器的 open：原本的目前段（排程器已轉成 prev）記收尾點＝新段起點，再建新段 writer。
     private func startNewSegment(index n: Int, boundary bSeconds: Double, reason: SwitchReason, oldCurrent old: Int?,
                                  trigger: SegmentTrack, triggerStart: CMTime) {
@@ -519,17 +490,14 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
             }
         }
 
-        // 尺寸：換段當下同步讀會議視窗大小，經 nextSegmentSize 決定（讀不到沿用上一段）；
-        // 與上一段不同就 updateConfiguration（不等完成）。第一段沿用開錄時的視窗尺寸（design §7.1、spec §4.3.6）。
-        let size = reason == .first ? curSize
-            : nextSegmentSize(windowPoints: windowPointSize(window.windowID), scale: scale, previous: curSize)
-        if size != curSize {
-            log.line("● 視窗尺寸改變：\(curSize.width)×\(curSize.height) → \(size.width)×\(size.height) px（本段起生效）")
-            curSize = size
-            cfg.width = size.width
-            cfg.height = size.height
-            stream.updateConfiguration(cfg) { [weak self] err in
-                if let err { self?.log.line("⚠ updateConfiguration 失敗：\(err.localizedDescription)") }
+        // 尺寸：換段當下同步讀會議視窗大小，經 nextSegmentSize 算出（讀不到沿用上一次讀到的；design §7.1、spec §4.3.6）。
+        // 畫布鎖定（meeting-speed spec §4.4.1）：每段都以開錄時的 curSize 開檔，視窗尺寸改變只寫一行 log，
+        // 不改 SCStreamConfiguration 的寬高（內容由 preservesAspectRatio 等比縮放進同一張畫布）。
+        if reason != .first {
+            let size = nextSegmentSize(windowPoints: windowPointSize(window.windowID), scale: scale, previous: windowSize)
+            if size != windowSize {
+                log.line("● 視窗尺寸改變：\(windowSize.width)×\(windowSize.height) → \(size.width)×\(size.height)（畫布維持開錄時的 \(curSize.width)×\(curSize.height)，內容等比縮放）")
+                windowSize = size
             }
         }
 
@@ -551,191 +519,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
     }
 
-    /// 排程器的邊界（Double 秒）還原成精確的 CMTime：依換段原因取對應的 PTS，與排程器的值一致才用，否則以秒數換算。
-    private func boundaryTime(_ seconds: Double, reason: SwitchReason, triggerStart start: CMTime) -> CMTime {
-        let candidate: CMTime
-        switch reason {
-        case .periodic:
-            candidate = nextBoundary
-        case .first, .writerFailure, .resume:
-            candidate = lastSegmentStart.isValid && CMTimeCompare(start, lastSegmentStart) < 0 ? lastSegmentStart : start
-        case .formatChange, .outputDeviceChange:
-            candidate = start
-        }
-        if candidate.isValid, abs(candidate.seconds - seconds) < 1e-6 { return candidate }
-        log.line("⚠ 換段邊界對不上 sample 時鐘（\(String(format: "%.6f", seconds)) 秒），以秒數換算")
-        return CMTime(seconds: seconds, preferredTimescale: start.isValid ? start.timescale : 1_000_000_000)
-    }
-
-    /// 建 writer、startWriting、startSession；失敗時依〈writer 失敗〉處理並回 nil。
-    private func openSegment(index: Int, start b: CMTime, requestedAt: Double, replacement: Bool) -> SegmentWriter? {
-        let name = segmentFileName(index: index)
-        let size = curSize
-        manifest.segments.append(SegmentRecord(file: name, requestedAt: requestedAt, startedAt: round3(b.seconds - t0),
-                                               finishedAt: nil, width: size.width, height: size.height, audioDuration: nil))
-        segRow[index] = manifest.segments.count - 1
-        writeManifest()
-        let opened = replacement ? hostSeconds() : nil
-        let seg: SegmentWriter
-        do {
-            seg = try SegmentWriter(directory: ctx.tracksDir, index: index, start: b, size: size, replacementOpenedAt: opened)
-        } catch {
-            openFailed(name, error, index: index, replacement: replacement)
-            return nil
-        }
-        guard seg.begin() else {
-            seg.failureReported = true
-            openFailed(name, seg.error, index: index, replacement: replacement)
-            return nil
-        }
-        log.line("● 開段 \(name)（\(size.width)×\(size.height) px、起點 \(String(format: "%.3f", b.seconds - t0)) 秒）")
-        return seg
-    }
-
-    /// 開檔失敗：告訴排程器這段沒了（下一個 sample 以 writerFailure 開新段）；換上的新段又開不了就優雅停止。
-    private func openFailed(_ name: String, _ error: Error?, index: Int, replacement: Bool) {
-        hadError = true
-        let why = error?.localizedDescription ?? "未知錯誤"
-        log.line("✗ \(name) 寫檔失敗：\(why)")
-        warn(.segmentWriteFailed, "\(name) 寫檔失敗（開檔）：\(why)；檔案保留")
-        dispatch(.writerFailed(segment: index))
-        if replacement { stopForRepeatedFailure() }
-    }
-
-    /// 段落 writer 失敗（append 回 false、finishWriting 結果 failed、收尾逾時）：記告警、保留檔案；
-    /// 目前的段落失敗就以下一個 sample 提前換段；10 秒內又失敗就優雅停止（design §7.2〈writer 失敗〉）。
-    /// 停止中目前段失敗不換段（R2 行為），writer 留到停止收尾時再處理。
-    private func writerFailed(_ seg: SegmentWriter, _ error: Error?) {
-        guard !seg.failureReported else { return }
-        seg.failureReported = true
-        hadError = true
-        let why = error?.localizedDescription ?? "未知錯誤"
-        log.line("✗ \(seg.file) 寫檔失敗：\(why)")
-        let n = seg.index
-        let tracked = writers[n] === seg
-        if tracked, scheduler.prev == n {
-            writers[n] = nil
-            segEnd[n] = nil
-            dispatch(.writerFailed(segment: n))
-        }
-        if tracked, scheduler.current == n, !stopping {
-            writers[n] = nil
-            if let opened = seg.replacementOpenedAt, hostSeconds() - opened < 10 {
-                warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留")
-                dispatch(.writerFailed(segment: n))
-                stopForRepeatedFailure()
-            } else {
-                warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留，已換新段繼續錄")
-                dispatch(.writerFailed(segment: n))
-            }
-        } else {
-            warn(.segmentWriteFailed, "\(seg.file) 寫檔失敗：\(why)；檔案保留")
-        }
-    }
-
-    private func stopForRepeatedFailure() {
-        forced = forced ?? (5, "段落連續寫檔失敗，已停止並收尾；已落盤段落保留")
-        requestStop()
-    }
-
-    /// 排程器的 finish（prev 逾時、三路都過邊界、換段時收掉更早的 prev、暫停、停止）：在記下的收尾點收尾。
-    private func finishScheduled(_ n: Int) {
-        guard let w = writers[n] else { return }        // 已失敗或已捨棄的段落：排程器的動作不再有對象
-        guard let end = segEnd[n] else {
-            closeAtCut(n, at: maxEnd.isValid ? maxEnd : nil, keepAsPrev: false)
-            return
-        }
-        writers[n] = nil
-        segEnd[n] = nil
-        finishSegment(w, at: end)
-    }
-
-    /// 在停止點 E 處理一段（暫停把目前段轉 prev、停止收掉目前段；R2 的實體檢查）：
-    /// writer 已失敗 → 記失敗；E 晚於段起點且寫過 sample → 收尾於 E（keepAsPrev 時改為記下 E、留給排程器當 prev）；
-    /// 否則段落沒有內容 → cancelWriting 刪檔並從 manifest 移除。
-    private func closeAtCut(_ n: Int, at e: CMTime?, keepAsPrev: Bool) {
-        guard let w = writers[n] else { return }
-        if w.hasFailed {
-            writers[n] = nil
-            segEnd[n] = nil
-            writerFailed(w, w.error)
-        } else if let e, CMTimeCompare(e, w.start) > 0, w.appendedTotal > 0 {
-            if keepAsPrev {
-                segEnd[n] = e
-            } else {
-                writers[n] = nil
-                segEnd[n] = nil
-                finishSegment(w, at: e)
-            }
-        } else {
-            writers[n] = nil
-            segEnd[n] = nil
-            w.cancel()
-            if let row = segRow[w.index], row == manifest.segments.count - 1 {
-                manifest.segments.removeLast()
-                segRow[w.index] = nil
-            }
-            log.line("● \(w.file) 沒有內容，捨棄")
-        }
-    }
-
-    /// endSession → markAsFinished → finishWriting；完成回呼回 q 記 finishedAt 或失敗。
-    private func finishSegment(_ seg: SegmentWriter, at end: CMTime) {
-        closing[seg.index] = seg
-        seg.finish(at: end) { [weak self] ok, err in
-            guard let self else { return }
-            self.q.async { self.segmentFinished(seg, ok: ok, error: err) }
-        }
-    }
-
-    private func segmentFinished(_ seg: SegmentWriter, ok: Bool, error: Error?) {
-        guard closing.removeValue(forKey: seg.index) != nil else { return }     // 收尾逾時已處理過
-        if ok {
-            if let row = segRow[seg.index] { manifest.segments[row].finishedAt = round3(now()) }
-            finishedSegments += 1
-            manifest.blackIntervals = roundedBlack()
-            writeManifest()
-            let n = finishedSegments
-            status.update { $0.segments = n }
-            log.line("✓ \(seg.file) 收尾（\(seg.size.width)×\(seg.size.height)；\(seg.dropSummary)）")
-        } else {
-            writerFailed(seg, error)
-        }
-        checkStopDone()
-    }
-
-    // MARK: - 監看（計時）
-
-    /// 每 0.5 秒由主機時鐘收斂一次時段；沒有緩衝的時段為 -∞（寫 null），再餵靜音偵測。
-    /// 平時延後 0.3 秒收斂（音訊緩衝送達比 PTS 晚幾十毫秒，太早收斂會把有聲音的時段誤記成空的）；停止時收到底。
-    private func closeLevels(final: Bool = false) {
-        let t = final ? now() : now() - 0.3
-        let feed = detectorFeed(paused: gate.paused, micMuted: micMuted)
-        for p in sysPeak.close(upTo: t) {
-            manifest.levels.system.append(round1OrNil(p))
-            if feed.systemSilence, sysSilence.feed(t: Double(manifest.levels.system.count) * 0.5, dbfs: p) {
-                warn(.silenceSystem, "系統聲音已連續 15 秒幾乎沒有聲音（低於 -60 dBFS）：檢查會議 app 的輸出與音量")
-            }
-        }
-        for p in micPeak.close(upTo: t) {
-            manifest.levels.mic.append(round1OrNil(p))
-            if feed.micSilence, micSilence.feed(t: Double(manifest.levels.mic.count) * 0.5, dbfs: p) {
-                warn(.silenceMic, "麥克風已連續 15 秒幾乎沒有聲音（低於 -60 dBFS）：檢查麥克風是否被拔掉或靜音")
-            }
-        }
-        if !final { updateRecentLevels() }
-    }
-
-    /// 收音指示（spec §3.10）：各路最後 6 個 0.5 秒時段的最大值；靜音中 mic 為 null；暫停中沒有此鍵；每秒最多寫一次。
-    private func updateRecentLevels() {
-        guard controlEnabled, !stopping, !gate.paused else { return }
-        let t = now()
-        guard t - lastRecentLevelsWrite >= 1.0 else { return }
-        lastRecentLevelsWrite = t
-        let sys = recentPeak(manifest.levels.system, count: 6)
-        let mic = micMuted ? nil : recentPeak(manifest.levels.mic, count: 6)
-        status.update { $0.recentLevels = RecentLevels(windowSeconds: 3, system: sys, mic: mic) }
-    }
+    // MARK: - 監看（計時；音量時段、磁碟與告警在 RecordingSession+Monitor.swift）
 
     /// 暫停心跳（spec §4.26.6）：只在暫停中重寫 record.status.json，只有 updatedAt 改變（鍵集合不變）。
     private func pausedHeartbeat() {
@@ -762,19 +546,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
                 if let err { self?.log.line("⚠ 換麥克風裝置失敗：\(err.localizedDescription)") }
             }
         }
-    }
-
-    private func checkDisk() {
-        guard let avail = PreflightRunner.availableBytes(ctx.session), avail < diskLowBytes else { return }
-        warn(.diskLow, "磁碟可用空間低於 2 GB，已自動停止並收尾")
-        forced = forced ?? (5, "磁碟可用空間低於 2 GB（剩 \(String(format: "%.2f", Double(avail) / 1e9)) GB），已自動停止並收尾；段落保留")
-        requestStop()
-    }
-
-    private func warn(_ kind: WarningKind, _ message: String) {
-        let w = RecordWarning(t: round3(now()), kind: kind, message: message)
-        log.line("⚠ \(message)")
-        status.update { $0.warnings.append(w) }
     }
 
     // MARK: - R2 控制（只在 q 上呼叫；spec §4.16.4、§4.17.2、§4.18.2、§4.18.3、§4.19.2）
@@ -904,7 +675,7 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
     /// 3. 收尾目前與所有舊 writer（各最多 10 秒）；4. finalize。
     /// 已在停止中時：收尾中（phase=finalizing）再收到停止訊號＝取消收尾（spec §4.28.6、§4.41.6）；
     /// 收尾前的停止階段與內部來源（磁碟、串流、寫檔失敗）的重複呼叫則略過。
-    private func requestStop(fromSignal: Bool = false) {
+    func requestStop(fromSignal: Bool = false) {
         if stopping {
             if fromSignal, let runner = finalizeRunner {
                 log.line("● 收尾中再收到停止訊號：取消收尾")
@@ -954,121 +725,9 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
     }
 
-    private func drainWriters() {
-        guard !writersDrained else { return }
-        writersDrained = true
-        // 排程器的 stop：先 finish prev，再 finish／cancel 目前段。目前段照 R2 的實體檢查在停止點 E 處理：
-        // 已失敗 → 記失敗；E 不晚於段起點或沒寫進任何 sample → 捨棄（cancelWriting 會刪掉檔），不當成失敗；否則收尾於 E。
-        let e = stopPoint ?? .zero
-        let c = scheduler.current
-        for action in scheduler.handle(.stop) {
-            switch action {
-            case let .finish(n), let .cancel(n):
-                if n == c { closeAtCut(n, at: e, keepAsPrev: false) } else { finishScheduled(n) }
-            case .open, .write, .drop:
-                break
-            }
-        }
-        // 防禦：排程器已不再指向、但還沒收掉的 writer（正常流程不會有）一律在記下的收尾點或 E 處理
-        for n in writers.keys.sorted() { closeAtCut(n, at: segEnd[n] ?? e, keepAsPrev: false) }
-        writeManifest()
-        // 收尾逾時：各 writer 最多 10 秒，逾時視為寫檔失敗（段落保留）
-        q.asyncAfter(deadline: .now() + 10) { [weak self] in
-            guard let self, !self.closing.isEmpty else { return }
-            for seg in self.closing.values.sorted(by: { $0.index < $1.index }) {
-                self.closing[seg.index] = nil
-                self.writerFailed(seg, NSError(domain: "MeetingRecorder", code: 2,
-                                               userInfo: [NSLocalizedDescriptionKey: "收尾逾時（10 秒）"]))
-            }
-            self.checkStopDone()
-        }
-        checkStopDone()
-    }
+    // MARK: - 收尾（收掉 writer 與 F2 捨棄在 RecordingSession+Stop.swift）
 
-    /// 停止中、所有 writer 都到終態（completed／failed／逾時）才進 finalize。
-    private func checkStopDone() {
-        guard stopping, writersDrained, closing.isEmpty, !finalizeStarted else { return }
-        finalizeStarted = true
-        if discarding {
-            finishDiscard()
-        } else {
-            beginFinalize()
-        }
-    }
-
-    // MARK: - F2 捨棄（spec §4.42.3、§4.42.4）
-
-    /// 讀 record.discard.json 後刪掉（讀後刪，§3.15）；有效（discardRequestValid）才回 true。只在 q 上呼叫。
-    private func consumeDiscardRequest() -> Bool {
-        guard FileManager.default.fileExists(atPath: discardURL.path) else { return false }
-        let request = (try? Data(contentsOf: discardURL)).flatMap { try? JSONDecoder().decode(DiscardRequest.self, from: $0) }
-        try? FileManager.default.removeItem(at: discardURL)
-        if discardRequestValid(request, runId: ctx.runId, now: Date()) {
-            log.line("● 捨棄請求有效：停止錄製、跳過收尾，錄音資料夾移到垃圾桶")
-            return true
-        }
-        log.line("● record.discard.json 無效（runId 不符、過期或讀不懂），照一般停止收尾")
-        return false
-    }
-
-    /// 段落都已收掉之後：不啟動收尾子程序，以 trashItem 把 <場次>/錄音/ 移到垃圾桶；
-    /// <場次> 只剩 meeting.json（與 .DS_Store）時再把 <場次> 移到垃圾桶，使用者自己放的其他檔不碰（§7 疑慮 51）。
-    /// 從不硬刪。成功 → done／0／discarded=true；錄音/ 移不動 → failed／5、檔案原地保留。
-    private func finishDiscard() {
-        levelsTimer?.cancel()
-        closeLevels(final: true)
-        deviceMonitor?.stop()
-        lastFrame = nil
-        manifest.blackIntervals = roundedBlack()
-        writeManifest()
-        writeMeta()
-        let fm = FileManager.default
-        var trashed: NSURL?
-        do {
-            try fm.trashItem(at: ctx.recordingDir, resultingItemURL: &trashed)
-        } catch {
-            let message = "捨棄失敗：錄音資料夾移不到垃圾桶（\(error.localizedDescription)），檔案原地保留：\(ctx.recordingDir.path)"
-            log.line("✗ \(message)")
-            status.update {
-                $0.phase = .failed
-                $0.code = 5
-                $0.message = message
-            }
-            try? fm.removeItem(at: ctx.pidURL)
-            Notifier.post(title: "捨棄這次錄製失敗", body: "錄音資料夾移不到垃圾桶，檔案原地保留",
-                          identifier: completionNotificationID(runId: ctx.runId))
-            exit(5)
-        }
-        log.line("✓ 錄音資料夾已移到垃圾桶：\(trashed?.path ?? "（系統沒有回報位置）")")
-        let left = (try? fm.contentsOfDirectory(atPath: ctx.session.path)) ?? []
-        if left.contains("meeting.json"), Set(left).isSubset(of: ["meeting.json", ".DS_Store"]) {
-            var sessionTrashed: NSURL?
-            do {
-                try fm.trashItem(at: ctx.session, resultingItemURL: &sessionTrashed)
-                log.line("✓ 場次資料夾只剩 meeting.json，一併移到垃圾桶")
-            } catch {
-                // 錄音/ 已進垃圾桶，捨棄本身已完成；場次資料夾留在原地
-                log.line("⚠ 場次資料夾移不到垃圾桶（\(error.localizedDescription)），留在原地")
-            }
-        }
-        status.update {
-            $0.phase = .done
-            $0.code = 0
-            $0.message = "已捨棄，錄音已移到垃圾桶"
-            $0.discarded = true
-        }
-        try? fm.removeItem(at: ctx.pidURL)
-        log.line("✓ 已捨棄這次錄製（沒有收尾、沒有成品）")
-        Notifier.post(title: "已捨棄這次錄製", body: "錄音資料夾已移到垃圾桶，可從垃圾桶復原。",
-                      identifier: completionNotificationID(runId: ctx.runId))
-        exit(0)
-    }
-
-    private func roundedBlack() -> [BlackInterval] {
-        black.intervals.map { BlackInterval(start: round3($0.start), end: $0.end.map(round3)) }
-    }
-
-    private func beginFinalize() {
+    func beginFinalize() {
         levelsTimer?.cancel()
         closeLevels(final: true)
         deviceMonitor?.stop()
@@ -1134,6 +793,8 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
         // 第 8 步：收尾中（含排隊中）的停止訊號照 §4.28.6 轉成 runner.cancel()
         let runner = FinalizeRunner(recordedSeconds: recordedSecondsAtStop(), log: log)
+        // 音訊先出（meeting-speed spec §4.2.8）：收尾印出「音訊就緒：」那一行時，狀態檔 audioReady 設 true（phase 維持 finalizing）
+        runner.onAudioReady = { [weak self] in self?.status.update { $0.audioReady = true } }
         finalizeRunner = runner
         DispatchQueue.global(qos: .userInitiated).async {
             if background {
@@ -1186,15 +847,6 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         }
     }
 
-    /// 錄製長度（扣暫停）＝停止點 E 的錄製時鐘秒數 − 暫停總長（沒配對的暫停算到 E）；給 finalizeDeadline 用。
-    private func recordedSecondsAtStop() -> Double {
-        let end = (stopPoint ?? maxEnd).isValid ? (stopPoint ?? maxEnd).seconds - t0 : now()
-        let events = meta.pauseEvents ?? []
-        var paused = pausedTotal(events)
-        if let last = events.last, last.kind == .pause { paused += max(0, end - last.t) }
-        return max(0, end - paused)
-    }
-
     /// 以 FinalizeRunner spawn "<python3>" "<harness>/bin/_record_finalize.py" "<場次>"；輸出逐行寫進 record.log；
     /// 超過 finalizeDeadline 或被取消時由 FinalizeRunner 中止（spec §4.28.6）。
     private func runFinalize(_ runner: FinalizeRunner) -> FinalizeRunResult {
@@ -1245,20 +897,12 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
         log.line(outcome.code == 0 ? "✓ \(outcome.message)" : "✗ \(outcome.message)")
         // 試錄（--skip-finalize）不發完成通知：暫存場次不是使用者的會議（實機缺陷 F1）
         guard !ctx.skipFinalize else { exit(outcome.code) }
+        // 通知內文只用場次代號，不含場次名、路徑或結果訊息（meeting-speed spec §4.12.3；詳情在 record.log）
+        let label = sessionCodeLabel(startedAt: status.status.startedAt, runId: ctx.runId)
         Notifier.post(title: outcome.code == 0 ? "會議錄製完成" : "會議錄製結束（有錯誤）",
-                      body: outcome.code == 0 ? ctx.session.path : "\(outcome.message)\n\(ctx.session.path)",
+                      body: completionNotificationBody(ok: outcome.code == 0, label: label),
                       identifier: completionNotificationID(runId: ctx.runId))
         exit(outcome.code)
-    }
-
-    // MARK: - 落盤
-
-    private func writeManifest() {
-        do { try writeJSONAtomically(manifest, to: manifestURL) } catch { log.line("⚠ 寫 manifest.json 失敗：\(error.localizedDescription)") }
-    }
-
-    private func writeMeta() {
-        do { try writeJSONAtomically(meta, to: metaURL) } catch { log.line("⚠ 寫 record.meta.json 失敗：\(error.localizedDescription)") }
     }
 }
 
@@ -1266,13 +910,4 @@ final class RecordingSession: NSObject, SCStreamOutput, SCStreamDelegate, @unche
 func isUserStoppedStream(_ error: Error) -> Bool {
     let e = error as NSError
     return e.domain == SCStreamErrorDomain && e.code == SCStreamError.Code.userStopped.rawValue
-}
-
-/// SegmentWriter 的軌道 → SegmentScheduler 的軌道（同樣三路）。
-private func schedulerTrack(_ t: SegmentTrack) -> SchedulerTrack {
-    switch t {
-    case .video: return .video
-    case .system: return .system
-    case .mic: return .mic
-    }
 }

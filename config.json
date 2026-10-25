@@ -10,6 +10,10 @@
     "language": "zh",
     "fallbackEngine": "openai-whisper",
     "fallbackModel": "medium",
+    "incremental": {
+      "enabled": true,
+      "note": "錄製中先轉錄已收尾的段落（背景低優先權、丟幀就暫停到停止），停止後只補最後一段再接起來（meeting-speed spec §3.6、§4.11）。設 false 改回停止後整檔轉錄。"
+    },
     "note": "zh 場次用 Breeze-ASR-25（MediaTek，台灣華語＋中英混雜，原生繁體輸出）；其他語言或 Breeze 載入失敗時退回 whisper-large-v3。MH_ASR_MODEL 可覆寫。"
   },
   "ocr": {
@@ -31,7 +35,7 @@
     "venv": "~/.meeting-harness/diarize-venv",
     "device": "auto",
     "minOverlapRatio": 0.3,
-    "note": "pyannote.audio 4 跑 Apple Silicon GPU（MPS），不碰 ANE。講者數由 bin/_profile.py 依型態給（有 attendees/expectedSpeakers 就鎖 num_speakers，否則 min/max）。首次需在 HuggingFace 接受 gated 條款並有 token（HF_TOKEN 或 ~/.meeting-harness/hf-token）。輸出 錄音/diarization.json + embeddings.json；逐字段與講者段重疊低於 minOverlapRatio 標 SPEAKER_?。MH_DIARIZE_DEVICE 可覆寫裝置。"
+    "note": "pyannote.audio 4 跑 Apple Silicon GPU（MPS），不碰 ANE。講者數由 bin/_profile.py 依型態給（有 attendees/expectedSpeakers 就鎖 num_speakers，否則 min/max）。首次需在 HuggingFace 接受 gated 條款並有 token（HF_TOKEN 或 ~/.meeting-harness/hf-token）。輸出 錄音/diarization.json；語者向量只寫進 diarize.sh 用 mktemp 建的暫存檔，聲紋比對完（含失敗）就刪，不落場次資料夾。逐字段與講者段重疊低於 minOverlapRatio 標 SPEAKER_?。MH_DIARIZE_DEVICE 可覆寫裝置。"
   },
   "llm": {
     "engine": "claude",
