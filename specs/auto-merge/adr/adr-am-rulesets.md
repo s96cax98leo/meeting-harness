@@ -49,7 +49,7 @@
 - 人能合併任何 PR，但每次略過都要在合併畫面明確勾選，並記在 rule insights；這等於把「人是最後一道關」寫成伺服器端事實。
 - 「經 PR 合併算不算 Restrict updates 的 update」（`research-code-contracts.md:121`，未能確認）：B 對 merger App 與 admin 都給 bypass，所以兩種答案下合併都能進行；答案只影響「沒有 bypass 的身分能不能合併」，在本 repo 沒有這種身分要合併。實測方式寫成可判定的驗收（spec §4.7）：
   - §4.7.11：admin 直接推 main 被拒，rule suite 同時有 A 的 `pull_request` 與 B 的 `update` 評估失敗（B 對 admin 只在經 PR 時放行、A 沒有 bypass）。
-  - §4.7.8：merger App 合 gate 為 failure 的測試 PR 被拒，擋下的是 C（stderr 含 `agent-merge-gate/decision`、rule suite 的 C 評估失敗、A 沒有失敗）。
+  - §4.7.8：merger App 的 token 直接呼叫 REST `PUT /repos/{owner}/{repo}/pulls/{n}/merge`（帶 head `sha`）合 gate 為 failure 的測試 PR，伺服器回 4xx、回應指出 required status check（`agent-merge-gate/decision`）沒有滿足、沒有提到 A 的規則，且試合前後 PR 都是 `OPEN`、試合前 `mergeStateStatus` 為 `BLOCKED`；merger 在 B 的 bypass 內、A 不要求核准，所以擋下的只能是 C。不用 `gh pr merge`，因為 gh 在 PR 為 `BLOCKED` 時先在 client 端擋下、不送請求。rule suite 的 C 評估失敗只當佐證。這一步打 merge 端點，hook 擋主 session 與 agent，由使用者在 Claude Code 以外的終端機執行。
   - §4.7.12：測試 PR 由 admin 經 PR bypass 合併（不得關閉），rule suite 結果是 `bypass`；B 的 `update` 評估結果原樣記入 g8-checklist，就是「經 PR 合併算不算 update」的答案。
   - §4.7.13：啟用 PR 在 code owner 核准前，admin 合併被拒（A 不能略過）。
 - 不採選項 A 的原因：照 D6 原案，本 epic 只能交付到「ruleset 已設、`enabled` 仍為 false」為止，G8 最後一步（經 PR 把 `enabled` 改成 true）在伺服器端做不到。

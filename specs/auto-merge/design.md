@@ -69,19 +69,21 @@ hook 這一層（`plugin/hooks/guard.py:411-447`）：`GH_CONFIG_DIR=<絕對路�
 - 主 session 用 publisher 身分開 PR（`GH_CONFIG_DIR=…/publisher python3 .claude/teams/tools/publish.py push …`，使用者當下同意）。
 - gate 判 hold／escalate → `agent-merge-gate/decision` 紅 → 使用者看過，改到 CODEOWNERS 路徑的先以 code owner 核准（PR 作者是 publisher App，使用者可以核准），再以 admin 身分在合併畫面 bypass ruleset C 合併（merge commit）。
 - 這條路徑在 D6 原案下不存在（`adr/adr-am-rulesets.md`〈背景〉）；使用者 2026-10-28 決定採三條 ruleset（E1），admin 只能在經 PR 合併時 bypass C，A（含 Code Owners 核准）不能略過。
-- 伺服器端效果的實測：直接推 main 被 A、B 同時擋（spec §4.7.11）；merger 合 gate 紅的 PR 被 C 擋（§4.7.8）；admin 經 PR bypass C 合併、順帶實測「經 PR 合併算不算 update」（§4.7.12）；Code Owners 核准不能被 admin 略過（§4.7.13）。
+- 伺服器端效果的實測：直接推 main 被 A、B 同時擋（spec §4.7.11）；merger 以 REST 合併端點試合 gate 紅的 PR 被 C 擋（§4.7.8；gh 的合併子指令在 client 端就先擋、不送請求，證明不了伺服器端）；admin 經 PR bypass C 合併、順帶實測「經 PR 合併算不算 update」（§4.7.12）；Code Owners 核准不能被 admin 略過（§4.7.13）。
 
 ## 6. 上線順序（runbook 的骨架，G8）
+
+各步對應的 spec 條號與實際執行順序見 spec §4.7 開頭的「執行順序」表（不照條號數字順序）。
 
 | 步 | 誰 | 內容 | 不可逆？ |
 |---|---|---|---|
 | 1 | 使用者 | 合併本 epic 的 PR（此時還沒有 ruleset；`enabled=false`） | 是（推送、合併） |
-| 2 | 使用者 | 建 gate、merger、publisher 三個 App，只安裝到本 repo；匯入私鑰；建 `gh-apps.json`；設 Actions vars／secret | 是（GitHub 設定） |
+| 2 | 使用者 | 建 gate、merger、publisher 三個 App，只安裝到本 repo；匯入私鑰；建 `gh-apps.json`；設 Actions vars／secret；Actions 不准建立或核准 PR（`ops-apps`，spec §4.7.2 讀回） | 是（GitHub 設定） |
 | 3 | 主 session（同意後） | `mint`／`gh api /installation/repositories` 讀回、hook 判定讀回（spec §4.7.1–§4.7.3） | 否（只讀＋本機） |
-| 4 | 使用者 | 確認沒有開著的 PR，建 ruleset A、B、C（E1）；Actions 不准建立或核准 PR | 是 |
+| 4 | 使用者 | 確認沒有開著的 PR，建 ruleset A、B、C（E1） | 是 |
 | 5 | 主 session（同意後）＋使用者 | 讀回 ruleset JSON 對照 spec §4.7.4；通過後使用者做探測推送（§4.7.11） | 讀回否；探測推送是（ruleset 設錯時會進公開 main） |
-| 6 | 主 session＋使用者 | 測試 PR（`ops-trial`，spec §4.7.5–§4.7.8）；merger 試合被拒後，使用者以 admin bypass 合併（§4.7.12，不得關閉） | 是（推送、開 PR、留言、合併） |
-| 7 | 主 session（同意後）＋使用者 | 開啟用 PR：`enabled: true`＋`specs/auto-merge/evidence/g8-checklist.md`；核准前 admin 合併應被拒（§4.7.13）；使用者以 code owner 核准、bypass C 合併 | 是 |
+| 6 | 主 session＋使用者 | 測試 PR（`ops-trial`，spec §4.7.5→§4.7.6→§4.7.7→§4.7.8）；使用者在 Claude Code 以外的終端機以 merger token 直接打 REST 合併端點試合被拒（§4.7.8；hook 擋主 session 與 agent）後，使用者以 admin bypass 合併（§4.7.12，不得關閉） | 是（推送、開 PR、留言、合併） |
+| 7 | 主 session（同意後）＋使用者 | 寫 `specs/auto-merge/evidence/g8-checklist.md`（§4.7.9，引用第 5、6 步的結果）；開啟用 PR：`enabled: true`＋g8-checklist（§4.7.10）；核准前 admin 合併應被拒（§4.7.13）；使用者以 code owner 核准、bypass C 合併 | 是 |
 | 8 | 使用者 | 本機主工作區 pull（合併後不自動 pull，信任模型 :200） | — |
 
 ## 7. 威脅與剩餘風險

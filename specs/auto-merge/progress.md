@@ -33,8 +33,8 @@
 ### 驗收時（verifier）
 - [ ] `tests/governance_once` 全綠（spec §4.8.6，`ops-enable` 之前）
 
-### deliver 之後（使用者執行，不可逆節點逐步同意）
-- [ ] `ops-apps`：三個 App、Keychain、`gh-apps.json`、Actions vars／secret、名稱清單複製
+### deliver 之後（使用者執行，不可逆節點逐步同意；順序照 spec §4.7 開頭「執行順序」表，不照條號）
+- [ ] `ops-apps`：三個 App、Keychain、`gh-apps.json`、Actions vars／secret、Actions 不准建立或核准 PR、名稱清單複製 → 讀回（§4.7.1 → §4.7.2 → §4.7.3）
 - [ ] `ops-rulesets`：確認沒有開著的 PR → ruleset A／B／C → 讀回（§4.7.4）→ 探測推送被拒（§4.7.11）
-- [ ] `ops-trial`：測試 PR、gate 輸入留言、本機 audit 對照、merger 試合被拒（§4.7.8）→ 使用者以 admin bypass 合併（§4.7.12，不關閉）
-- [ ] `ops-enable`：啟用 PR（`enabled: true`＋g8-checklist）→ 核准前合併被拒（§4.7.13）→ 使用者核准並合併 → 主工作區由使用者決定何時 pull
+- [ ] `ops-trial`：測試 PR（§4.7.5）→ gate log（§4.7.6）→ gate 輸入留言與本機 audit 對照（§4.7.7）→ merger 以 REST 試合被拒（§4.7.8，使用者在 Claude Code 以外的終端機執行）→ 使用者以 admin bypass 合併（§4.7.12，不關閉）
+- [ ] `ops-enable`：寫 g8-checklist（§4.7.9）→ 啟用 PR（`enabled: true`＋g8-checklist，§4.7.10）→ 核准前合併被拒（§4.7.13）→ 使用者核准並合併 → 主工作區由使用者決定何時 pull

@@ -41,14 +41,14 @@
 | 1 | `flow-merge` | code | `.claude/teams/methodology.json`、`.claude/workflows/sdlc-*.js`、`.claude/workflows/event-*.js`（`meeting-pipeline.js` 除外） | `red-gov` | G1、G3、G6 |
 | 1 | `runbook` | doc | `specs/auto-merge/runbook.md`（新） | `red-gov` | G4、G8 |
 | 2 | `ci` | code | `.github/workflows/ci.yml`（新）、`.github/CODEOWNERS`（新） | `red-gov`、`lint-fix`、`reqs-adapter`、`app-tools`、`rules-merge`、`flow-merge` | G2、G4 |
-| 後 | `ops-apps` | check | GitHub App 三個與安裝、Actions vars／secret（repo 外）；`~/.config/meeting-harness/`（repo 外）；`_tpm/runs/client-names.txt` | `ci`、`runbook` | G4、G6 |
-| 後 | `ops-rulesets` | check | GitHub ruleset A／B／C、Actions 的 PR 權限設定（repo 外）；§4.7.11 的探測推送（不落地，被拒後刪除本機的空 commit） | `ops-apps` | G4 |
+| 後 | `ops-apps` | check | GitHub App 三個與安裝、Actions vars／secret、Actions 的 workflow 權限（不准建立或核准 PR）（repo 外）；`~/.config/meeting-harness/`（repo 外）；`_tpm/runs/client-names.txt` | `ci`、`runbook` | G4、G6 |
+| 後 | `ops-rulesets` | check | GitHub ruleset A／B／C（repo 外）；§4.7.11 的探測推送（不落地，被拒後刪除本機的空 commit） | `ops-apps` | G4 |
 | 後 | `ops-trial` | check | 測試 PR 分支 `feature/auto-merge-trial` 與其 PR；`specs/auto-merge/evidence/trial-pr.md`（新，只在測試 PR 裡） | `ops-rulesets` | G2、G3、G4、G6、G8 |
 | 後 | `ops-enable` | decision | 啟用 PR 分支 `feature/auto-merge-enable`：`.claude/teams/guard.config.json`（只改 `enabled`）、`specs/auto-merge/evidence/g8-checklist.md`（新） | `ops-trial` | G4、G5、G8 |
 
 **檔案歸屬**：同一時間只有一個擁有者。`m-upgrade` 在 sdlc-build 之前一次寫完；之後 `rules.md`、`.claude/teams/README.md`、`CLAUDE.md` 歸 `rules-merge`，`methodology.json` 與 workflows 歸 `flow-merge`（`build.py` 會重寫全部 workflows，所以整組歸它）。`guard.config.json` 在 `m-upgrade` 之後只有 `ops-enable` 會再改（那時已在 main，走新分支＋PR＋CODEOWNERS）。`progress.md` 由主 session 維護，不屬任何子任務。
 
-**分層理由**：第 1 層六個互不相依的檔案群並行；`ci` 要在容器裡對整合後的分支跑 `tests/governance`（它涵蓋第 1 層全部產出），所以單獨一層。後四步由使用者在 deliver 之後執行（不可逆節點，intent §4.1 第 3 條）；`ops-rulesets` 的 §4.7.11 探測推送排在 §4.7.4 讀回之後，`ops-trial` 的 admin bypass 合併（§4.7.12）排在 merger 試合被拒（§4.7.8）之後。
+**分層理由**：第 1 層六個互不相依的檔案群並行；`ci` 要在容器裡對整合後的分支跑 `tests/governance`（它涵蓋第 1 層全部產出），所以單獨一層。後四步由使用者在 deliver 之後執行（不可逆節點，intent §4.1 第 3 條）；四步內部與彼此之間的條號執行順序照 spec §4.7 開頭的「執行順序」表（＝design §6），不照條號數字：§4.7.1 → §4.7.2 → §4.7.3 → §4.7.4 → §4.7.11 → §4.7.5 → §4.7.6 → §4.7.7 → §4.7.8 → §4.7.12 → §4.7.9 → §4.7.10 → §4.7.13。
 
 ## 2. 各子任務要點與完成條件（可機械判定）
 
@@ -66,7 +66,7 @@
      ```
      grep -oE 'governance(_once)?/test_[a-z0-9_]+\.py::test_[a-z0-9_]+' specs/auto-merge/spec.md | sort -u | while IFS= read -r x; do f="tests/${x%%::*}"; fn="${x##*::}"; grep -qE "def ${fn}\(" "$f" 2>/dev/null || echo "缺 $x"; done
      ```
-  2. `tests/governance/support.py` 提供 `guard_config_path()` 與 `flip-enabled <輸出檔>` 子指令（spec §4.2.8）；`grep -rl 'guard.config.json' tests/governance` 只列出 `support.py`；`grep -rn e72a9cb tests/governance` 恰好一行（`REAL_SPECS_BASE`）。
+  2. `tests/governance/support.py` 提供 `guard_config_path()`、`flip-enabled <輸出檔>` 子指令，以及常數 `GUARD_CONFIG_NAME`（守門設定檔名）與 `GUARD_CONFIG_REL`（`.claude/teams/` 下的相對路徑）（spec §4.2.8）。需要這個字串的測試一律 `from tests.governance.support import …` 取常數，不寫字面值，至少包括：`test_gate_adapter_integration.py`（§4.3.11，在暫存專案目錄寫守門設定給 `merge_gate.py` 讀）、`test_ci_static.py::test_codeowners`（§4.5.6，CODEOWNERS 的第一條是 `"/" + GUARD_CONFIG_REL`）、`test_rules_merge.py::test_main_session_no_direct_edit`（§4.6.6，規則句含檔名）。`grep -rl 'guard.config.json' tests/governance` 只列出 `support.py`；`grep -rn e72a9cb tests/governance` 恰好一行（`REAL_SPECS_BASE`）。
   3. 所有以 `e72a9cb` 為基準或斷言 `enabled` 為 false 的測試都在 `tests/governance_once/`（spec §4.1.3、§4.1.4、§4.1.7、§4.1.8 後半、§4.1.9、§4.1.11、§4.5.1）；`tests/governance_once/README.md` 寫明「只在 auto-merge epic 驗收時跑、CI 不跑、啟用後必紅」。兩個目錄都有 `__init__.py`。
   4. 測試只用標準庫＋`git`、`bash`、`openssl`、`node`（`check_workflows.mjs`）；`gh_app_token` 的測試以 `openssl genrsa` 在執行時產生測試金鑰，不 commit 任何金鑰檔；替身 `security`、替身 API（`http.server` 執行緒）、記錄參數的替身 `git` 放在 `tests/governance/` 內。
   5. `grep -rnE 'skip|expectedFailure' tests/governance tests/governance_once` 沒有輸出。
@@ -83,12 +83,18 @@
 - **app-tools**：`$PY -m unittest tests.governance.test_app_token tests.governance.test_scan_names -v` 全過；在本機 macOS 以測試金鑰手動跑一次 `openssl dgst -sha256 -sign /dev/stdin` 路徑（spec §7 第 3 點），結果寫進信封。
 - **rules-merge**：`$PY -m unittest tests.governance.test_rules_merge -v` 全過；`$PY -m unittest tests.governance_once.test_upgrade_once -v` 全過（其餘測試在 `m-upgrade` 後就已綠）；`$PY .claude/teams/tools/check_rules.py` 回 0。
 - **flow-merge**：`$PY -m unittest tests.governance.test_flow_merge -v` 全過；`$PY .claude/teams/tools/build.py --check` 回 0；`git diff --quiet e72a9cb HEAD -- .claude/workflows/meeting-pipeline.js`。
-- **runbook**：`$PY -m unittest tests.governance.test_runbook -v` 全過；ruleset 段照 `adr/adr-am-rulesets.md`〈決定〉的三條（E1），G8 段照 spec §4.7.4–§4.7.13 的順序；`grep -cE '待閘門 2|重新決定|推論' specs/auto-merge/runbook.md` 為 0；範例場次名只用「[Stand-up] 範例專案」，不寫任何 App ID、installation ID、token 的實際值。
+- **runbook**：`$PY -m unittest tests.governance.test_runbook -v` 全過；ruleset 段照 `adr/adr-am-rulesets.md`〈決定〉的三條（E1）；G8 段照 spec §4.7 開頭「執行順序」表（＝design §6 第 1–8 步）排，**不照條號數字順序**，每個 §4.7 條號在 runbook 第一次出現的位置要依序為 §4.7.1、§4.7.2、§4.7.3、§4.7.4、§4.7.11、§4.7.5、§4.7.6、§4.7.7、§4.7.8、§4.7.12、§4.7.9、§4.7.10、§4.7.13，下面這段回 0：
+
+  ```
+  $PY -c "import re,sys;t=open('specs/auto-merge/runbook.md',encoding='utf-8').read();o=['1','2','3','4','11','5','6','7','8','12','9','10','13'];p=[(m.start() if (m:=re.search('§4[.]7[.]'+x+'(?![0-9])',t)) else -1) for x in o];print(p);sys.exit(0 if -1 not in p and p==sorted(p) else 1)"
+  ```
+
+  §4.7.8 那一步寫明：由使用者在 Claude Code 以外的終端機執行（hook 擋主 session 與 agent 打合併端點），主 session 只做試合前後的讀回；`grep -cE '待閘門 2|重新決定|推論' specs/auto-merge/runbook.md` 為 0；範例場次名只用「[Stand-up] 範例專案」，不寫任何 App ID、installation ID、token 的實際值。
 - **ci**：`$PY -m unittest tests.governance.test_ci_static -v` 全過；§3 第 5 條容器指令連續 3 次回 0；`ci.yml` 的 `tests.record` 清單＝實測 3 次全綠的模組（從 `research-code-contracts.md:131` 的 17 個候選開始），在 `ci.yml` 註解寫實測日期與映像；`grep -c governance_once .github/workflows/ci.yml` 為 0；`uses:` 的 SHA 是 `actions/checkout`、`actions/setup-python` 官方 release tag 對到的 commit（信封附查詢指令）。
-- **ops-apps**：spec §4.7.1–§4.7.3 的指令輸出存進 run 目錄；`_tpm/runs/client-names.txt` 存在（只用 `test -s` 判斷）。
+- **ops-apps**：使用者建 App、設 Actions vars／secret，並在同一步把 Actions 的 workflow 權限設成不准建立或核准 PR（design §6 第 2 步）；spec §4.7.1–§4.7.3 的指令輸出存進 run 目錄（§4.7.2 的 `can_approve_pull_request_reviews` 為 false 由本子任務讀回）；`_tpm/runs/client-names.txt` 存在（只用 `test -s` 判斷）。
 - **ops-rulesets**：開工前 `gh pr list --repo $REPO --state open` 為空；spec §4.7.4 的讀回 JSON 存進 run 目錄；§4.7.4 全符合後（使用者當下同意）做 §4.7.11 的探測推送，推送 stderr、`git ls-remote` 前後值、rule suite 讀回存進 run 目錄。
-- **ops-trial**：spec §4.7.5–§4.7.8、§4.7.12 的證據（check run URL、log 摘錄、`merge-audit.jsonl` 對應行、merger 試合的 stderr、rule suite 讀回、`gh pr view` 讀回）存進 run 目錄；測試 PR 最後是 `MERGED`（不得關閉）。
-- **ops-enable**：spec §4.7.9、§4.7.10、§4.7.13；PR 由使用者核准並合併後，主 session 讀回 main 上守門設定的 `auto_merge.enabled` 為 true（只讀），並在 main 上跑一次 §3 第 2 條（`tests/governance` 應全綠）。
+- **ops-trial**：照 §4.7.5 → §4.7.6 → §4.7.7 → §4.7.8 → §4.7.12 的順序；證據（check run URL、log 摘錄、`merge-audit.jsonl` 對應行；§4.7.8 試合前後的 `gh pr view` 讀回（`state`、`mergeStateStatus`、`statusCheckRollup`、`files`）、REST 試合的 HTTP 狀態列與回應 body、`git ls-remote` 前後值、rule suite 讀回（有的話）；§4.7.12 的 `gh pr view` 讀回）存進 run 目錄；§4.7.8 的 REST 試合由使用者在 Claude Code 以外的終端機執行、結果由使用者貼回或存檔；測試 PR 最後是 `MERGED`（不得關閉）。
+- **ops-enable**：照 §4.7.9（寫 g8-checklist，引用 §4.7.4、§4.7.8、§4.7.11、§4.7.12）→ §4.7.10 → §4.7.13 的順序；PR 由使用者核准並合併後，主 session 讀回 main 上守門設定的 `auto_merge.enabled` 為 true（只讀），並在 main 上跑一次 §3 第 2 條（`tests/governance` 應全綠）。
 
 ## 3. 測試指令（integrator 每合併完一層在 `feature/auto-merge` 全量跑；verifier 同）
 
