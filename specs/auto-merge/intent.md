@@ -1,7 +1,7 @@
 # intent：auto-merge（PR 經 merge_gate 判定後由 dev-merge-steward 自動合併）
 
 - epic：`auto-merge`；分支 `feature/auto-merge`，worktree `.worktrees/auto-merge`，從 `origin/main` @ `e72a9cb` 開（PR #10 合併點）。
-- 狀態：**草稿（修正輪 1），待閘門 1 核准**。本輪依使用者 2026-10-28 在閘門 1 的決定（§5.1 D1–D4）與 skeptic 的六節判定修訂。核准後本檔不再改；要改就回報主 session。
+- 狀態：**草稿（修正輪 2），待閘門 1 核准**。修正輪 1 依使用者 2026-10-28 在閘門 1 的決定（§5.1 D1–D4）與 skeptic 的六節判定修訂；修正輪 2 寫入使用者同日的 D5–D7，並依 skeptic 複查修正 G8 驗收、引用與 gate 條件。核准後本檔不再改；要改就回報主 session。
 - 需求來源：使用者在對話裡口述（本 repo 沒有上層任務系統，`.claude/teams/rules.md` 專案規則「需求來源」）。原話與出處整理在 run 目錄的 `research-requirement.md` §2：
   - 2026-10-25：「你可以合併」→「調整hook」→「走auto_merge」，並在選項式提問中選「#9 先手動合，auto_merge 開新 epic (Recommended)」（`research-requirement.md:23-29`）。
   - 2026-10-28：「核准，開始跑 (Recommended)」，核准的是開跑 sdlc-plan，**不是閘門 1**（`research-requirement.md:30-31`）。`run.json` 五段當時都是 `pending`，開跑核准只在對話裡（`research-requirement.md:129`）。
@@ -9,7 +9,7 @@
 - 規範來源（只讀）：AgentWorkFlow `docs/自動合併信任模型.md`（下稱「信任模型」，205 行）與 `docs/adr-agent-auto-merge.md`（下稱「上游 ADR」）。升級基準釘在 AgentWorkFlow `23174f0`（2026-10-26，merge_gate 最近一次改動；`research-upstream.md:48-49`）。
 - 調研依據：run 目錄 `_tpm/runs/20261028-sdlc-auto-merge/` 的 `research-requirement.md`（136 行）、`research-specs-adr.md`（151 行）、`research-code-contracts.md`（152 行）、`research-upstream.md`（63 行）。run 目錄不在版控（`.gitignore:41`）。
 - `specs/_templates/intent.md` 不存在（`ls specs/` 只有 `auto-merge`、`meeting-record`、`meeting-speed`），本檔用 fallback 五節格式。
-- 本檔的 G1–G8（目標）、D-1–D-9（既有決策）、D1–D4（使用者閘門 1 決定）、C1–C8（衝突）、Q1–Q7（問題）只是本檔內引用，**不是任務編號**。
+- 本檔的 G1–G8（目標）、D-1–D-9（既有決策）、D1–D7（使用者閘門 1 決定）、C1–C8（衝突）、Q1–Q7（問題；Q1–Q4、Q6、Q7 已決，Q5 暫定）只是本檔內引用，**不是任務編號**。
 - 行號以 main @ `e72a9cb` 與 AgentWorkFlow @ `23174f0` 為準；引用 research-*.md 的行號已逐條以 `wc -l`、`grep -n` 重新核對。範例場次名一律用「[Stand-up] 範例專案」。
 
 ---
@@ -51,14 +51,14 @@
   - `rules.md` 的〈專案規則〉段（`rules.md:50-68`）與本地改寫過的規則逐條保留或明確修訂（`research-code-contracts.md:27`、`:52`）。
   - `sdlc-build.js` 本地修正「implementer 不改 progress.md」（D-8）要保留或經使用者核准後改掉（`research-specs-adr.md:54-56`、`:64-68`）。
   - `meeting-pipeline.js` 不被動到（`research-code-contracts.md:26`、`:60`）。
-  - 升級產出可審查的 diff，不是無聲整檔覆蓋。升級方式見 Q6。
+  - 升級產出可審查的 diff，不是無聲整檔覆蓋。升級方式見 D5。
 - **G2 GitHub-hosted ubuntu 上至少一個 Actions job 當 required check**（D2），在 public repo 上可持續跑綠，而且不需要客戶名稱清單離開本機（D-2）：
   - 只跑明確列出的子集：修好的 `bin/_lint.sh`，加上在 Linux 實測會綠的測試；`meeting.sh doctor`、Swift 測試、mlx 路徑、名稱掃描不進 CI。
   - **required check ≠ 專案 verify**：CI 綠不代表 `bash bin/_lint.sh && bash bin/meeting.sh doctor` 綠，merge 判定的驗證證據仍來自本機 verifier（D-3）。
   - **前置（在本 epic 範圍內）**：修 `bin/_lint.sh` 的兩個問題——`grep -nP`（`bin/_lint.sh:14`、`:16`）在 macOS BSD grep 上靜默失效，以及自身 `:15`、`:20` 的 `$f：` 寫法在 GNU grep 上會命中自己（C4）。
 - **G3 requirements adapter 能為每個要走 gate 的 PR 取得對應 spec 的驗收條件清單**，輸出 `merge_gate.py` 可用的格式；C5、C6 列出的本 repo spec 結構特性都要有明確的處理方式。解析規則與讀取來源由 design 段定（讀取來源暫定見 Q5）。
 - **G4 伺服器端設定到位**，照信任模型 §2–§4 做；做不到或決定偏離的地方寫 ADR 說明偏離與理由：
-  - ruleset（形式見 Q7）、**gate、merger、publisher 三個 App**（D3）、CODEOWNERS，並開 Require review from Code Owners（D3）；
+  - 兩條 ruleset（D6）、**gate、merger、publisher 三個 App**（D3）、CODEOWNERS，並開 Require review from Code Owners（D3）；
   - App 擁有者、私鑰保管人、撤銷人、事故聯絡人寫進 ADR（信任模型:45）；
   - 三把私鑰怎麼保管、本機怎麼取 installation token，以及這和「金鑰不讀、不印」硬規則（`CLAUDE.md`〈機敏檔〉）的關係，由 design 段定（D3）。
 - **G5 `guard.config.json` 的 `auto_merge` 與 `requirements` 鍵**依 D1–D4、Q5 設定：
@@ -72,11 +72,13 @@
 - **G6 合併路徑**：`dev-merge-steward` 經 `sdlc-merge` 跑 `merge_gate.py`，判 merge 才執行 `gh pr merge --match-head-commit <40 字元 SHA> --merge`；每次判定寫 `_tpm/runs/merge-audit.jsonl`（欄位見信任模型 §5；hook 放行的 8 個條件見 `research-requirement.md:64-73`）。
 - **G7 啟用後的權限邊界寫進規則**：主 session 不再執行 `gh pr merge`、不直接改 `guard.config.json` 與稽核紀錄（信任模型:58）。`rules.md` 規則 2、6 與 `CLAUDE.md`〈不可逆節點〉同步改寫，例外與核准人寫在〈專案規則〉（`rules.md:6` 要求放寬時寫明例外與核准人）。
 - **G8 啟用前檢查清單 11 項逐項有證據**（信任模型:193-203），全部在本 epic 範圍內，包括：
+  - :199「`merge_gate.py check` 在示範 PR 上能讀到需求清單」：在 Q5-A（暫定）下，需求從 base 讀，所以測試 PR 要對到 **base 上已經合併的 spec**（例如本 epic 自己的 `specs/auto-merge/spec.md` 先合進 main 之後），不能對到只在 PR head 上的 spec；
   - :200「merge 與 release 脫鉤」：寫明合併到 `origin/main` 後，本機主工作區由誰、何時 pull（見 §3 對 `~/.claude/skills/meeting-*` 的說明）；
   - :201「合併後訊號存在（main CI），`event-post-merge` 能讀到」：main 上要有 post-merge 的 CI 訊號，`event-post-merge` 能讀到；
   - :202「`repos` 只開 low」：依 D1 改為 medium，證據是 ADR 的偏離紀錄與使用者決定；
   - :203「經 PR＋CODEOWNERS 把 `enabled` 改成 true」是最後一步，由人執行。
-  - 預期第一個實際走 gate 的是一個測試 PR（純文件、≤100 行）。驗收判準：該 PR 跑出 `agent-merge-gate/decision`，並由 steward 合併；或依 gate 判定 hold／escalate，結果與 `merge-audit.jsonl` 一致。
+  - **測試 PR 的驗收**（信任模型:196）：測試 PR 在 `enabled=true` **之前**跑（純文件、≤100 行），預期 CI 跑出 `agent-merge-gate/decision`，判定是 **escalate**——`auto_merge` 未啟用時 gate 一律 escalate（`merge_gate.py:515-516`）；且 gate 判定的理由要顯示需求清單有讀到（:199）、和 `merge-audit.jsonl` 一致。
+  - **不在 G8 驗收內**：「由 steward 實際合併一個 PR」只會發生在 `enabled=true` 之後，是啟用後第一個 PR 的事；本 epic 只交付到「由人把 `enabled` 改成 true」為止，啟用後的首次合併由使用者另行觀察，不算本 epic 的驗收條件。
 
 **預期覆蓋範圍（依 D1，白名單開到 medium）**：
 - `risk_tier`（`merge_gate.py:339-356`）：改到 SENSITIVE 路徑（`merge_gate.py:74-90`，含 `.github/`、`.claude/`、`guard.config.json`、CODEOWNERS）或超過 400 行／20 檔判 high；全是文件或全是測試、而且合計 ≤100 行判 low（`:354`）；其餘判 medium。
@@ -85,7 +87,7 @@
   - #10（`bin/lib/_asr_worker.py`＋測試，59 行）是 medium → 在自動合併範圍；
   - #8（meeting-speed epic，改 `.claude/skills/meeting-*`、行數大）是 high → 仍要人合併；
   - 任何改 `.github/`、`.claude/` 的 PR（含本 epic 自己的所有 PR、所有改 `.claude/skills/meeting-*` 的功能 PR）→ 一律 escalate，仍要人合併。
-- 「在自動合併範圍」不等於一定自動合：gate 還要求需求清單讀得到（信任模型:178）、有 required check 且全綠、有本機驗證證據。像 #10 這種沒有 spec 的 bugfix，需求清單讀不到時一律 hold；能不能納入，取決於 design 段對「無 spec PR」的處理（C5）。
+- 「在自動合併範圍」不等於一定自動合：gate 還要求：需求清單讀得到（信任模型:178）；至少一個 required check 且全部通過（`merge_gate.py:482-486`）；有本機驗證證據；測試數 `tests_before`／`tests_after` 都有提供且合併後不減少（`:494-496`）；沒有留存的 important／blocker findings（`:488-491`）；沒有凍結、當天合併次數未達 `daily_cap`（`:529-536`）。像 #10 這種沒有 spec 的 bugfix，需求清單讀不到時一律 hold；能不能納入，取決於 design 段對「無 spec PR」的處理（C5）。
 
 ---
 
@@ -126,7 +128,7 @@
 
 | # | 既有定案 | 修訂方向 | 依據 |
 |---|---|---|---|
-| D-1 | 合併只能由人做（`rules.md:15`、`:19`、`CLAUDE.md:16`） | 改成「依風險分級：白名單內（≤medium，D1）、gate 判 merge 的 PR 由 steward 合併；其餘由人合併」，與模版新版規則 6 對齊 | 模版 `scaffold/.claude/teams/rules.md:19-20`；`research-specs-adr.md:21-25` |
+| D-1 | 合併只能由人做（`rules.md:15`、`:19`、`CLAUDE.md:16`） | 改成「依風險分級：白名單內（≤medium，D1）、gate 判 merge 的 PR 由 steward 合併；其餘由人合併」，與模版新版規則 6 對齊 | 模版 `scaffold/.claude/teams/rules.md:19`；`research-specs-adr.md:21-25` |
 | D-3 | verify＝`_lint.sh && meeting.sh doctor`，全靠本機 | verify 指令不變；新增「CI required check 是 verify 的子集」，**CI 綠不等於本 repo 的驗收綠**（D2） | `specs/meeting-record/intent.md:115`；`research-specs-adr.md:70-81` |
 | D-5 | main 用 merge commit，progress 引用的子任務 SHA 可回查 | **不推翻**（D4）：`merge_method="merge"` | `research-specs-adr.md:42-45`、`:120-123` |
 | D-8 | `sdlc-build.js` 的 implementer 不改 progress.md（本地修正 `7c9a3a0`） | 預設保留本地修正（升級後重套）；要跟模版改由使用者決定 | `research-specs-adr.md:54-56` |
@@ -139,7 +141,7 @@
   - 信任模型要求「由組織擁有的 GitHub App」（:36），本 repo 是個人帳號；D3 決定三個 App 都建在個人帳號下，寫 ADR 說明偏離。
   - code owner 只有使用者本人；作者不能核准自己的 PR（GitHub 一般行為，文件出處未能確認，`research-requirement.md:110`）。D3 由 publisher App 開 PR，使 PR 作者 ≠ code owner，使用者才能核准。
   - CODEOWNERS 的涵蓋範圍要限在信任模型:198 列的治理路徑；若含萬用路徑，所有 PR 都要人核准，自動通道（required approvals 0，信任模型:22）就失效。具體路徑由 design 段定。
-- **C3 ruleset 內部互斥**：信任模型:28「bypass list 留空，admin 也不例外」和 :29「Restrict updates 只讓 merger App 與人更新 main」衝突；GitHub 文件說 Restrict updates 只放行 bypass 名單。「經 PR 合併算不算 update」未能確認，要在測試 PR 上實測（`research-code-contracts.md:121`）。怎麼處理見 Q7。
+- **C3 ruleset 內部互斥**：信任模型:28「bypass list 留空，admin 也不例外」和 :29「Restrict updates 只讓 merger App 與人更新 main」衝突；GitHub 文件說 Restrict updates 只放行 bypass 名單。「經 PR 合併算不算 update」未能確認，要在測試 PR 上實測（`research-code-contracts.md:121`）。處理方式見 D6。
 - **C4 hosted CI 跑不了既有驗收**：
   - `doctor` 要本機模型與 MPS；Swift 測試要 macOS；`test_ms_docs.py::test_no_client_names_in_ms_files` 沒有清單就 FAIL（`tests/record/test_ms_docs.py:45-49`），而且依規定不得 skipped（`specs/meeting-speed/spec.md:389-395`）。D2 決定這些都不進 CI。
   - `bin/_lint.sh:14` 的 `grep -nP` 在 macOS 一直靜默失效；到了 GNU grep 上會命中自身 `:15`、`:20`，ubuntu 上必紅（`research-code-contracts.md:128-129`）。本 epic 修（G2 前置）。
@@ -156,7 +158,7 @@
 - **C8 凍結與每日上限只在本機有效**：
   - 凍結檔與 `merge-audit.jsonl` 在被 gitignore 的 `_tpm/runs/`，CI 的 gate 看不到。
   - CI 把 `--runs-dir` 指到 `$RUNNER_TEMP`（`agent-merge-gate.yml.tmpl:154`），每日上限永遠從 0 算（`research-code-contracts.md:119`）。
-  - 信任模型把 hook 定為「低：client 端減速帶」（信任模型:13），凍結在本 repo 等於只剩低信任層。
+  - 信任模型把 hook 定為「低：client 端減速帶」（信任模型:13），本機凍結檔在本 repo 等於只剩低信任層；伺服器端的凍結程序見 D7。
 
 ### 4.4 範圍邊界
 
@@ -169,6 +171,7 @@
 - **未能確認、要在實作時實測**：
   - merger App（及 publisher App）的 installation token 在本機怎麼取得、私鑰放在哪：AgentWorkFlow 的 steward 定義、`sdlc-merge.js`、文件都沒有寫（`research-requirement.md:128`）；
   - gate App 權限，文件寫 Checks: write（信任模型:40），GitHub ruleset 頁寫 `statuses:write`（`research-requirement.md:114`）。
+- **時序（交 design）**：CI 的 ubuntu job 還沒跑完時，gate 收集到的 check run 狀態是 `in_progress` 之類，不在通過清單內（`agent-merge-gate.yml.tmpl:118-120` 取 `conclusion // status`；`merge_gate.py:71`、`:484-486`），gate 會判 hold。steward 要在其他 CI job 完成後才貼 gate 輸入留言（或 gate 要能在 CI 完成後重跑），具體做法由 design 段定。
 - **時序**：ruleset 上線前要確認沒有開著的 PR（調研時 0 個，`research-upstream.md:10`、`:56`）。
 
 ---
@@ -184,9 +187,20 @@
 - **D2 CI（原 Q1）——使用者 2026-10-28 決定**：GitHub-hosted ubuntu，只跑明確列出的子集（修好的 `bin/_lint.sh`＋在 Linux 實測會綠的測試）；`doctor`、Swift、mlx、名稱掃描不進 CI。**required check ≠ 專案 verify**。macOS hosted runner 與 self-hosted runner 不採用（self-hosted 在 public repo 上會讓 fork 的 PR 在存有會議資料的 Mac 上執行程式，`research-code-contracts.md:124`）。
 - **D3 App（原 Q2）——使用者 2026-10-28 決定**：在個人帳號下建三個 App——**gate、merger、publisher**。publisher 開 PR，使用者以 code owner 身分核准；開 **Require review from Code Owners**。
   - 偏離信任模型 :36「由組織擁有」，寫 ADR。
-  - App 擁有者、私鑰保管人、撤銷人、事故聯絡人都是使用者本人，寫進 ADR；外洩時先撤銷 App 安裝再輪換金鑰（信任模型:45）。
+  - App 擁有者、私鑰保管人、撤銷人、事故聯絡人都是使用者本人——**這是推論**（個人帳號、唯一人類維護者），不是使用者原話；design 段寫 ADR 前要請使用者確認。寫進 ADR；外洩時先撤銷 App 安裝再輪換金鑰（信任模型:45）。
   - **design 段要定**：三把私鑰的保管方式，以及 steward／publish 流程在本機取 token 時，怎麼和「金鑰不讀、不印」硬規則（`CLAUDE.md`〈機敏檔〉）相容。
 - **D4 merge_method（原 Q4）——使用者 2026-10-28 決定**：`merge`（merge commit），不用 squash；D-5 不推翻，`specs/*/progress.md` 引用子任務 SHA 的慣例不變。
+
+- **D5 scaffold 升級方式（原 Q6）——使用者 2026-10-28 決定**：主 session 在 epic worktree 跑 `init.py --force --with-merge-gate`（以 AgentWorkFlow `23174f0` 為基準），再把本地內容逐條合回，以 git diff 交使用者審。
+  - `--force` 會覆蓋的清單（AgentWorkFlow `init.py:15-16`；`research-code-contracts.md:11`、`:50-64`）：`rules.md`（含〈專案規則〉段）、`guard.config.json`（依 `workflow.config` 重新渲染）、`.claude/teams/README.md`、`methodology.json`（本 repo 目前沒有，會新寫）、`_tpm/runs/README.md`、所有帶模版標記的 workflow 與 tools。
+  - 要逐條合回的本地內容：`rules.md`〈專案規則〉段與本地改寫的規則、D-8 修正、`guard.config.json` 既有值、`.claude/teams/README.md` 裡的專案說明（`research-code-contracts.md:55`）；合回清單在 spec 逐條列出，審查時逐條勾。
+  - `guard.config.json` agent 寫不了，覆蓋與合回都由主 session 做。
+- **D6 ruleset（原 Q7）——使用者 2026-10-28 決定**：拆兩條 ruleset。
+  - ruleset A，不設 bypass：Require a pull request、required status check（`agent-merge-gate/decision` 綁 gate App，加上 D2 的 CI job）、Require review from Code Owners、Block force pushes、Restrict deletions。
+  - ruleset B，只放 Restrict updates，bypass 給 merger App 與 admin。
+  - admin bypass 偏離信任模型:28「admin 也不例外」，寫 ADR。
+  - 「經 PR 合併算不算 update」以及兩條 ruleset 疊加的實際效果，交 design 段在測試 PR 上實測。
+- **D7 凍結的預設程序——使用者 2026-10-28 決定**：凍結＝**停用（suspend）merger App 的安裝**。效果是只停自動合併（steward 無法以 merger App 身分貼 gate 輸入留言或合併，CI gate 收不到輸入就 hold），人仍能手動合併；ruleset 保護不放寬。修正輪 1 寫的「暫時停用 ruleset A 的 gate 規則」會放寬保護，已刪除。本機凍結檔（`freeze_file`）照舊作為 client 端減速帶（C8）。
 
 ### 5.2 暫定（閘門 1 核准時可改）
 
@@ -202,36 +216,10 @@
 
 註：spec PR 改的是 `specs/<epic>/*.md`，若全是文件且 ≤100 行屬 low，否則可能 medium 或 high；它在 D1 白名單內時也可能被自動合併，但 base 上還沒有這個 epic 的需求，gate 會 hold，實際仍由人合併。
 
-### 5.3 待決（閘門 1 請使用者決定）
-
-#### Q6 scaffold 怎麼升級：要不要用 `init.py --force`
-
-`init.py --force` 會整份覆蓋 `rules.md`（含〈專案規則〉段）、`guard.config.json`（依 `workflow.config` 重新渲染）、`_tpm/runs/README.md` 與所有帶模版標記的 workflow、tools（AgentWorkFlow `init.py:15-17`；`research-code-contracts.md:11`、`:50-64`）。不加 `--force` 只補新檔，會新舊混用（`research-code-contracts.md:68`）。
-
-| 選項 | 內容 | 代價 |
-|---|---|---|
-| A. 在 epic worktree 由主 session 跑 `init.py --force --with-merge-gate`（**建議**） | 先記 git 基準；以 AgentWorkFlow `23174f0` 為基準覆蓋；再把 `rules.md`〈專案規則〉段、本地改寫的規則、D-8 修正、`guard.config.json` 既有值逐條合回；重跑 `build.py` 與 golden-set；整個結果以 git diff 交使用者審 | 覆蓋面大，漏合一條就會無聲推翻本地定案，審查要逐條對照；`guard.config.json` agent 寫不了，覆蓋與合回都要主 session 做 |
-| B. 不加 `--force`，只補新檔，再手動更新相依檔 | init 只新增 `merge_gate.py` 等；`schemalib.py`、`build.py`、`save_run.py`、`check_workflows.mjs` 手動從模版搬 | 不碰 `rules.md`、`guard.config.json`；但要自己判斷哪些檔有相依，漏搬一支就新舊混用，問題可能到合併時才出現 |
-| C. 不用 init.py，逐檔從 `23174f0` 手動搬 | 完全手控 | 工作量最大；失去 init 的一致性（模版標記、methodology 渲染），之後再升級更難 |
-
-建議 A：一次對齊模版，所有改動都在 worktree 的 diff 裡可審；合回清單在 spec 逐條列出，審查時逐條勾。
-
-#### Q7 ruleset 怎麼滿足信任模型 §2 第 3、4 點（牽涉「admin 也不例外」）
-
-信任模型:28 要 bypass 清空、admin 也不例外；:29 要 Restrict updates 只讓 merger App 與人更新 main；GitHub 的 Restrict updates 只放行 bypass 名單（C3）。三者不能在同一條 ruleset 同時成立。
-
-| 選項 | 內容 | 代價 |
-|---|---|---|
-| A. 拆兩條 ruleset（**建議**） | ruleset A：Require PR、Code Owners、Dismiss stale、required check 綁 gate App，bypass 清空；ruleset B：Restrict updates、Block force pushes、Restrict deletions，bypass＝merger App＋admin | ruleset B 給 admin bypass，字面上偏離 :28「admin 也不例外」，要寫 ADR；不過 ruleset A 沒有 bypass，admin 仍要走 PR，偏離只限 B 那幾條。「經 PR 合併算不算 update」要在測試 PR 上實測，結果可能讓 ruleset B 的 bypass 名單要調整 |
-| B. 只設一條 ruleset，不開 Restrict updates | ruleset A 的內容加上 Block force pushes、Restrict deletions，bypass 清空 | 符合 :28；偏離 :29。因為 Require PR 已擋直接推送，實際差異是「任何有 write 權限、能經 PR 合併的身分」都能更新 main；本 repo 只有使用者與三個 App |
-| C. 一條 ruleset，bypass 只給 merger App | 符合 :29 的字面 | merger App 可繞過 PR 與 gate check 直接推送 main，偏離 :28 最嚴重；merger 私鑰外洩時衝擊最大。不建議 |
-
-建議 A，並在測試 PR 上實測後把結果寫進 ADR；若實測顯示選項 B 的實際保護與選項 A 相同，再回報使用者改採選項 B。
-
-### 5.4 不問、由 design 依預設處理的模糊點（閘門 1 可以推翻）
+### 5.3 不問、由 design 依預設處理的模糊點（閘門 1 可以推翻）
 
 - **名稱掃描**：不上 CI，維持本機推送前做（D-2）。gate 輸入留言的處理見 C7 候選解法，由 design 段查可行性。
-- **凍結**：伺服器端凍結先用「暫時停用 ruleset A 的 gate 規則或 App 安裝」的人工程序，design 段評估更好的機制（C8）。
+- **凍結**：依 D7，停用 merger App 安裝；解凍＝恢復安裝，由人執行。design 段把操作步驟寫進 ADR（C8）。
 - **本機 pull**：合併後主工作區不自動 pull；由使用者或主 session 在使用者同意後 pull（§3、G8）。
 - **`rules.md` 引用的 hook 名稱**：舊名 `guard-paths.sh` 等，升級時順便改成實際的 `awf_hook.py`（`research-specs-adr.md:140-143`）。
 
