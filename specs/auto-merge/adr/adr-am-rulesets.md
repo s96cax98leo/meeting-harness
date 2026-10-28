@@ -1,9 +1,9 @@
 # ADR：main 的 ruleset 拆法與「交人合併」的通道
 
-- 狀態：提議（待 auto-merge 閘門 2 核准；**本 ADR 修訂使用者 2026-10-28 的 D6，要使用者重新決定**）
+- 狀態：已決定（E1：使用者 2026-10-28 在 auto-merge 閘門 2 前決定採 B＋P1；本 ADR 修訂同日的 D6）
 - 日期：2026-10-28
 - 範圍：GitHub repo `s96cax98leo/meeting-harness` 的 rulesets（伺服器端設定，不在 repo 檔案裡）；操作步驟寫在 `specs/auto-merge/runbook.md`（build 段 `runbook` 子任務產出）。
-- 偏離：信任模型（AgentWorkFlow `docs/自動合併信任模型.md`）:28「bypass list 留空，admin 也不例外」、:23「Require approval of the most recent reviewable push」。
+- 偏離：信任模型（AgentWorkFlow `docs/自動合併信任模型.md`）:28「bypass list 留空，admin 也不例外」→ 本 repo 的 admin 可以略過 required check（ruleset C），只限經 PR 合併；:23「Require approval of the most recent reviewable push」→ ruleset A 不開。兩項偏離由使用者 2026-10-28 核准（E1）。
 
 ## 背景
 
@@ -30,9 +30,11 @@
 | P1. **不開** Require approval of the most recent reviewable push；保留 Dismiss stale approvals | 單一人類的 repo 下，「別人」不存在；新 commit 進來時舊核准仍會被撤銷，效果大致相同 | 偏離 :23 |
 | P2. 開著，但所有 push 改由 publisher App 身分做 | 和 :23 一致 | publish.py 的 `git push` 用本機 git 認證（模版檔，`publish.py` 不在本 repo 改）；要另外設 git credential helper 讀 publisher token，等於讓 App token 進 git 設定，範圍擴大 |
 
-## 決定（建議，待使用者在閘門 2 確認）
+## 決定
 
-採 **B＋P1**。
+採 **B＋P1**（E1，使用者 2026-10-28）。
+
+- **偏離信任模型 :28 的範圍**：admin（使用者本人）可以在 GitHub 合併畫面或以 gh 的 admin 合併選項略過 ruleset C 的 required check，但只限經 PR 合併（`bypass_mode: pull_request`）；ruleset A 沒有任何 bypass，所以直接 push、force push、刪 main、略過 Code Owners 核准都做不到。理由：gate 判 hold／escalate 時 check run 一律是 failure（`agent-merge-gate.yml.tmpl:177`），不留這個通道，escalate 的 PR 誰都合不了。每次略過都記在 rule insights，事後可查。
 
 - ruleset A（`main-baseline`，無 bypass）：`pull_request`（required approvals 0、`require_code_owner_review: true`、`dismiss_stale_reviews_on_push: true`、`require_last_push_approval: false`）、`non_fast_forward`、`deletion`。
 - ruleset B（`main-restrict-updates`）：`update`；bypass＝merger App（Integration）與 Repository admin role，`bypass_mode: pull_request`。
@@ -45,5 +47,9 @@
 
 - steward 能合併的條件不變：C 的兩個 check 都要綠（merger App 不在 C 的 bypass），A 的 Code Owners 核准也不能略過。
 - 人能合併任何 PR，但每次略過都要在合併畫面明確勾選，並記在 rule insights；這等於把「人是最後一道關」寫成伺服器端事實。
-- 「經 PR 合併算不算 Restrict updates 的 update」（`research-code-contracts.md:121`，未能確認）：B 對 merger App 與 admin 都給 bypass，所以兩種答案下合併都能進行；答案只影響「沒有 bypass 的身分能不能合併」，在本 repo 沒有這種身分要合併。runbook 的 `ops-trial` 用 merger App 身分試合一個 gate 為 failure 的 PR，預期被 C 擋下（證明 C 綁得住 merger App）。
-- 若使用者維持 D6 原案（選項 A），本 epic 只能交付到「ruleset 已設、`enabled` 仍為 false」為止，G8 最後一步（經 PR 把 `enabled` 改成 true）在伺服器端做不到，要另外決定。
+- 「經 PR 合併算不算 Restrict updates 的 update」（`research-code-contracts.md:121`，未能確認）：B 對 merger App 與 admin 都給 bypass，所以兩種答案下合併都能進行；答案只影響「沒有 bypass 的身分能不能合併」，在本 repo 沒有這種身分要合併。實測方式寫成可判定的驗收（spec §4.7）：
+  - §4.7.11：admin 直接推 main 被拒，rule suite 同時有 A 的 `pull_request` 與 B 的 `update` 評估失敗（B 對 admin 只在經 PR 時放行、A 沒有 bypass）。
+  - §4.7.8：merger App 合 gate 為 failure 的測試 PR 被拒，擋下的是 C（stderr 含 `agent-merge-gate/decision`、rule suite 的 C 評估失敗、A 沒有失敗）。
+  - §4.7.12：測試 PR 由 admin 經 PR bypass 合併（不得關閉），rule suite 結果是 `bypass`；B 的 `update` 評估結果原樣記入 g8-checklist，就是「經 PR 合併算不算 update」的答案。
+  - §4.7.13：啟用 PR 在 code owner 核准前，admin 合併被拒（A 不能略過）。
+- 不採選項 A 的原因：照 D6 原案，本 epic 只能交付到「ruleset 已設、`enabled` 仍為 false」為止，G8 最後一步（經 PR 把 `enabled` 改成 true）在伺服器端做不到。

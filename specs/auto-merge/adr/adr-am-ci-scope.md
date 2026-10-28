@@ -1,6 +1,6 @@
 # ADR：hosted CI 的範圍、白名單等級與 gate 的數字輸入
 
-- 狀態：提議（待 auto-merge 閘門 2 核准）
+- 狀態：已決定（D1、D2：使用者 2026-10-28；測試分兩個目錄：E2，使用者 2026-10-28）
 - 日期：2026-10-28
 - 範圍：`.github/workflows/ci.yml`（新）、`bin/_lint.sh`、`.claude/teams/guard.config.json` 的 `auto_merge`、`.claude/teams/rules.md`〈專案規則〉。
 - 依據：intent §5.1 D1、D2；§4.3 C1、C4、C8；§4.4「時序」。
@@ -27,19 +27,19 @@
 
 | 選項 | 做法 | 代價 |
 |---|---|---|
-| T1. **一個 job `ci-ubuntu-subset`**：`bash bin/_lint.sh`；`python3 -m unittest discover -s tests/governance -t .`；`tests/record/` 只跑清單內的模組（在 `ubuntu:24.04` 容器實測連續 3 次全綠者，且排除任何會讀 `MH_CLIENT_NAMES_FILE` 的模組） | 清單明確；fork 的 PR 也能安全地跑（`pull_request` 觸發、只讀權限、不用 secret） | 子集外的退化（Swift、mlx、doctor）只能靠本機 verifier 抓；清單要人維護 |
+| T1. **一個 job `ci-ubuntu-subset`**：`bash bin/_lint.sh`；`python3 -m unittest discover -s tests/governance -t .`（不含 `tests/governance_once/`）；`tests/record/` 只跑清單內的模組（在 `ubuntu:24.04` 容器實測連續 3 次全綠者，且排除任何會讀 `MH_CLIENT_NAMES_FILE` 的模組） | 清單明確；fork 的 PR 也能安全地跑（`pull_request` 觸發、只讀權限、不用 secret） | 子集外的退化（Swift、mlx、doctor）只能靠本機 verifier 抓；清單要人維護 |
 | T2. 全部 `tests/record/` 都跑、失敗的加 skip | 覆蓋面看起來大 | 違反規則 20（不加 skip），而且 `test_ms_docs` 依規定不得 skip（`specs/meeting-speed/spec.md:389-395`） |
 | T3. macOS hosted 或 self-hosted runner | 能跑 doctor、Swift | D2 已排除（self-hosted 在 public repo 讓 fork 的 PR 在存有會議資料的 Mac 上執行，`research-code-contracts.md:124`） |
 
 採 **T1**。
 
 - 觸發：`pull_request`（不用 `pull_request_target`，PR 程式碼在無 secret、`contents: read` 的環境跑）與 `push` 到 `main`（給 `event-post-merge` 讀的合併後訊號，信任模型 :201；`event-post-merge.js` 用 `gh run list --branch main`）。
-- `actions/checkout`、`actions/setup-python` 以 40 碼 commit SHA 釘版；`fetch-depth: 0`（`tests/governance` 要讀 `e72a9cb` 的舊檔做合回比對）。
+- `actions/checkout`、`actions/setup-python` 以 40 碼 commit SHA 釘版；`fetch-depth: 0`（`tests/governance` 的 spec §4.3.9 以 `e72a9cb` 為 base 讀真實 spec；以 `e72a9cb` 做合回比對的一次性斷言放在 `tests/governance_once/`，CI 不跑）。
 - job 名稱固定 `ci-ubuntu-subset`，ruleset C 以這個名稱、來源 GitHub Actions 列為 required check（`adr-am-rulesets.md`）。
 
 ## gate 的數字輸入
 
-- `tests_before`／`tests_after`＝下面兩條指令輸出的 `Ran N tests` 相加，分別在 base 與 head 上由 verifier 在本機跑：`python3 -m unittest discover -s tests/record -t .`、`python3 -m unittest discover -s tests/governance -t .`。Swift 測試另外跑、不算進這個數字（它沒有統一的計數輸出，`tools/MeetingRecorder/Tests/run.sh`）。
+- `tests_before`／`tests_after`＝下面兩條指令輸出的 `Ran N tests` 相加，分別在 base 與 head 上由 verifier 在本機跑：`python3 -m unittest discover -s tests/record -t .`、`python3 -m unittest discover -s tests/governance -t .`。Swift 測試另外跑、不算進這個數字（它沒有統一的計數輸出，`tools/MeetingRecorder/Tests/run.sh`）；`tests/governance_once/` 也不算（E2：只在升級當下成立，啟用後必紅）。
 - `daily_cap`＝3。依據：近 8 天合進 main 的 PR 是 #7–#10 共 4 個（`research-upstream.md:15-22`），一天 3 個已高於實際節奏；只在本機有效（C8）。
 - 其餘門檻沿用預設（`small_lines` 100、`large_lines` 400、`large_files` 20、`carry_verdict_on_rebase` false）。
 

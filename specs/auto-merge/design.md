@@ -1,8 +1,8 @@
 # design：auto-merge
 
 - 上游：`intent.md`（閘門 1 已核准，`_tpm/runs/20261028-sdlc-auto-merge/run.json` 的 `plan.approved`，2026-10-28）。
-- 狀態：**草稿，待閘門 2 核准**。
-- ADR：`adr/adr-am-rulesets.md`（ruleset 拆法，**修訂 D6，要使用者重新決定**）、`adr/adr-am-app-identity.md`（App、私鑰、token、凍結、C7）、`adr/adr-am-requirements.md`（adapter）、`adr/adr-am-ci-scope.md`（CI 範圍、medium、數字輸入）。
+- 狀態：**修正輪 1，待閘門 2 核准**。使用者 2026-10-28 在閘門 2 前的決定 E1–E6 已寫入（對照表：`_tpm/runs/20261028-sdlc-auto-merge/design-revise-對照.md`）。
+- ADR：`adr/adr-am-rulesets.md`（ruleset 拆法，修訂 D6；E1：使用者 2026-10-28 決定採三條）、`adr/adr-am-app-identity.md`（App、私鑰、token、凍結、C7）、`adr/adr-am-requirements.md`（adapter；E3：bugfix 採 N1）、`adr/adr-am-ci-scope.md`（CI 範圍、medium、數字輸入）。
 - 行號以 main @ `e72a9cb`、AgentWorkFlow @ `23174f0` 為準；AgentWorkFlow 的檔案寫成 `scaffold/…` 或 `plugin/…`（相對 AgentWorkFlow 根目錄）。範例場次名一律用「[Stand-up] 範例專案」。
 - G1–G8、D1–D7、C1–C8 沿用 intent 的代號，不是任務編號。
 
@@ -32,7 +32,7 @@
 
 | 元件 | 新／改 | 誰產出 | 依據 |
 |---|---|---|---|
-| scaffold 升級（`init.py --force --with-merge-gate` @ `23174f0`） | 改 | 主 session（Build 前置 `m-upgrade`） | D5；`research-code-contracts.md:36-68` |
+| scaffold 升級（`init.py --force --with-merge-gate` @ `23174f0`；含 `agent-workflow.CLAUDE.md`、`settings.json` 深度合併、`settings.README.md`、`.mcp.json.example`、`.mcp.README.md`、`_tpm/runs/README.md` 覆蓋） | 改 | 主 session（Build 前置 `m-upgrade`，plan §0 白名單檢查） | D5；`research-code-contracts.md:36-68`；`init.py:500-518` |
 | `guard.config.json` 合回＋`auto_merge`、`requirements` 鍵 | 改 | 主 session（`m-upgrade`；agent 一律寫不了，`plugin/hooks/guard.py:917-918`、`:983-986`、`:500-502`） | G5；intent §4.1 第 2 條 |
 | `rules.md`、`.claude/teams/README.md`、`CLAUDE.md` 合回與改寫 | 改 | `rules-merge` | G1、G7 |
 | `methodology.json` merge 指引、commit trailer；`sdlc-build.js` 重套 D-8；`build.py` 重新內嵌 | 改 | `flow-merge` | G1、G6 |
@@ -42,7 +42,7 @@
 | `.github/workflows/ci.yml`、`.github/CODEOWNERS` | 新 | `ci` | G2、G4 |
 | `.github/workflows/agent-merge-gate.yml` | 新（模版原樣） | `m-upgrade`（`--with-merge-gate`） | G4 |
 | `specs/auto-merge/runbook.md` | 新 | `runbook` | G4、G8 |
-| `tests/governance/` | 新 | `red-gov` | 全部 |
+| `tests/governance/`（長期有效、CI 跑）、`tests/governance_once/`（升級當下才成立、只在本 epic 驗收時跑，E2） | 新 | `red-gov` | 全部 |
 | GitHub：三個 App、Actions vars／secret、三條 ruleset、測試 PR、啟用 PR | 設定 | 使用者（主 session 只在使用者當下同意時協助讀回） | G4、G8；intent §4.1 第 3 條 |
 
 **為什麼 dev agent 能改 `.claude/` 底下的檔**：hook 對 `dev-*` 的寫入範圍是「工作區相對路徑不以 `.claude/` 開頭」（`plugin/hooks/guard.py:996-1000`，`repos_dir` 空）；子任務 worktree 的路徑是 `.worktrees/auto-merge--<id>/.claude/…`，不受這條擋。唯一例外是任何位置的 `.claude/teams/guard.config.json`（`guard.py:500-502`），所以它只排給主 session。
@@ -68,7 +68,8 @@ hook 這一層（`plugin/hooks/guard.py:411-447`）：`GH_CONFIG_DIR=<絕對路�
 
 - 主 session 用 publisher 身分開 PR（`GH_CONFIG_DIR=…/publisher python3 .claude/teams/tools/publish.py push …`，使用者當下同意）。
 - gate 判 hold／escalate → `agent-merge-gate/decision` 紅 → 使用者看過，改到 CODEOWNERS 路徑的先以 code owner 核准（PR 作者是 publisher App，使用者可以核准），再以 admin 身分在合併畫面 bypass ruleset C 合併（merge commit）。
-- 這條路徑在 D6 原案下不存在（`adr/adr-am-rulesets.md`〈背景〉），是本 design 要使用者重新決定的地方。
+- 這條路徑在 D6 原案下不存在（`adr/adr-am-rulesets.md`〈背景〉）；使用者 2026-10-28 決定採三條 ruleset（E1），admin 只能在經 PR 合併時 bypass C，A（含 Code Owners 核准）不能略過。
+- 伺服器端效果的實測：直接推 main 被 A、B 同時擋（spec §4.7.11）；merger 合 gate 紅的 PR 被 C 擋（§4.7.8）；admin 經 PR bypass C 合併、順帶實測「經 PR 合併算不算 update」（§4.7.12）；Code Owners 核准不能被 admin 略過（§4.7.13）。
 
 ## 6. 上線順序（runbook 的骨架，G8）
 
@@ -77,10 +78,10 @@ hook 這一層（`plugin/hooks/guard.py:411-447`）：`GH_CONFIG_DIR=<絕對路�
 | 1 | 使用者 | 合併本 epic 的 PR（此時還沒有 ruleset；`enabled=false`） | 是（推送、合併） |
 | 2 | 使用者 | 建 gate、merger、publisher 三個 App，只安裝到本 repo；匯入私鑰；建 `gh-apps.json`；設 Actions vars／secret | 是（GitHub 設定） |
 | 3 | 主 session（同意後） | `mint`／`gh api /installation/repositories` 讀回、hook 判定讀回（spec §4.7.1–§4.7.3） | 否（只讀＋本機） |
-| 4 | 使用者 | 確認沒有開著的 PR，建 ruleset A、B、C；Actions 不准建立或核准 PR | 是 |
-| 5 | 主 session（同意後） | 讀回 ruleset JSON 對照 spec §4.7.4 | 否 |
-| 6 | 主 session＋使用者 | 測試 PR（`ops-trial`，spec §4.7.5–§4.7.8） | 是（推送、開 PR、留言） |
-| 7 | 主 session（同意後） | 開啟用 PR：`enabled: true`＋`specs/auto-merge/evidence/g8-checklist.md`；使用者以 code owner 核准、bypass C 合併 | 是 |
+| 4 | 使用者 | 確認沒有開著的 PR，建 ruleset A、B、C（E1）；Actions 不准建立或核准 PR | 是 |
+| 5 | 主 session（同意後）＋使用者 | 讀回 ruleset JSON 對照 spec §4.7.4；通過後使用者做探測推送（§4.7.11） | 讀回否；探測推送是（ruleset 設錯時會進公開 main） |
+| 6 | 主 session＋使用者 | 測試 PR（`ops-trial`，spec §4.7.5–§4.7.8）；merger 試合被拒後，使用者以 admin bypass 合併（§4.7.12，不得關閉） | 是（推送、開 PR、留言、合併） |
+| 7 | 主 session（同意後）＋使用者 | 開啟用 PR：`enabled: true`＋`specs/auto-merge/evidence/g8-checklist.md`；核准前 admin 合併應被拒（§4.7.13）；使用者以 code owner 核准、bypass C 合併 | 是 |
 | 8 | 使用者 | 本機主工作區 pull（合併後不自動 pull，信任模型 :200） | — |
 
 ## 7. 威脅與剩餘風險

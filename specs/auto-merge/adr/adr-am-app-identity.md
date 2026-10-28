@@ -1,19 +1,19 @@
 # ADR：三個 GitHub App 的身分、私鑰保管、本機取 token 與凍結
 
-- 狀態：提議（待 auto-merge 閘門 2 核准）
+- 狀態：已決定（D3、D7：使用者 2026-10-28；角色由使用者 2026-10-28 確認，E5）
 - 日期：2026-10-28
 - 範圍：`tools/merge_gate_project/gh_app_token.py`（新）、`tools/merge_gate_project/scan_names.py`（新）、`.claude/teams/rules.md`〈專案規則〉、`.claude/teams/methodology.json` 的 merge 指引；GitHub 上的三個 App 與 Actions 設定（不在 repo）。
 - 依據：intent §5.1 D3、D7；§4.1 第 2、5 條；C7、C8。
 - 偏離：信任模型 :36「由組織擁有的 GitHub App」（D3 已決定，本 ADR 記錄）。
 
-## 角色（待使用者確認）
+## 角色（E5：使用者 2026-10-28 確認）
 
 | 角色 | 人 | 依據 |
 |---|---|---|
-| 三個 App 的擁有者 | 使用者（`s96cax98leo` 個人帳號） | D3 |
-| 私鑰保管人 | 使用者 | **推論**（個人帳號、唯一人類維護者；intent §5.1 D3 註明不是原話，要確認） |
-| 撤銷人 | 使用者 | 同上 |
-| 事故聯絡人 | 使用者 | 同上 |
+| 三個 App 的擁有者 | 使用者（`s96cax98leo` 個人帳號） | D3；已確認（E5，使用者 2026-10-28） |
+| 私鑰保管人 | 使用者 | 已確認（E5，使用者 2026-10-28） |
+| 撤銷人 | 使用者 | 已確認（E5，使用者 2026-10-28） |
+| 事故聯絡人 | 使用者 | 已確認（E5，使用者 2026-10-28） |
 
 外洩處理（信任模型 :45）：先在 GitHub 停用（suspend）或移除該 App 的安裝，再到 App 設定頁產生新私鑰、刪除舊私鑰，最後更新 Keychain（merger、publisher）或 Actions secret（gate）。
 

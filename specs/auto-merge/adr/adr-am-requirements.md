@@ -1,6 +1,6 @@
 # ADR：requirements adapter（從 base 的 `specs/<epic>/spec.md` 取驗收條件）
 
-- 狀態：提議（待 auto-merge 閘門 2 核准）
+- 狀態：已決定（A：隨 auto-merge 閘門 2 核准；N1：E3，使用者 2026-10-28）
 - 日期：2026-10-28
 - 範圍：`tools/merge_gate_project/reqs_from_spec.py`（新）、`.claude/teams/guard.config.json` 的 `requirements`、`.claude/teams/methodology.json` 的 commit 慣例（`Spec-Epic` trailer）。
 - 依據：intent §2 G3、§4.3 C5、C6、§5.2 Q5（暫定 A，隨 intent 一起核准）。
@@ -31,7 +31,7 @@
 
 ## 決定
 
-採 **A＋N1**（N1 是否改 N2 列為閘門 2 的非 blocking 問題）。
+採 **A＋N1**（N1：E3，使用者 2026-10-28 決定；沒有自己 spec 的 bugfix PR，需求就是它修的那個 epic 的全部條目，不允許 trailer 縮小，spec §4.3.13）。
 
 - 設定：`"requirements": {"source": "command", "command": ["python3", "tools/merge_gate_project/reqs_from_spec.py"], "path": "", "id_pattern": ""}`。
 - 腳本放 `tools/merge_gate_project/`：路徑含 `merge_gate`，改到它的 PR 會被 `merge_gate.py:79` 判 SENSITIVE → escalate；另外列進 CODEOWNERS。

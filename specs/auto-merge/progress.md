@@ -6,7 +6,7 @@
 ## 閘門
 
 - [x] 閘門 1（intent）：2026-10-28 使用者核准（`run.json` 的 `plan.approved`）
-- [ ] 閘門 2（design／spec／plan）：待決定 spec §6 第 2 條（ruleset 拆法，`adr/adr-am-rulesets.md`）、第 4 條（測試 PR 的預期判定）、第 5 條（PR 大小例外）
+- [ ] 閘門 2（design／spec／plan）：修正輪 1 已寫入使用者 2026-10-28 的決定 E1（三條 ruleset）、E2（一次性測試拆到 `tests/governance_once/`）、E3（bugfix 採 N1）、E4（測試 PR 驗收看 §4.7.6、§4.7.7）、E5（App 角色都是使用者）、E6（不拆 PR、按 commit 分段審）；閘門 2 本身待核准
 - [ ] 閘門 3（test）
 - [ ] 閘門 4（deliver）
 
@@ -30,8 +30,11 @@
 ### 第 2 層
 - [ ] `ci`
 
+### 驗收時（verifier）
+- [ ] `tests/governance_once` 全綠（spec §4.8.6，`ops-enable` 之前）
+
 ### deliver 之後（使用者執行，不可逆節點逐步同意）
 - [ ] `ops-apps`：三個 App、Keychain、`gh-apps.json`、Actions vars／secret、名稱清單複製
-- [ ] `ops-rulesets`：確認沒有開著的 PR → ruleset A／B／C → 讀回
-- [ ] `ops-trial`：測試 PR、gate 輸入留言、本機 audit 對照、merger 試合被拒
-- [ ] `ops-enable`：啟用 PR（`enabled: true`＋g8-checklist）→ 使用者核准並合併 → 主工作區由使用者決定何時 pull
+- [ ] `ops-rulesets`：確認沒有開著的 PR → ruleset A／B／C → 讀回（§4.7.4）→ 探測推送被拒（§4.7.11）
+- [ ] `ops-trial`：測試 PR、gate 輸入留言、本機 audit 對照、merger 試合被拒（§4.7.8）→ 使用者以 admin bypass 合併（§4.7.12，不關閉）
+- [ ] `ops-enable`：啟用 PR（`enabled: true`＋g8-checklist）→ 核准前合併被拒（§4.7.13）→ 使用者核准並合併 → 主工作區由使用者決定何時 pull
