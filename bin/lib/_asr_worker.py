@@ -670,7 +670,9 @@ def stitch(sess, out):
         if not isinstance(d, dict) or not isinstance(d.get("segments"), list):
             raise Unusable(f"窗 {w.get('index')} 的結果檔讀不到：{w.get('file')}")
         for s in d["segments"]:
-            if isinstance(s, dict):
+            # 只收 start 在本窗 [start, end) 內的段落：模型在窗尾陷入重複時會吐出超過窗結尾的段落，
+            # 同一時段的真實內容在下一窗；w-*.json 是引擎原始輸出，不改
+            if isinstance(s, dict) and num(s.get("start")) is not None and w["start"] - 1e-3 <= s["start"] < w["end"]:
                 s = dict(s, id=len(segs))
                 segs.append(s)
                 texts.append(str(s.get("text") or ""))
