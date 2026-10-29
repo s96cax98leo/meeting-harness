@@ -136,10 +136,12 @@ App 的權限與用途照 `adr/adr-am-app-identity.md`〈App 權限〉。
      ```
 
      （b）、（c）照做。`<agent-workflow plugin 目錄>` 用 Claude Code `/plugin` 列出的安裝路徑。
+  4. 名稱清單（一次性）：主 session 在使用者當下同意後，把現有的客戶名稱清單複製到**主工作區**的 `_tpm/runs/client-names.txt`（`scan_names.py` 的預設位置；`.gitignore` 的 `/_tpm/runs/*` 已排除，不進 repo）。不讀出、不印出清單內容。
 - **讀回方式**：
   - §4.7.1：`mint` 後印 `1`；`revoke` 後同一指令失敗（非 0 結束碼）。存檔：`$RUN/step3-4.7.1.txt`（只存 `total_count` 與結束碼，不存 `mint` 以外的輸出）。
   - §4.7.2：variables 含 `AGENT_GATE_APP_ID`、`AGENT_MERGER_BOT`；secrets 含 `AGENT_GATE_APP_PRIVATE_KEY`（只看名稱）；`can_approve_pull_request_reviews` 為 `false`。存檔：`$RUN/step3-4.7.2.txt`。
   - §4.7.3：(a) `exit=0`；(b)、(c) `exit=2`。存檔：`$RUN/step3-4.7.3.txt`。
+  - 名稱清單：`test -s _tpm/runs/client-names.txt; echo $?` 印 `0`，`git check-ignore -q _tpm/runs/client-names.txt; echo $?` 印 `0`。只用這兩個指令判斷，不讀內容。沒有這個檔時，第 6 步與啟用後 steward 的 gate 輸入留言一律被 `scan_names.py` 擋下（回 2、判 hold）。
 - **是否不可逆**：否（只讀與本機；token 1 小時內失效，且本步最後已 `revoke`）。
 
 ### 第 4 步：建 ruleset A、B、C

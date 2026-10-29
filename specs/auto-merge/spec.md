@@ -1,7 +1,7 @@
 # spec：auto-merge（PR 經 merge_gate 判定後由 dev-merge-steward 自動合併）
 
 - 上游：`intent.md`（閘門 1 已核准，2026-10-28）、`design.md`、`adr/`。
-- 狀態：**修正輪 1，待閘門 2 核准**。§6 第 2、4、5 條、`adr/adr-am-rulesets.md`、bugfix 的 N1、App 角色已由使用者 2026-10-28 在閘門 2 前決定（E1–E6，見 `_tpm/runs/20261028-sdlc-auto-merge/design-revise-對照.md`）。
+- 狀態：**閘門 1–3 已核准（2026-10-28／29），deliver 中**。§6 第 2、4、5 條、`adr/adr-am-rulesets.md`、bugfix 的 N1、App 角色已由使用者 2026-10-28 在閘門 2 前決定（E1–E6，見 `_tpm/runs/20261028-sdlc-auto-merge/design-revise-對照.md`）。
 - 驗法欄寫法：`governance/<檔>::<函式>` 指 `tests/governance/<檔>` 的測試函式（長期有效、CI 跑）；`governance_once/<檔>::<函式>` 指 `tests/governance_once/<檔>`（只在升級當下成立、只在本 epic 驗收時跑，CI 不跑，見 §4.2.6、§4.8.6）；其他寫法是 plan §3 的指令或人工步驟。
 - Story 欄用 intent 的目標代號 G1–G8（本 repo 沒有 Story ID；不是任務編號）。commit scope 用 `auto-merge`。
 - 條號 `4.x.y` 的格式就是本 epic 的 requirements adapter 要讀的格式（`adr/adr-am-requirements.md`）；本檔之後會被 `ops-trial` 的測試 PR 當成需求清單讀取。
