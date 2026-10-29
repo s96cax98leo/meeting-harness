@@ -9,12 +9,14 @@ audience：internal＝內部文件；owner＝給決策者版；external＝對外
   R2 不自編任務編號：出現的任務編號必須已在 backlog_file（設定檔，預設 _tpm/tasks/backlog.md，格式 id:<編號>）
   R3 給決策者或對外的文件不寫內部編號（任務編號、internal_id_patterns）
   R4 commit 要有署名行 attribution_line 的 trailer，不用 forbidden_trailers（預設 Co-Authored-By）
+  R6 commit 標題要符合開發規範 profile（.claude/teams/methodology.json）的 conventions.commit.check_regex；沒設就不檢查格式
   R5 給決策者或對外的文件不評價人
 違規 exit 1。
 """
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -29,6 +31,7 @@ BACKLOG = WORKSPACE / (CFG.get("backlog_file") or "_tpm/tasks/backlog.md")
 ATTRIBUTION = (CFG.get("attribution_line") or "Assisted-by: Claude").strip()
 ATTR_KEY = ATTRIBUTION.split(":", 1)[0].strip()
 FORBIDDEN_TRAILERS = [t for t in (CFG.get("forbidden_trailers") or ["Co-Authored-By"]) if t.lower() != ATTR_KEY.lower()]
+METHODOLOGY = schemalib.TEAMS_DIR / "methodology.json"
 
 ESTIMATE = re.compile(r"\d+(?:\.\d+)?\s*(?:個)?\s*(?:人天|人日|人月|man[- ]?days?|person[- ]?days?)|(?:預估|估計|約)\s*\d+(?:\.\d+)?\s*(?:小時|天)\s*(?:工時|工作量)", re.I)
 TNUM = schemalib.task_id_regex()
@@ -66,11 +69,30 @@ def scan_file(path: Path, audience: str, ids: set[str]) -> list[str]:
     return out
 
 
+def commit_regex(path: Path = METHODOLOGY) -> re.Pattern | None:
+    """開發規範 profile 的 commit 標題格式；沒有 profile、沒設或設 null 時回 None（只檢查署名行）。"""
+    try:
+        rx = ((json.loads(path.read_text(encoding="utf-8")).get("conventions") or {}).get("commit") or {}).get("check_regex")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(rx, str) or not rx.strip():
+        return None
+    try:
+        return re.compile(rx)
+    except re.error:
+        print(f"警告：{path} 的 conventions.commit.check_regex 不是合法的正規式，略過格式檢查")
+        return None
+
+
 def scan_git(repo: str, rng: str) -> list[str]:
     log = subprocess.run(["git", "-C", repo, "log", "--format=%h%x00%B%x1e", rng], capture_output=True, text=True, check=True).stdout
     out = []
+    subject_rx = commit_regex()
     for rec in filter(str.strip, log.split("\x1e")):
         sha, _, body = rec.strip().partition("\x00")
+        subject = body.strip().splitlines()[0] if body.strip() else ""
+        if subject_rx and not subject_rx.search(subject):
+            out.append(f"R6 commit {sha}：標題「{subject[:60]}」不符合開發規範 profile 的 commit 格式（{subject_rx.pattern}）")
         for tr in FORBIDDEN_TRAILERS:
             if re.search(rf"^{re.escape(tr)}:", body, re.I | re.M):
                 out.append(f"R4 commit {sha}：用 {ATTR_KEY}，不用 {tr}")

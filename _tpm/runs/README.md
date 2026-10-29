@@ -8,10 +8,15 @@ _tpm/runs/<YYYYMMDD>-<事件>-<短名>/
 ├── <stage>.json      # 該段 workflow 的完整回傳（每個 agent 的信封）
 ├── research-*.md     # 調研筆記（tpm-researcher）
 ├── *.md              # 其他 agent 產出：審查報告、影響清單、紅綠燈清單、PR 說明草稿、執行紀錄
+├── followups/        # 合併段對照不一致時產出的新需求（sdlc-merge）
 └── ...
+
+_tpm/runs/merge-audit.jsonl     # merge_gate.py 每次判定的稽核紀錄（綁 head SHA）
+_tpm/runs/publish-audit.jsonl   # publish.py 每次推送的稽核紀錄
+_tpm/runs/auto-merge.freeze.json  # 凍結旗標：存在且 frozen=true 時不跑自動合併
 ```
 
-- `<事件>`：`sdlc`、`brief`、`upstream`、`meeting`、`pr-review`、`reqs-change`、`decision`、`demo-check`。
+- `<事件>`：`sdlc`、`brief`、`upstream`、`meeting`、`pr-review`、`reqs-change`、`decision`、`demo-check`、`merge`、`post-merge`。
 - `<短名>`：epic 名或事件短名（小寫、`-` 連接）；不要用任務編號以外的自編編號。
 
 ## 常用指令

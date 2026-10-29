@@ -13,7 +13,8 @@
 
 ## 不可逆節點
 - push、開 PR、寫上游、刪資料、對外寄送：一律停下，等 使用者 當下同意；先前的同意不延伸到下一次。
-- agent 不推送、不合併、不 approve；推送由主 session 在同意後執行。remote 是 `origin`（github.com/s96cax98leo/meeting-harness，**public**、`main` 未受保護），一次推送就直接改寫公開的 `main`。
+- agent 不推送、不 approve；推送由主 session 在同意後執行，開 PR 走 `publish.py`（publisher 身分，每次仍要當下同意）。remote 是 `origin`（github.com/s96cax98leo/meeting-harness，**public**）；伺服器端 ruleset 生效前，一次推送就直接改寫公開的 `main`。
+- 合併：只在 `auto_merge.enabled` 為 true、且 `merge_gate.py` 對同一個 head SHA 的 gate 判定為 merge 時，由 `agent-workflow:dev-merge-steward` 以 merger 身分執行；其餘一律由人合併，主 session 也不合併。細節見 `.claude/teams/rules.md` 規則 6 與〈專案規則〉的「自動合併（auto_merge）」條目。
 - 需要決策時用選項式提問（2–3 個選項＋代價＋建議），並推播到手機。
 
 ## 機敏檔
@@ -48,3 +49,6 @@
 - **五條鐵則**：raw 逐字稿不改（只標記不清洗）／不編造負責人與期限／不確定的姓名不掛／雜訊段標「（聽不清）」／聲紋只留本機 `vault/`。
 - **對外介面**：`bin/meeting.sh` 與 `~/.claude/skills/meeting-*`（symlink 回本 repo）其他 session 會用，子指令與結束碼不要破壞性變更。
 - 完整的專案規則、禁區與既有定案見 `.claude/teams/rules.md` 的「專案規則」段。
+
+<!-- agent-workflow：模版的工作流程說明（init.py 追加；移除模版時刪掉這兩行） -->
+@.claude/teams/agent-workflow.CLAUDE.md

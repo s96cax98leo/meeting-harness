@@ -1,0 +1,46 @@
+# ci-ubuntu-subset：GitHub-hosted ubuntu 上能跑的檢查子集（spec §4.2.5–§4.2.7、adr-am-ci-scope）。
+# - 不跑本機 verify 的環境檢查（ASR 模型、diarize venv、GPU 只在本機有）。
+# - 不讀任何 Actions 機密；名稱清單只在本機，讀它的測試模組不進這裡。
+# - 一次性升級測試不在 CI 跑。
+# tests.record 子集＝實測會綠的模組：2026-10-29 在 ubuntu:24.04（linux/aarch64，本機 docker）
+#   以本檔三條指令連跑 3 次都回 0；x86_64 的最終證據見 ops-trial。
+# uses 釘版：actions/checkout v7.0.1、actions/setup-python v7.1.0（官方 release tag 對到的 commit）。
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci-ubuntu-subset:
+    name: ci-ubuntu-subset
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: lint
+        run: bash bin/_lint.sh
+      - name: governance
+        run: python3 -m unittest discover -s tests/governance -t .
+      - name: record-subset
+        run: >-
+          python3 -m unittest tests.record.test_ingest_move
+          tests.record.test_prompt
+          tests.record.test_r2_docs
+          tests.record.test_r3_reminders
+          tests.record.test_r3_stop_noise
+          tests.record.test_r3x_docs
+          tests.record.test_regression
+          tests.record.test_surface_parsers

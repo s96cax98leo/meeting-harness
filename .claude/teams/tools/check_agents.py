@@ -4,6 +4,7 @@ agents 可能在 plugin（agent-workflow）或專案的 .claude/agents。找 age
     --agents-dir <dir>  →  --plugin-dir <dir>/agents  →  環境變數 AWF_PLUGIN_DIR、CLAUDE_PLUGIN_ROOT 的 agents/
     →  專案 .claude/agents（裡面有 tpm-*／dev-* 時）
 skill 會在這些地方找：plugin 的 skills/、專案 .claude/skills、~/.claude/skills、Claude Code 內建。
+模版內建 16 個角色（CORE：tpm 6 個、dev 10 個）；檢查 plugin 的 agents 時，少了任何一個都算錯。
 用法：python3 .claude/teams/tools/check_agents.py [--plugin-dir <plugin 目錄>] [--agents-dir <dir>]
 """
 import os
@@ -31,6 +32,11 @@ else:
 skills_dirs = [d for d in (plugin / "skills" if plugin else None, agents_dir.parent / "skills", claude / "skills", Path.home() / ".claude/skills") if d]
 builtin = {"code-review", "security-review", "simplify"}  # Claude Code 內建
 SECTIONS = ["切分理由", "職責", "硬性約束", "工作方式", "交件格式"]
+CORE = {
+    "tpm-planner", "tpm-researcher", "tpm-reviewer", "tpm-skeptic", "tpm-upstream-analyst", "tpm-writer",
+    "dev-spec-author", "dev-acceptance-tester", "dev-implementer", "dev-integrator", "dev-verifier",
+    "dev-design-reviewer", "dev-security-reviewer", "dev-pr-reviewer", "dev-merge-steward", "dev-release-watcher",
+}
 
 if not agents_dir.is_dir():
     print(f"找不到 agents 目錄：{agents_dir}（用 --plugin-dir 或 --agents-dir 指定）")
@@ -62,5 +68,9 @@ for p in sorted(agents_dir.glob("*.md")):
             errs.append(f"{p.name}: payload schema {pl} 不存在")
 if n == 0:
     errs.append(f"{agents_dir} 裡沒有 tpm-*／dev-* agent")
-print("\n".join(errs) if errs else f"agent 格式檢查通過：{n} 個（{agents_dir}）")
+if plugin and agents_dir == plugin / "agents":
+    missing = sorted(CORE - {p.stem for p in agents_dir.glob("*.md")})
+    if missing:
+        errs.append(f"plugin 少了模版內建角色（應有 {len(CORE)} 個）：{'、'.join(missing)}")
+print("\n".join(errs) if errs else f"agent 格式檢查通過：{n} 個（模版內建 {len(CORE)} 個；{agents_dir}）")
 sys.exit(1 if errs else 0)

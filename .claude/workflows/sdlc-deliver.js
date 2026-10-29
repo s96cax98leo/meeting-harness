@@ -9,32 +9,63 @@ export const meta = {
   ],
 }
 
-// plugin 的 agent 帶命名空間（init.sh 依 workflow.config 的 AGENT_NS 填入；agents 放專案 .claude/agents 時填空字串）
+// plugin 的 agent 帶命名空間（init.py 依 workflow.config 的 AGENT_NS 填入；agents 放專案 .claude/agents 時填空字串）
 const NS = 'agent-workflow:'
 
 const FINDINGS = /*@schema:findings*/ {"type":"object","required":["status","summary","artifacts","evidence","confidence","open_questions","derived_work","payload"],"properties":{"status":{"type":"string","enum":["done","blocked","needs_decision"]},"summary":{"type":"string","minLength":1},"artifacts":{"type":"array","items":{"type":"string"}},"evidence":{"type":"array","items":{"type":"object","required":["claim","source","result"],"properties":{"claim":{"type":"string"},"source":{"type":"string"},"result":{"type":"string"}}}},"confidence":{"type":"number","minimum":0,"maximum":1},"open_questions":{"type":"array","items":{"type":"object","required":["question","blocking","options","recommendation","default_applied"],"properties":{"question":{"type":"string"},"blocking":{"type":"boolean"},"why_blocking":{"type":"string"},"options":{"type":"array","items":{"type":"object","required":["choice","cost"],"properties":{"choice":{"type":"string"},"cost":{"type":"string"}}}},"recommendation":{"type":"string"},"default_applied":{"type":"string"}}}},"derived_work":{"type":"array","items":{"type":"string"}},"payload":{"type":"object","required":["lens","findings"],"properties":{"lens":{"type":"string"},"findings":{"type":"array","items":{"type":"object","required":["id","severity","claim","location","recommendation","confidence"],"properties":{"id":{"type":"string"},"severity":{"type":"string","enum":["important","nit","pre_existing","info","blocker","should_fix"]},"claim":{"type":"string"},"location":{"type":"string"},"recommendation":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"quote":{"type":"string"}}}}}}}} /*@end*/
 const VERDICTS = /*@schema:verdicts*/ {"type":"object","required":["status","summary","artifacts","evidence","confidence","open_questions","derived_work","payload"],"properties":{"status":{"type":"string","enum":["done","blocked","needs_decision"]},"summary":{"type":"string","minLength":1},"artifacts":{"type":"array","items":{"type":"string"}},"evidence":{"type":"array","items":{"type":"object","required":["claim","source","result"],"properties":{"claim":{"type":"string"},"source":{"type":"string"},"result":{"type":"string"}}}},"confidence":{"type":"number","minimum":0,"maximum":1},"open_questions":{"type":"array","items":{"type":"object","required":["question","blocking","options","recommendation","default_applied"],"properties":{"question":{"type":"string"},"blocking":{"type":"boolean"},"why_blocking":{"type":"string"},"options":{"type":"array","items":{"type":"object","required":["choice","cost"],"properties":{"choice":{"type":"string"},"cost":{"type":"string"}}}},"recommendation":{"type":"string"},"default_applied":{"type":"string"}}}},"derived_work":{"type":"array","items":{"type":"string"}},"payload":{"type":"object","required":["verdicts"],"properties":{"verdicts":{"type":"array","items":{"type":"object","required":["target_id","refuted","reason"],"properties":{"target_id":{"type":"string"},"refuted":{"type":"boolean"},"reason":{"type":"string"},"counter_evidence":{"type":"string"}}}}}}}} /*@end*/
 const DOCS = /*@schema:docs*/ {"type":"object","required":["status","summary","artifacts","evidence","confidence","open_questions","derived_work","payload"],"properties":{"status":{"type":"string","enum":["done","blocked","needs_decision"]},"summary":{"type":"string","minLength":1},"artifacts":{"type":"array","items":{"type":"string"}},"evidence":{"type":"array","items":{"type":"object","required":["claim","source","result"],"properties":{"claim":{"type":"string"},"source":{"type":"string"},"result":{"type":"string"}}}},"confidence":{"type":"number","minimum":0,"maximum":1},"open_questions":{"type":"array","items":{"type":"object","required":["question","blocking","options","recommendation","default_applied"],"properties":{"question":{"type":"string"},"blocking":{"type":"boolean"},"why_blocking":{"type":"string"},"options":{"type":"array","items":{"type":"object","required":["choice","cost"],"properties":{"choice":{"type":"string"},"cost":{"type":"string"}}}},"recommendation":{"type":"string"},"default_applied":{"type":"string"}}}},"derived_work":{"type":"array","items":{"type":"string"}},"payload":{"type":"object","required":["documents"],"properties":{"documents":{"type":"array","minItems":1,"items":{"type":"object","required":["path","kind","audience"],"properties":{"path":{"type":"string"},"kind":{"type":"string","enum":["intent","design","spec","plan","progress","verifier","design_review","security_review","adr","exec_record","research","for_owner","pr_description","meeting_summary","other"]},"audience":{"type":"string","enum":["internal","owner","external","agents"]},"notes":{"type":"string"}}}},"rule_check":{"type":"string"}}}}} /*@end*/
 
+// 開發規範 profile（methodology）：init.py 依使用者選的 profile 與回答的慣例寫 .claude/teams/methodology.json，
+// build.py 內嵌到這裡；不要手改，改 profile 後重跑 build.py。null＝沒有 profile，改用中性指引（依目標 repo 既有慣例）。
+const METHODOLOGY = /*@methodology*/ {"name":"default","description":"預設 profile（模版原本的做法）：spec 驅動，驗收條件用 EARS 句型，測試先行（先寫會失敗的驗收測試再實作），Conventional Commits 加 Story scope，PR 修改既有檔上限 300 行或 15 檔。","stages":{"plan":{"artifacts":["intent.md"],"template":"問題、期望結果、受影響的使用者與系統、限制、待解問題","guidance":"intent 只寫問題空間，不寫解法；每個主張附出處；最多 5 個待釐清問題，blocking 的附 2–3 個選項與代價。"},"design":{"artifacts":["design.md","spec.md","plan.md","progress.md"],"requirement_style":"spec.md 的驗收條件用 EARS 句型（例：「當 <觸發> 時，系統應 <行為>」），逐條對 Story ID，數值與錯誤碼照原文；另有影響系統表、疑慮節、整合修訂與例外節。","guidance":"design.md 有新介面、跨服務、要取捨時才寫；架構取捨寫 ADR（至少 2 個真實選項）。plan.md 寫任務、檔案、測試對應表；progress.md 是從 plan 拆出的清單。"},"build":{"test_first":true,"unit_tests":"單元測試由實作者以 TDD（紅燈 → 綠燈 → 重構）撰寫。","guidance":"驗收測試先寫、確認以預期的理由失敗並合進整合分支，才開始實作；實作者不得修改驗收測試。"},"test":{"verification":"在目前 HEAD 逐條驗證 spec.md 的驗收條件（pass／fail／not_verifiable），fail 用缺陷四欄寫，並對 diff 做反作弊檢查。","guidance":"先跑機械檢查（verify 指令），再核對證據，最後對抗性抽查。"},"deliver":{"review_axes":[],"guidance":"四軸審查（standards、spec、bugs、history），只留信心 ≥0.8 且未被 skeptic 推翻的發現。"},"merge":{"guidance":"需求清單逐條對照驗證證據，全部一致且 merge_gate.py 判 merge 才合併。本 repo（s96cax98leo/meeting-harness）的做法：(1) 需求由 guard.config.json 的 requirements（command adapter tools/merge_gate_project/reqs_from_spec.py）從 origin/main 的 specs/<epic>/spec.md 取，epic 依 commit 的 Spec-Epic trailer 決定，不縮小條目；(2) 先 `gh pr checks <n> --repo s96cax98leo/meeting-harness --required --json name,state`，agent-merge-gate/decision 以外的 required check 都完成才往下，沒完成就 `gh pr checks <n> --repo s96cax98leo/meeting-harness --required --watch` 等；(3) gate 輸入留言先寫到 mktemp -d 的檔案，跑 `python3 tools/merge_gate_project/scan_names.py <檔>`，回 0 才 `GH_CONFIG_DIR=/Users/yuktang/.config/meeting-harness/gh/merger gh pr comment <n> --repo s96cax98leo/meeting-harness --body-file <檔>`；回 1 或 2 不貼、判 hold、只回報「留言含疑似名稱（或清單讀不到）」，不印命中內容；(4) 本機 `merge_gate.py check` 的 --checks 用上一步的 JSON 並去掉 agent-merge-gate/decision 本身；--tests-before／--tests-after＝在 base／head 上 `python3 -m unittest discover -s tests/record -t .` 與 `python3 -m unittest discover -s tests/governance -t .` 的 Ran N tests 相加（不含 tests/governance_once 與 Swift 測試）；(5) exit 0 時先等 agent-merge-gate/decision 對目前 head 轉 SUCCESS（`gh pr checks <n> --repo s96cax98leo/meeting-harness --watch`），再 `GH_CONFIG_DIR=/Users/yuktang/.config/meeting-harness/gh/merger gh pr merge <n> --repo s96cax98leo/meeting-harness --merge --match-head-commit <sha>`，合併後以 `gh pr view <n> --repo s96cax98leo/meeting-harness --json state,mergedAt,mergeCommit` 讀回；gate check 沒轉綠就不合併、判 hold；(6) exit 1／3 照模版退回（request-changes、轉 draft），gh 指令一律帶 GH_CONFIG_DIR=/Users/yuktang/.config/meeting-harness/gh/merger；(7) CI 綠不等於 verify 綠：verify（bash bin/_lint.sh && bash bin/meeting.sh doctor）的證據仍來自本機 verifier；token 的 mint／revoke 只由主 session 做，agent 不讀 ~/.config/meeting-harness/gh/。"}},"parallelism":{"split_threshold":8,"max_sub_plans":4,"shard_verification":true},"requirements":{"source":"json","path":"","command":"","id_pattern":"","notes":"預設不指定需求檔：sdlc-merge 用 args.requirements 或 merge_gate --requirements 帶入；guard.config.json 的 requirements 有設 path／command 時以它為準。"},"conventions":{"code_style":{"description":"照目標 repo 既有的 linter／formatter 設定（CLAUDE.md、設定檔）；新增程式碼不得新增 lint 錯誤。","tool":null,"command":null},"commit":{"format":"Conventional Commits：<type>(<scope>): <摘要>，scope 放 Story ID（文件類放 epic）；epic 的 commit 結尾（署名行之前）加 `Spec-Epic: <epic>` trailer（沒有自己 spec 的 bugfix 指向它修的 epic）；結尾署名行。","examples":{"docs":"docs(<epic>): intent 草稿","test":"test(<Story>): 驗收測試","feat":"feat(<Story>): 實作","fix":"fix(<Story>): 修正驗收失敗"},"check_regex":null},"branch":{"prefix":"feature/","naming":"epic 分支 <prefix><epic>；子任務分支 <prefix><epic>--<子任務 id>；解衝突用 merge/<短名>-into-<整合分支>-<YYYYMMDD>。"},"pr_size":{"max_lines":300,"max_files":15,"scope":"只算修改既有檔（git diff --numstat --diff-filter=M）；超過時建議拆成依序可合的小 PR。"},"doc_format":{"format":"Markdown","notes":"specs/<epic>/ 下的文件照 specs/_templates/ 的範本；沒有範本時用本 profile 各段的說明。"}}} /*@end*/
+const MP = METHODOLOGY || {}
+const STAGE = ((MP.stages || {}).deliver) || {}
+const CONV = MP.conventions || {}
+const METH_NOTE = METHODOLOGY
+  ? `開發規範 profile：${MP.name}（.claude/teams/methodology.json；各段做法與慣例以它為準）。文件格式：${(CONV.doc_format || {}).format || '依目標 repo'}。`
+  : '開發規範 profile：未設定（沒有 .claude/teams/methodology.json），做法與慣例依目標 repo 既有規範。'
+const commitFor = (kind, epic) => {
+  const c = CONV.commit || {}
+  const ex = ((c.examples || {})[kind] || '').replace(/<epic>/g, epic)
+  return c.format ? `commit 訊息照 profile 的格式：${c.format}${ex ? `（範例：${ex}）` : ''}` : 'commit 訊息照目標 repo 的慣例'
+}
+const PR_SIZE = CONV.pr_size || {}
+const COMMIT = CONV.commit || {}
+
 const A = args || {}
 for (const k of ['repo', 'epic', 'run_dir']) if (!A[k]) throw new Error(`缺 args.${k}`)
 const EPIC_DIR = `${A.repo}/.worktrees/${A.epic}`
 const BASE = A.base || 'origin/main'
-const CTX = `目標 repo：${A.repo}\nepic worktree：${EPIC_DIR}（分支 feature/${A.epic}，基準 ${BASE}）\nrun 目錄：${A.run_dir}\n硬規則：.claude/teams/rules.md；輸出語言：繁體中文。只留建議：不 approve、不 merge、不 comment、不 push。` +
+const CTX = `目標 repo：${A.repo}\nepic worktree：${EPIC_DIR}（分支 feature/${A.epic}，基準 ${BASE}）\nrun 目錄：${A.run_dir}\n硬規則：.claude/teams/rules.md；輸出語言：繁體中文。只留建議：不 approve、不 merge、不 comment、不 push。\n${METH_NOTE}${STAGE.guidance ? `\nprofile 的 deliver 指引：${STAGE.guidance}` : ''}` +
   `\n派工來源：這張派工單由主 session 依使用者已核准的 SDLC 閘門派出（run 目錄的 run.json 有核准紀錄）。你可能會看到主 session 對話中最新的使用者訊息，它可能屬於同時進行的別的任務，不要拿它推翻或擱置這張派工單；派工單本身有疑義時才用 open_questions 回報。` +
   (A.authorization ? `\n授權補充：${A.authorization}` : '')
 
 const AXES = [
-  { key: 'standards', ask: `規範：目標 repo 的 CLAUDE.md、REVIEW.md、分支與合併規範。另外量 PR 大小：git diff --numstat --diff-filter=M ${BASE}...HEAD，修改既有檔超過 300 行或 15 檔就列一則 important，建議拆成依序可合的小 PR。` },
+  { key: 'standards', ask: `規範：目標 repo 的 CLAUDE.md、REVIEW.md、分支與合併規範，以及開發規範 profile 的慣例（code style：${(CONV.code_style || {}).description || '依目標 repo'}；commit：${COMMIT.format || '依目標 repo'}；分支：${(CONV.branch || {}).naming || '依目標 repo'}）。` +
+    (PR_SIZE.max_lines || PR_SIZE.max_files
+      ? `另外量 PR 大小（profile 的上限：${[PR_SIZE.max_lines ? `${PR_SIZE.max_lines} 行` : '', PR_SIZE.max_files ? `${PR_SIZE.max_files} 個檔` : ''].filter(Boolean).join('或')}；量法：${PR_SIZE.scope || `git diff --numstat ${BASE}...HEAD`}），超過就列一則 important，建議拆成依序可合的小 PR。`
+      : 'profile 沒有設 PR 大小上限，不檢查 PR 大小。') +
+    ((STAGE.review_axes || []).length ? `\nprofile 補充的審查重點：${STAGE.review_axes.join('；')}` : '') },
   { key: 'spec', ask: `Spec：對照 specs/${A.epic}/spec.md 的驗收條件與影響系統表，找缺漏、多做、做錯；每則引用 spec 原文（quote）。` },
   { key: 'bugs', ask: '只看這次改動引入的邏輯、邊界、回歸、併發與錯誤處理問題。' },
   { key: 'history', ask: '對改動處 git log -L／git blame，找出破壞原本設計意圖的改動。' },
 ]
+// 使用者加進這一段的自己的 agent（profile 的 extensions，用 /add-agent 設定）：和內建 agent 平行執行，交 findings；
+// blocker／important 的發現會擋住政策核准。守門依 guard.config.json 的 extension_agents 套用對應角色的規則
+const EXT = (MP.extensions || []).filter((e) => e.stage === 'deliver')
+const extJob = (e, ctx, phaseName) => () => agent(
+  `${ctx}\n\n## 派工單（擴充 agent：${e.name}）\n${e.instructions}\n` +
+  `只讀不改：不改程式、測試與 spec，不 push、不對 GitHub 寫入。詳細結果寫到 ${A.run_dir}/ext-${e.name}.md。` +
+  `payload 用 findings（lens=${e.name}）：每則附 0–1 信心與嚴重度；會擋住上線或合併的列 blocker／important（會擋住政策核准），其餘列 nit／info。`,
+  { label: `ext:${e.name}`, phase: phaseName, agentType: e.agent, schema: FINDINGS },
+)
 const key = (f) => `${(f.location || '').replace(/:\d+.*/, '')}|${(f.claim || '').slice(0, 40)}`
 
+// 擴充 agent 和四軸一起審，發現一樣經 skeptic 反駁
 const reviewed = await pipeline(
-  AXES,
-  (a) => agent(`${CTX}\n\n## 派工單（審查軸：${a.key}）\n${a.ask}\n每則附 0–1 信心，只列 ≥0.8 的；先回頭讀實際行為再確認。payload 用 findings（lens=${a.key}）。`,
+  [...AXES, ...EXT.map((e) => ({ key: e.name, ext: e }))],
+  (a) => a.ext ? extJob(a.ext, `${CTX}\n審查對象：${EPIC_DIR}（git diff ${BASE}...HEAD）。每則附 0–1 信心，只列 ≥0.8 的。`, 'Review')() : agent(`${CTX}\n\n## 派工單（審查軸：${a.key}）\n${a.ask}\n每則附 0–1 信心，只列 ≥0.8 的；先回頭讀實際行為再確認。payload 用 findings（lens=${a.key}）。`,
     { label: `review:${a.key}`, phase: 'Review', agentType: NS + 'dev-pr-reviewer', schema: FINDINGS }),
   (r, a) => {
     const fs = (r && r.payload.findings || []).filter((f) => f.confidence >= 0.8)
@@ -55,7 +86,7 @@ log(`保留 ${kept.length} 則；被 skeptic 推翻 ${dropped} 則`)
 
 phase('Write')
 const docs = await agent(
-  `${CTX}\n\n## 派工單\n1. 照目標 repo 的 .github/pull_request_template.md 寫 PR 說明草稿到 ${A.run_dir}/pr-description.md（驗證欄引用 specs/${A.epic}/verifier.md）。\n2. 寫執行紀錄到 ${A.run_dir}/執行紀錄.md（產出、驗證、跟計畫不同的地方、刻意沒做的事、未能確認、衍生工作（不編號））。\n3. 審查發現（已通過 skeptic）：${JSON.stringify(kept)}\n4. 兩份都跑 python3 .claude/teams/tools/check_rules.py，並對 ${A.repo} 跑 --git ${A.repo} ${BASE}..feature/${A.epic} 檢查 commit trailer，修到通過。payload 用 docs，rule_check 填結果。`,
+  `${CTX}\n\n## 派工單\n1. 照目標 repo 的 .github/pull_request_template.md 寫 PR 說明草稿到 ${A.run_dir}/pr-description.md（驗證欄引用 specs/${A.epic}/verifier.md）。\n2. 寫執行紀錄到 ${A.run_dir}/執行紀錄.md（產出、驗證、跟計畫不同的地方、刻意沒做的事、未能確認、衍生工作（不編號））。\n3. 審查發現（已通過 skeptic）：${JSON.stringify(kept)}\n4. 兩份都跑 python3 .claude/teams/tools/check_rules.py，並對 ${A.repo} 跑 --git ${A.repo} ${BASE}..feature/${A.epic} 檢查 commit（署名行${COMMIT.check_regex ? '，以及 profile 的 commit 標題格式' : ''}），修到通過；commit 不符時只回報，不改寫歷史。payload 用 docs，rule_check 填結果。`,
   { label: 'write', phase: 'Write', agentType: NS + 'tpm-writer', schema: DOCS },
 )
 
