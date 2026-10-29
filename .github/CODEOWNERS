@@ -1,0 +1,7 @@
+# 自動合併的信任根：這些路徑的變更要 code owner 審核（spec §4.5.6）。
+# 不放萬用路徑；第一條是守門設定。
+/.claude/teams/guard.config.json @s96cax98leo
+/.claude/teams/tools/ @s96cax98leo
+/.claude/hooks/ @s96cax98leo
+/.github/ @s96cax98leo
+/tools/merge_gate_project/ @s96cax98leo
