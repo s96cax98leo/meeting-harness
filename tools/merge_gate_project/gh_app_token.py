@@ -40,7 +40,11 @@ TIMEOUT = 30
 
 
 class Fail(Exception):
-    """可預期的錯誤；訊息會寫到 stderr，不得含機敏值。"""
+    """可預期的錯誤；訊息會寫到 stderr，不得含機敏值。status 是 HTTP 錯誤碼（非 HTTP 錯誤為 None）。"""
+
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 def b64url(data: bytes) -> str:
@@ -130,7 +134,7 @@ def call(method: str, path: str, auth: str, body: dict | None = None) -> dict | 
             msg = str(json.loads(e.read().decode("utf-8", "replace")).get("message", ""))[:200]
         except Exception:
             pass
-        raise Fail(f"{method} {path} 回 HTTP {e.code}" + (f"：{msg}" if msg else "")) from None
+        raise Fail(f"{method} {path} 回 HTTP {e.code}" + (f"：{msg}" if msg else ""), e.code) from None
     except (urllib.error.URLError, OSError) as e:
         raise Fail(f"{method} {path} 連線失敗（{type(e).__name__}）") from None
     if not raw:
@@ -210,7 +214,15 @@ def revoke(out_dir: Path) -> int:
     m = re.search(r"^\s*oauth_token:\s*(\S+)\s*$", text, re.M)
     if not m:
         raise Fail(f"{hosts} 沒有 oauth_token")
-    call("DELETE", "/installation/token", f"token {m.group(1)}")
+    try:
+        call("DELETE", "/installation/token", f"token {m.group(1)}")
+    except Fail as e:
+        # 凍結（安裝已停用）與 token 外洩程序正是 token 已失效的情境：伺服器端已不可用，照樣刪本機檔
+        if e.status not in (401, 403, 404):
+            raise
+        hosts.unlink()
+        print(f"token 已失效（HTTP {e.status}），只刪除本機 {hosts}", file=sys.stderr)
+        return 0
     hosts.unlink()
     print(f"已撤銷 token 並刪除 {hosts}", file=sys.stderr)
     return 0
