@@ -48,3 +48,6 @@
 - **五條鐵則**：raw 逐字稿不改（只標記不清洗）／不編造負責人與期限／不確定的姓名不掛／雜訊段標「（聽不清）」／聲紋只留本機 `vault/`。
 - **對外介面**：`bin/meeting.sh` 與 `~/.claude/skills/meeting-*`（symlink 回本 repo）其他 session 會用，子指令與結束碼不要破壞性變更。
 - 完整的專案規則、禁區與既有定案見 `.claude/teams/rules.md` 的「專案規則」段。
+
+<!-- agent-workflow：模版的工作流程說明（init.py 追加；移除模版時刪掉這兩行） -->
+@.claude/teams/agent-workflow.CLAUDE.md

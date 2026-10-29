@@ -1,10 +1,11 @@
 """agent team 的 schema 工具：載入、組合（信封＋payload）、驗證。
 
-只支援 schemas/ 用到的 JSON Schema 關鍵字（type、properties、required、enum、items、
+只支援 schemas/ 用到的 JSON Schema 關鍵字（type（可為陣列，含 null）、properties、required、enum、items、
 minItems、minLength、minimum、maximum），所以 hook 不必依賴第三方套件；
 golden-set/run.py 會拿官方 jsonschema 套件交叉比對，確保判斷一致。
 
-任務編號規則讀 ../guard.config.json 的 task_id_prefix、task_authority（init.sh 產生）。
+獨立文件（不是信封 payload，例如開發規範 profile methodology）用 check_doc 驗。
+任務編號規則讀 ../guard.config.json 的 task_id_prefix、task_authority（init.py 產生）。
 """
 
 from __future__ import annotations
@@ -20,10 +21,11 @@ CONFIG = TEAMS_DIR / "guard.config.json"
 _PLACEHOLDER = re.compile(r"\{\{[A-Z_]+\}\}")
 
 
-def config() -> dict:
-    """專案設定（沒有檔案或格式錯時回空 dict）；還沒替換的佔位符當成空值。"""
+def config(path: Path | None = None) -> dict:
+    """專案設定（沒有檔案或格式錯時回空 dict）；還沒替換的佔位符當成空值。
+    path 預設是本檔旁的 ../guard.config.json；merge_gate 等工具可指定別的專案的設定檔。"""
     try:
-        data = json.loads(CONFIG.read_text(encoding="utf-8"))
+        data = json.loads((path or CONFIG).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return {k: ("" if isinstance(v, str) and _PLACEHOLDER.search(v) else v) for k, v in data.items()} if isinstance(data, dict) else {}
@@ -77,6 +79,7 @@ _TYPES = {
     "boolean": bool,
     "number": (int, float),
     "integer": int,
+    "null": type(None),
 }
 
 
@@ -85,10 +88,10 @@ def validate(data, schema: dict, path: str = "$") -> list[str]:
     errs: list[str] = []
     t = schema.get("type")
     if t:
-        py = _TYPES[t]
-        ok = isinstance(data, py) and not (t in ("number", "integer") and isinstance(data, bool))
+        kinds = t if isinstance(t, list) else [t]
+        ok = any(isinstance(data, _TYPES[k]) and not (k in ("number", "integer") and isinstance(data, bool)) for k in kinds)
         if not ok:
-            return [f"{path}：型別應為 {t}"]
+            return [f"{path}：型別應為 {'／'.join(kinds)}"]
     if "enum" in schema and data not in schema["enum"]:
         errs.append(f"{path}：值 {data!r} 不在 {schema['enum']}")
     if isinstance(data, str) and "minLength" in schema and len(data) < schema["minLength"]:
@@ -143,11 +146,133 @@ def semantic_errors(env: dict) -> list[str]:
             for d in s.get("depends_on") or []:
                 if d not in ids:
                     errs.append(f"子任務 {s.get('id')} 依賴不存在的 {d}")
+    errs.extend(merge_decision_errors(payload))
+    errs.extend(plan_outline_errors(payload))
+    return errs
+
+
+def merge_decision_errors(payload: dict) -> list[str]:
+    """merge-decision payload（dev-merge-steward 的對照表）的語意規則；不是這種 payload 就回空清單。
+    merge_gate.py 也呼叫這裡，hook、golden-set、gate 三處判斷一致。"""
+    if not (isinstance(payload, dict) and "traceability" in payload and "decision" in payload):
+        return []
+    errs: list[str] = []
+    rows = [r for r in payload.get("traceability") or [] if isinstance(r, dict)]
+    followups = [f for f in payload.get("followups") or [] if isinstance(f, dict)]
+    out_of_scope = payload.get("out_of_scope") or []
+    bad = [r.get("requirement_id") for r in rows if r.get("result") != "match"]
+    seen: set = set()
+    for r in rows:
+        rid = r.get("requirement_id")
+        if rid in seen:
+            errs.append(f"traceability：需求 {rid} 重複出現")
+        seen.add(rid)
+        if r.get("result") == "match" and not r.get("evidence"):
+            errs.append(f"traceability：需求 {rid} 判 match 卻沒有證據")
+    if payload.get("decision") == "merge":
+        if bad:
+            errs.append(f"decision=merge 時不得有 mismatch／missing：{bad}")
+        if followups:
+            errs.append("decision=merge 時不得有 followups")
+        if out_of_scope:
+            errs.append("decision=merge 時不得有 out_of_scope（對不到需求的改動）")
+    covered = {f.get("requirement_id") for f in followups}
+    for rid in bad:
+        if rid not in covered:
+            errs.append(f"需求 {rid} 不一致或缺證據，卻沒有對應的 followup（新需求）")
+    if out_of_scope and not followups:
+        errs.append("有 out_of_scope 改動時要列 followups")
+    if payload.get("merge_state") in ("merged", "queued") and payload.get("decision") != "merge":
+        errs.append(f"merge_state={payload.get('merge_state')} 時 decision 必須是 merge")
+    return errs
+
+
+def _covers(a: str, b: str) -> bool:
+    """路徑 a 是否涵蓋 b（相同，或 a 是 b 的上層目錄）。"""
+    a, b = a.rstrip("/"), b.rstrip("/")
+    return a == b or b.startswith(a + "/")
+
+
+def plan_outline_errors(payload: dict) -> list[str]:
+    """plan-outline payload（要不要拆子計劃）的語意規則；不是這種 payload 就回空清單。"""
+    if not (isinstance(payload, dict) and "split" in payload and "sub_plans" in payload):
+        return []
+    errs: list[str] = []
+    subs = [s for s in payload.get("sub_plans") or [] if isinstance(s, dict)]
+    if payload.get("split") and len(subs) < 2:
+        errs.append("split=true 時至少要 2 個子計劃")
+    if not payload.get("split") and subs:
+        errs.append("split=false 時 sub_plans 要留空")
+    ids = [s.get("id") for s in subs]
+    for i in {x for x in ids if ids.count(x) > 1}:
+        errs.append(f"子計劃 id {i} 重複")
+    deps = {s.get("id"): [d for d in s.get("depends_on") or []] for s in subs}
+    for sid, ds in deps.items():
+        for d in ds:
+            if d == sid or d not in deps:
+                errs.append(f"子計劃 {sid} 依賴不存在或是自己：{d}")
+    # 相依不得有循環（拓撲排序排不完就是有循環）
+    left = {k: {d for d in v if d in deps and d != k} for k, v in deps.items()}
+    while left:
+        ready = [k for k, v in left.items() if not v]
+        if not ready:
+            errs.append(f"子計劃相依有循環：{'、'.join(sorted(map(str, left)))}")
+            break
+        for k in ready:
+            left.pop(k)
+        for v in left.values():
+            v.difference_update(ready)
+    for i, a in enumerate(subs):
+        for b in subs[i + 1:]:
+            for pa in a.get("owns") or []:
+                for pb in b.get("owns") or []:
+                    if _covers(pa, pb) or _covers(pb, pa):
+                        errs.append(f"子計劃 {a.get('id')} 與 {b.get('id')} 的範圍重疊：{pa}／{pb}")
     return errs
 
 
 def check(env, payload: str | None = None) -> list[str]:
     return validate(env, compose(payload)) + (semantic_errors(env) if isinstance(env, dict) else [])
+
+
+def doc_schema(name: str) -> dict:
+    """不是信封 payload 的獨立 schema（例如 methodology），去掉 $id、title、description。"""
+    return _strip_meta(load(name))
+
+
+def methodology_errors(doc: dict) -> list[str]:
+    """開發規範 profile 的語意規則（schema 表達不了的部分）。"""
+    errs: list[str] = []
+    conv = doc.get("conventions") if isinstance(doc.get("conventions"), dict) else {}
+    commit = conv.get("commit") if isinstance(conv.get("commit"), dict) else {}
+    rx = commit.get("check_regex")
+    if isinstance(rx, str) and rx:
+        try:
+            re.compile(rx)
+        except re.error as e:
+            errs.append(f"conventions.commit.check_regex 不是合法的正規式：{e}")
+    names = [e.get("name") for e in doc.get("extensions") or [] if isinstance(e, dict)]
+    for n in sorted({x for x in names if names.count(x) > 1}, key=str):
+        errs.append(f"extensions：name {n} 重複")
+    req = doc.get("requirements") if isinstance(doc.get("requirements"), dict) else {}
+    if req.get("source") == "command" and not str(req.get("command") or "").strip():
+        errs.append("requirements.source=command 時要設 command")
+    pat = req.get("id_pattern")
+    if isinstance(pat, str) and pat:
+        try:
+            if re.compile(pat).groups < 1:
+                errs.append("requirements.id_pattern 要有一個群組（需求 ID）")
+        except re.error as e:
+            errs.append(f"requirements.id_pattern 不是合法的正規式：{e}")
+    return errs
+
+
+def check_doc(data, name: str) -> list[str]:
+    """驗證獨立文件（目前只有 methodology）：schema＋語意規則。"""
+    errs = validate(data, doc_schema(name))
+    if name == "methodology" and isinstance(data, dict):
+        errs += methodology_errors(data)
+    return errs
 
 
 def extract_json(text: str):
