@@ -1,6 +1,6 @@
 export const meta = {
   name: 'event-upstream',
-  description: '上游（）變動（新 PR、main 前進、CI 失敗）：四個角度平行唯讀分析 → skeptic 反駁 → writer 寫報告；開工與收尾記錄上游狀態證明零寫入',
+  description: '上游變動（新 PR、main 前進、CI 失敗）：四個角度平行唯讀分析 → skeptic 反駁 → writer 寫報告；開工與收尾記錄上游狀態證明零寫入',
   whenToUse: '上游有新 PR、main 前進或 CI 失敗；args：what（描述或 PR 編號）、repo（我方 fork 路徑）、run_dir',
   phases: [
     { title: 'Baseline', detail: '記錄上游狀態' },
