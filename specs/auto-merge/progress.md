@@ -15,6 +15,7 @@
 ### Build 前置（主 session）
 - [ ] `m-upgrade`：commit 1（init 原樣）
 - [ ] `m-upgrade`：commit 2（guard.config.json 合回＋`auto_merge`、`requirements`）
+  - 驗收修正第 1 輪：commit 2 內文補上 `init.py` 指令列（spec §4.1.10）；只改訊息、tree 不變，改寫前備份在 `feature/auto-merge--backup-pre-fix1`，新舊 SHA 對照在 run 目錄 `fix1-sha-map.txt`。
 
 ### Red
 - [ ] `red-gov`
